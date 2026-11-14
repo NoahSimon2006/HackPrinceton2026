@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=11">
+  <link rel="stylesheet" href="/styles.css?v=12">
   <script defer src="/vendor/leaflet.js"></script>
   <script defer src="/app.js?v=13"></script>
-  <script defer src="/planner.js?v=7"></script>
+  <script defer src="/planner.js?v=8"></script>
 </head>
 <body>
   <div id="audience-tabs" class="audience-tabs" role="tablist" aria-label="Map workspace">
@@ -85,10 +85,19 @@
             <form id="site-analysis" class="planner-card">
               <h2><label for="planning-brief">Ask the planning agent</label></h2>
               <textarea id="planning-brief" rows="3" maxlength="1500" required aria-describedby="analysis-provider"></textarea>
-              <p id="analysis-provider">Your question is sent to xAI for analysis.</p>
+              <p id="analysis-provider">Your question, measured summaries and selected property facts go to xAI. Coordinates and polygons stay local.</p>
               <button id="run-site-analysis" type="submit">Analyze site</button>
-              <p id="agent-assessment" aria-live="polite" hidden></p>
+              <p id="analysis-message" role="status" hidden></p>
+              <p id="analysis-stale" class="analysis-stale" hidden>Site inputs changed. Analyze again to update the measurements and recommendations.</p>
+              <div id="agent-assessment" class="site-review" aria-live="polite" hidden></div>
             </form>
+            <section id="site-facts" class="planner-card" aria-labelledby="site-facts-title" hidden>
+              <div class="water-card-heading"><h2 id="site-facts-title">Measurements &amp; sources</h2><span>LOCAL MATH</span></div>
+              <p>Measured from source geometry or reported by the named provider. Each recommendation links to its supporting facts.</p>
+              <div id="site-source-status" class="source-status"></div>
+              <ol id="site-facts-list" class="site-facts-list"></ol>
+              <ul id="site-source-warnings" class="source-warnings"></ul>
+            </section>
             <section class="planner-card" aria-labelledby="evidence-title">
               <h2 id="evidence-title">Site evidence</h2>
               <p id="site-evidence-status" role="status"></p>
