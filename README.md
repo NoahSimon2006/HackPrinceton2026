@@ -12,6 +12,8 @@ python3 server.py
 
 Open <http://127.0.0.1:8000>. Set `PORT=8023` if that port is taken. The server binds to localhost. Vexcel and Esri need network access; the emissions artifact and Leaflet are bundled locally. The Vexcel key stays on the server. CoStar endpoints return only property name, address, type, ID, and location.
 
+Append `/#urban-planners` to open directly on the emissions overlay. After pulling changes to `server.py`, stop and restart the Python server on the same port, then reload the page. An older process can serve the updated HTML while still lacking `/api/emissions`, which produces a 404 and an empty overlay. The map now shows a restart message and Retry button in that case, and displays the legend only after data loads.
+
 ## What the pilot means
 
 The displayed road values are an **illustrative scenario**, not a current measured inventory or calibrated traffic forecast. The 4 × 4 km pilot uses OpenStreetMap road geometry, SUMO 1.28 traffic and edge-emissions runs, the California Air Resources Board's EMFAC2025 v2.1.1 **2026 Los Angeles (SC)** regional on-road fleet rates, and historical LADOT traffic counts. The [EMFAC rates](https://emfac.arb.ca.gov/emissions-inventory/3b6469b056eb7e5a47b65c0c96415b33d5e20812) are VMT-weighted across vehicle/fuel rows and include electric vehicle miles as zero tailpipe running exhaust. SUMO supplies relative speed and route-pressure variation; its European default emissions factors are normalized to the CARB fleet rates. The layer covers running exhaust only, excluding upstream and non-tailpipe emissions.

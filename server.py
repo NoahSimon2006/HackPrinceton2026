@@ -145,7 +145,10 @@ class Handler(BaseHTTPRequestHandler):
                 file = PUBLIC / STATIC[path.path]
                 mime = "text/html" if file.suffix == ".html" else (
                     "text/css" if file.suffix == ".css" else "text/javascript")
-                self.send(200, file.read_bytes(), mime, "public, max-age=3600")
+                # Local development reads assets from disk on every request.
+                # Revalidate the page so reloads don't keep an older app bundle.
+                cache = "public, max-age=3600" if file.parent.name == "vendor" else "no-cache"
+                self.send(200, file.read_bytes(), mime, cache)
             elif path.path == "/api/coverage":
                 self.send_json(200, coverage())
             elif path.path == "/api/emissions":

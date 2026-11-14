@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=7">
+  <link rel="stylesheet" href="/styles.css?v=8">
   <script defer src="/vendor/leaflet.js"></script>
-  <script defer src="/app.js?v=9"></script>
+  <script defer src="/app.js?v=10"></script>
 </head>
 <body>
   <div id="audience-tabs" class="audience-tabs" role="tablist" aria-label="Map workspace">
@@ -54,6 +54,7 @@
     <main class="map-area" aria-label="Interactive Los Angeles aerial map">
       <div class="map-heading"><div><span class="eyebrow" id="map-eyebrow">LOS ANGELES, CALIFORNIA</span><h2 id="map-title">Aerial explorer</h2></div><span class="map-badge" id="map-badge">VEXCEL IMAGERY</span></div>
       <div id="map" role="application" aria-label="Pan and zoom aerial map"></div>
+      <div id="emissions-notice" class="emissions-notice" role="status" hidden><span id="emissions-message">Loading road emissions…</span><button id="retry-emissions" type="button" hidden>Retry</button></div>
       <div id="emissions-legend" class="emissions-legend" hidden><div class="legend-top"><span>ROAD EMISSIONS</span><strong id="legend-unit">CO₂ · kg / h</strong></div><div class="legend-bar"></div><div class="legend-values"><span id="legend-low">Lower</span><span id="legend-high">Higher</span></div><small>Modeled running exhaust · click a road for detail</small></div>
       <section id="road-inspector" class="road-inspector" hidden aria-live="polite"><button id="close-inspector" class="close-inspector" type="button" aria-label="Close road detail">×</button><div class="section-label">SELECTED ROAD</div><h3 id="road-name">—</h3><p id="road-basis">—</p><div class="inspector-grid"><div><span>CO₂</span><strong id="road-co2">—</strong><small>kg / hour</small></div><div><span>NOₓ</span><strong id="road-nox">—</strong><small>g / hour</small></div><div><span>TRAFFIC</span><strong id="road-vehicles">—</strong><small>vehicles / hour</small></div><div><span>SPEED</span><strong id="road-speed">—</strong><small>km / hour</small></div></div><p id="road-count-detail" class="road-count-detail"></p></section>
       <div class="map-bottom"><span>Drag to pan · scroll to zoom</span><button id="reset" type="button">↗ &nbsp; Back to Los Angeles</button></div>

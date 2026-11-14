@@ -27,6 +27,8 @@ map.getPane("emissions").style.zIndex = 430;
 const emissionRenderer = L.canvas({ pane: "emissions", padding: .5 });
 const emissionsLayer = L.layerGroup();
 let emissionsData = null;
+let emissionsRequest = null;
+let emissionsError = null;
 let emissionLines = new Map();
 let selectedRoad = null;
 let selectedLine = null;
@@ -345,10 +347,10 @@ imagery.on("tileload", () => { if (tileFailures) tileFailures = 0; });
 $("labels").addEventListener("change", (event) => event.target.checked ? labels.addTo(map) : labels.remove());
 $("properties").addEventListener("change", updateProperties);
 $("emissions-layer").addEventListener("change", () => {
-  if (plannerActive && $("emissions-layer").checked) emissionsLayer.addTo(map);
-  else emissionsLayer.remove();
-  $("emissions-legend").hidden = !plannerActive || !$("emissions-layer").checked;
+  if (plannerActive && $("emissions-layer").checked) loadEmissions();
+  syncEmissionsVisibility();
 });
+$("retry-emissions").addEventListener("click", loadEmissions);
 $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(search, 220); });
 $("reset").addEventListener("click", () => plannerActive && emissionsData ?
   map.fitBounds([[emissionsData.bbox[1], emissionsData.bbox[0]], [emissionsData.bbox[3], emissionsData.bbox[2]]],
@@ -407,14 +409,35 @@ function renderEmissions() {
   $("legend-high").textContent = `${quantile(values, .9).toFixed(1)}+`;
   updateInspector();
 }
-async function loadEmissions() {
+function syncEmissionsVisibility() {
+  const enabled = plannerActive && $("emissions-layer").checked;
+  const ready = enabled && Boolean(emissionsData);
+  if (ready) emissionsLayer.addTo(map);
+  else emissionsLayer.remove();
+  $("emissions-legend").hidden = !ready;
+  $("emissions-notice").hidden = !enabled || Boolean(emissionsData);
+  $("emissions-message").textContent = emissionsError || "Loading road emissions…";
+  $("retry-emissions").hidden = !emissionsError;
+  if (!ready) $("road-inspector").hidden = true;
+}
+function loadEmissions() {
   if (emissionsData) {
-    if (plannerActive && $("emissions-layer").checked) emissionsLayer.addTo(map);
     renderEmissions();
+    syncEmissionsVisibility();
     return;
   }
+  if (emissionsRequest) return emissionsRequest;
+  emissionsError = null;
+  syncEmissionsVisibility();
+  emissionsRequest = (async () => {
   try {
-    emissionsData = await json("/api/emissions");
+    const response = await fetch("/api/emissions", { cache: "no-store" });
+    if (response.status === 404) {
+      throw new Error("This map server needs a restart to load road emissions. Restart server.py, then select Retry.");
+    }
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Road emissions could not be loaded. Please retry.");
+    emissionsData = data;
     for (const road of emissionsData.roads) {
       const line = L.polyline(road.coordinates.map(([lon, lat]) => [lat, lon]), {
         pane: "emissions", renderer: emissionRenderer, color: ROAD_COLORS[0], weight: 3.4,
@@ -435,9 +458,20 @@ async function loadEmissions() {
       $("source-links").append(link);
     }
     renderEmissions();
-    if (plannerActive && $("emissions-layer").checked) emissionsLayer.addTo(map);
-    setStatus("Emissions pilot ready", `${integer.format(emissionsData.quality.road_edges)} modeled road edges · ${integer.format(emissionsData.quality.historical_anchor_edges)} historical count anchors.`);
-  } catch (error) { setStatus("Emissions pilot unavailable", error.message, true); }
+    if (plannerActive) setStatus("Emissions pilot ready", `${integer.format(emissionsData.quality.road_edges)} modeled road edges · ${integer.format(emissionsData.quality.historical_anchor_edges)} historical count anchors.`);
+  } catch (error) {
+    emissionsData = null;
+    emissionsLayer.clearLayers();
+    emissionLines.clear();
+    $("source-links").replaceChildren();
+    emissionsError = error.message;
+    if (plannerActive) setStatus("Emissions pilot unavailable", emissionsError, true);
+  } finally {
+    emissionsRequest = null;
+    syncEmissionsVisibility();
+  }
+  })();
+  return emissionsRequest;
 }
 function setPeriod(period) {
   activePeriod = period;
@@ -474,7 +508,7 @@ function selectAudience(tab, focus = false) {
   $("buyer-intro").hidden = plannerActive;
   $("planner-controls").hidden = !plannerActive;
   $("emissions-layer-row").hidden = !plannerActive;
-  $("emissions-legend").hidden = !plannerActive || !$("emissions-layer").checked;
+  syncEmissionsVisibility();
   $("brand-caption").textContent = plannerActive ? "Urban analytics · Los Angeles" : "Los Angeles · map workspace";
   $("footer-caption").textContent = plannerActive ? "SUMO × CARB EMFAC · scenario model" : "V2 map foundation";
   $("map-title").textContent = plannerActive ? "Urban emissions atlas" : "Aerial explorer";
@@ -516,3 +550,5 @@ new ResizeObserver(() => {
 }).observe($("map"));
 updateMapInfo();
 loadCoverage();
+// A direct overlay link also restores the planner workspace on page reload.
+if (window.location.hash === "#urban-planners") selectAudience($("urban-planners"));

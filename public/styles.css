@@ -57,6 +57,9 @@ body {
 }
 
 /* Planner workspace */
+[hidden]{display:none!important}
+.emissions-notice{position:absolute;z-index:520;left:22px;bottom:75px;max-width:min(420px,calc(100% - 44px));padding:14px 17px;display:flex;gap:14px;align-items:center;background:#13251cf5;border:1px solid #709679;border-radius:11px;color:#dce8db;font-size:12px;line-height:1.5;box-shadow:0 15px 35px #07140f88}
+.emissions-notice button{background:#a9e7ad;color:#13251c;border:0;border-radius:6px;padding:8px 12px;cursor:pointer;font-weight:700}
 .shell.planner-mode{grid-template-columns:370px minmax(0,1fr)}
 .planner-mode .sidebar{background:linear-gradient(160deg,#111b19 0%,#101716 65%,#141c18 100%)}
 .planner-controls h1{font-size:29px;max-width:none;margin:17px 0 10px;line-height:1.11}
