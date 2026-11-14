@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from hydrology import RAINFALL, WATERSHEDS, rainfall_at, rainfall_contours, watershed_at
+from site_evidence import imagery_evidence
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
@@ -38,14 +39,18 @@ def load_env():
 load_env()
 
 
-def vexcel_request(path, params, accept, limit):
+def vexcel_request(path, params, accept, limit, *, post=False, timeout=18):
     key = os.getenv("VEXCEL_API_KEY", "").strip()
     if not key:
         raise ValueError("Vexcel key is missing from the local .env file.")
-    request = Request(f"{VEXCEL}{path}?{urlencode(params)}",
-                      headers={"X-API-KEY": key, "Accept": accept})
+    headers = {"X-API-KEY": key, "Accept": accept}
+    if post:
+        headers["Content-Type"] = "application/json"
+        request = Request(f"{VEXCEL}{path}", data=json.dumps(params).encode(), headers=headers)
+    else:
+        request = Request(f"{VEXCEL}{path}?{urlencode(params)}", headers=headers)
     try:
-        with urlopen(request, timeout=18) as response:
+        with urlopen(request, timeout=timeout) as response:
             data = response.read(limit + 1)
             if len(data) > limit:
                 raise ValueError("Vexcel response exceeded the size limit.")
@@ -107,7 +112,7 @@ def property_catalog():
     root = Path(directory).expanduser()
     types = json.loads((root / "schemas/enums.json").read_text())["PropertyType"]
     items = []
-    details = {}
+    details, frontages = {}, {}
     with (root / "data/commercial-property.jsonl").open(encoding="utf-8") as file:
         for line in file:
             record = json.loads(line)
@@ -142,7 +147,26 @@ def property_catalog():
                 "buildingAreaSqFt": record.get("grossBuildingAreaSquareFeet"),
                 "reportedLoadingDocks": sum(docks) if docks else None,
             }
-    return items, details
+            lines = []
+            for block in (record.get("propertyRetail"), record.get("land")):
+                for entry in (block or {}).get("frontage") or []:
+                    shape = (entry.get("footprint") or {}).get("shape")
+                    if shape and shape.get("type") == "LineString":
+                        lines.append({"geometry": shape, "street": entry.get("streetName"),
+                                      "curbCuts": entry.get("numCurbCuts")})
+            if lines:
+                frontages[item["id"]] = lines
+    return items, details, frontages
+
+
+def nearby_frontages(lon, lat):
+    items, _, frontages = property_catalog()
+    scale = math.cos(math.radians(lat))
+    matches = []
+    for prop in items:
+        if math.hypot((prop["lon"] - lon) * scale, prop["lat"] - lat) * 111_320 <= 110:
+            matches.extend(frontages.get(prop["id"], ()))
+    return matches[:12]
 
 
 def site_coordinates(query):
@@ -166,6 +190,67 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_json(self, status, data):
         self.send(status, json.dumps(data, separators=(",", ":")).encode(), "application/json")
+
+    def do_POST(self):
+        if urlsplit(self.path).path != "/api/site-analysis":
+            self.send_json(404, {"error": "Not found."})
+            return
+        if self.headers.get_content_type() != "application/json" or self.headers.get("Sec-Fetch-Site") == "cross-site":
+            self.send_json(400, {"error": "Send a JSON request from the map."})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 32_000:
+                raise ValueError("The site request is too large or empty.")
+            data = json.loads(self.rfile.read(length))
+            lon, lat = site_coordinates({"lat": [data["lat"]], "lon": [data["lon"]]})
+            workflow = data["workflow"]
+            question = data["question"].strip()
+            if workflow not in ("street", "water") or not 0 < len(question) <= 1500:
+                raise ValueError("Choose a workflow and enter a question up to 1,500 characters.")
+            markings = data.get("markings", [])
+            if not isinstance(markings, list) or any(
+                kind not in ("crossing", "access", "drainage", "treatment") for kind in markings
+            ):
+                raise ValueError("Invalid map markings.")
+            property_id = data.get("propertyId")
+        except (AttributeError, KeyError, TypeError, ValueError):
+            self.send_json(400, {"error": "Select a site and enter a planning question up to 1,500 characters."})
+            return
+
+        key = os.getenv("GROK_API_KEY", "").strip()
+        if not key:
+            self.send_json(503, {"error": "Set GROK_API_KEY to use the planning agent."})
+            return
+
+        def property_context():
+            items, details, _ = property_catalog()
+            selected = next((item for item in items if item["id"] == property_id and
+                             abs(item["lat"] - lat) < .00001 and abs(item["lon"] - lon) < .00001), None)
+            return (details[property_id] if selected else None), nearby_frontages(lon, lat)
+
+        def hydrology_context():
+            return {
+                "estimate": rainfall_at(lon, lat, rainfall_contours(LA_BOUNDS)),
+                "watershed": {"type": "FeatureCollection", "features": watershed_at(lon, lat)},
+            }
+
+        try:
+            from site_agent import analyze_site
+        except ImportError:
+            self.send_json(503, {"error": "Install requirements.txt in the Python environment that runs the map."})
+            return
+        try:
+            result = analyze_site(
+                key, os.getenv("GROK_MODEL", "grok-4.7"), question, workflow, markings,
+                lambda group: imagery_evidence(vexcel_request, LAYERS, lon, lat, workflow, group),
+                property_context, hydrology_context,
+            )
+        except Exception as error:
+            self.log_error("Planner agent failed (%s)", type(error).__name__)
+            self.send_json(503, {"error": "The planning agent could not finish this request."})
+            return
+        self.send_json(200, result)
 
     def do_GET(self):
         path = urlsplit(self.path)

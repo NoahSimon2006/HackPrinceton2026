@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=6">
+  <link rel="stylesheet" href="/styles.css?v=9">
   <script defer src="/vendor/leaflet.js"></script>
   <script defer src="/app.js?v=8"></script>
-  <script defer src="/planner.js?v=2"></script>
+  <script defer src="/planner.js?v=5"></script>
 </head>
 <body>
   <div id="audience-tabs" class="audience-tabs" role="tablist" aria-label="Map workspace">
@@ -46,6 +46,22 @@
                 <label><input type="radio" name="workflow" value="water"><span>Stormwater</span></label>
               </div>
             </fieldset>
+            <form id="site-analysis" class="planner-card">
+              <h2><label for="planning-brief">Ask the planning agent</label></h2>
+              <textarea id="planning-brief" rows="3" maxlength="1500" required aria-describedby="analysis-provider"></textarea>
+              <p id="analysis-provider">Your question is sent to xAI for analysis.</p>
+              <button id="run-site-analysis" type="submit">Analyze site</button>
+              <p id="agent-assessment" aria-live="polite" hidden></p>
+            </form>
+            <section class="planner-card" aria-labelledby="evidence-title">
+              <h2 id="evidence-title">Site evidence</h2>
+              <p id="site-evidence-status" role="status"></p>
+              <ul id="site-evidence-list" class="shape-list" aria-label="Evidence on the map"></ul>
+              <p id="site-evidence-note" hidden></p>
+              <label id="site-search-toggle" class="evidence-toggle" hidden>
+                <input id="show-search-matches" type="checkbox"> Show imagery search areas
+              </label>
+            </section>
             <section id="water-tools" class="planner-card" aria-labelledby="rain-title" hidden>
               <h2 id="rain-title">Rainfall and watershed</h2>
               <p id="watershed-result"></p>
@@ -59,23 +75,11 @@
               <label for="rain-source">Scenario source or assumption</label>
               <input id="rain-source" type="text" maxlength="160" placeholder="e.g. LA County contour estimate">
             </section>
-            <section class="planner-card" aria-labelledby="geometry-title">
-              <h2 id="geometry-title">Site features</h2>
-              <label for="shape-kind">Feature type</label>
-              <select id="shape-kind"></select>
-              <button id="draw-shape" type="button" class="planner-action">Draw feature</button>
-              <div id="draw-controls" class="planner-row" hidden>
-                <button type="button" id="draw-undo">Undo point</button>
-                <button type="button" id="draw-save">Save</button>
-                <button type="button" id="draw-cancel">Cancel</button>
-              </div>
-              <ul id="shape-list" class="shape-list" aria-label="Drawn features"></ul>
-            </section>
-            <section class="planner-card" aria-labelledby="brief-title">
-              <h2 id="brief-title"><label for="planning-brief">Planning brief</label></h2>
-              <textarea id="planning-brief" rows="3" placeholder="Describe what you want to change at this site."></textarea>
-              <button id="suggest-brief" type="button">Use suggested brief</button>
-            </section>
+            <details class="planner-card" id="manual-markings">
+              <summary>Adjust or add map markings</summary>
+              <div id="mark-actions" class="mark-actions"></div>
+              <ul id="shape-list" class="shape-list" aria-label="Saved map markings"></ul>
+            </details>
           </div>
         </section>
         <div class="divider"></div>
@@ -94,7 +98,14 @@
     <main class="map-area" aria-label="Interactive Los Angeles aerial map">
       <div class="map-heading"><div><span class="eyebrow">LOS ANGELES, CALIFORNIA</span><h2>Aerial explorer</h2></div><span class="map-badge">VEXCEL IMAGERY</span></div>
       <div id="map" role="application" aria-label="Pan and zoom aerial map"></div>
-      <p id="planner-map-hint" class="planner-map-hint" hidden></p>
+      <div id="planner-map-panel" class="planner-map-panel" aria-label="Map marking controls" hidden>
+        <p id="planner-map-hint" role="status"></p>
+        <div id="draw-controls" class="planner-row" hidden>
+          <button type="button" id="draw-undo">Undo point</button>
+          <button type="button" id="draw-save">Save marking</button>
+          <button type="button" id="draw-cancel">Cancel</button>
+        </div>
+      </div>
       <div class="map-bottom"><span>Drag to pan · scroll to zoom</span><button id="reset" type="button">↗ &nbsp; Back to Los Angeles</button></div>
     </main>
   </div>

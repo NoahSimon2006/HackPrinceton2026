@@ -105,9 +105,9 @@ body {
 }
 
 .planner button,
-.planner select,
 .planner textarea,
-.planner-card input {
+.planner-card input,
+.planner-map-panel button {
   max-width: 100%;
   border: 1px solid #465d4a;
   border-radius: 7px;
@@ -118,7 +118,6 @@ body {
   font-size: 12px;
 }
 
-.planner select,
 .planner textarea,
 .planner-card input {
   display: block;
@@ -127,10 +126,14 @@ body {
 }
 
 .planner textarea { resize: vertical; }
-.planner button { cursor: pointer; }
-.planner button:hover:enabled { background: #304a36; }
-.planner button:disabled { opacity: .55; cursor: default; }
-.planner :focus-visible { outline: 2px solid #a7e5a3; outline-offset: 2px; }
+.planner button,
+.planner-map-panel button { cursor: pointer; }
+.planner button:hover:enabled,
+.planner-map-panel button:hover:enabled { background: #304a36; }
+.planner button:disabled,
+.planner-map-panel button:disabled { opacity: .55; cursor: default; }
+.planner :focus-visible,
+.planner-map-panel :focus-visible { outline: 2px solid #a7e5a3; outline-offset: 2px; }
 .planner .planner-action { width: 100%; font-weight: 700; }
 .planner .planner-action[aria-pressed="true"] { background: #304a36; border-color: #a7e5a3; }
 
@@ -162,6 +165,21 @@ body {
   margin-top: 8px;
 }
 
+.mark-actions { display: grid; gap: 7px; }
+.planner summary { cursor: pointer; font-size: 12px; font-weight: 700; }
+.planner details[open] summary { margin-bottom: 10px; }
+.planner label.evidence-toggle { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+.planner .evidence-toggle input { display: inline; width: auto; margin: 0; accent-color: #a7e5a3; }
+#site-evidence-note { margin-top: 8px; }
+.planner-card #agent-assessment { margin-top: 10px; white-space: pre-wrap; }
+.planner .mark-action {
+  border-left: 3px solid var(--mark-color);
+  text-align: left;
+}
+.mark-action strong,
+.mark-action small { display: block; }
+.mark-action small { margin-top: 3px; color: #bdcec2; }
+
 .shape-list { list-style: none; margin: 0; padding: 0; }
 .shape-list li {
   display: flex;
@@ -170,9 +188,18 @@ body {
   gap: 5px;
   padding-top: 8px;
 }
-.shape-list span { flex: 1; font-size: 12px; }
+.mark-label { flex: 1; font-size: 12px; }
+.mark-label::before {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--mark-color);
+  content: "";
+}
 
-.planner-map-hint {
+.planner-map-panel {
   position: absolute;
   z-index: 500;
   top: 108px;
@@ -187,7 +214,13 @@ body {
   background: #15231cf5;
   color: #e4fae5;
   font-size: 12px;
-  pointer-events: none;
+}
+.planner-map-panel p { margin: 0; line-height: 1.4; }
+.planner-map-panel [hidden] { display: none; }
+.planner-map-panel #draw-save:enabled {
+  background: #a7e5a3;
+  color: #162a1b;
+  font-weight: 700;
 }
 
 #map.planner-capture { cursor: crosshair; }
@@ -201,5 +234,5 @@ body {
   }
   .sidebar h1#planner-title { display: block; font-size: 19px; margin: 0 0 8px; }
   .sidebar h1#planner-title[hidden] { display: none; }
-  .planner-map-hint { top: 84px; left: 12px; }
+  .planner-map-panel { top: 84px; left: 12px; max-width: calc(100% - 75px); }
 }
