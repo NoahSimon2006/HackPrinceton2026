@@ -28,14 +28,16 @@ SIM = ROOT / "sim"
 NETWORK = SIM / "dtla.net.xml"
 WARMUP_S, MEASURE_S = 600, 3600
 SEEDS = (11, 23, 37)
-RADIUS_M = 320
-CHAIN_M = 220
+RADIUS_M = 200
+CHAIN_M = 150
+CUT_VERSION = "2"
 CARB_G_PER_MILE = {"CO2": 387.1437, "NOx": 0.1308}  # EMFAC2025 v2.1.1, LA (SC) 2026 running exhaust, VMT-weighted
 TURNS = {"left": ("l", "L"), "through": ("s",), "right": ("r", "R")}
 ASSUMPTIONS = [
     "Signal control is SUMO's generated actuated program; LADOT timing plans are not published. It is identical in every layout.",
     "Vehicles enter at the counted hourly rate for the sheet's peak hour, after a 10-minute warm-up at the same rate.",
     "Lane counts and turn permissions come from OpenStreetMap unless an explicit override is listed.",
+    "Other junctions inside the 200 m study area run without signals or yield rules so the comparison isolates the counted intersection.",
     "Absolute CO2 is scaled to CARB's 2026 Los Angeles fleet rate; differences between layouts come from the simulation.",
 ]
 
@@ -61,7 +63,7 @@ def heading(edge, end=True):
 
 
 def _site_folder(node_id: str, sheet: dict) -> Path:
-    digest = sha256(f"{node_id}|{sheet['sha256']}|{NETWORK.stat().st_size}".encode()).hexdigest()[:12]
+    digest = sha256(f"{node_id}|{sheet['sha256']}|{NETWORK.stat().st_size}|{CUT_VERSION}".encode()).hexdigest()[:12]
     return SIM / "scenarios" / digest
 
 
@@ -75,7 +77,14 @@ def cut_network(node_id: str, lon: float, lat: float, folder: Path) -> Path:
     sumo_tools.run([sumo_tools.binary("netconvert"), "-s", NETWORK, "--keep-edges.in-geo-boundary",
                     f"{lon - dlon},{lat - dlat},{lon + dlon},{lat + dlat}", "--keep-edges.by-vclass", "passenger",
                     "--remove-edges.isolated", "--tls.rebuild", "--tls.default-type", "actuated",
-                    "--no-turnarounds", "-o", out.name], cwd=folder, log="cut.log")
+                    "--no-turnarounds", "-o", "raw.net.xml"], cwd=folder, log="cut.log")
+    import sumolib
+    raw = sumolib.net.readNet(str(folder / "raw.net.xml"))
+    nodes = [f'  <node id="{n.getID()}" x="{n.getCoord()[0]}" y="{n.getCoord()[1]}" type="priority"/>'
+             for n in raw.getNodes() if n.getID() != node_id and n.getType() not in ("priority", "dead_end")]
+    (folder / "isolate.nod.xml").write_text("<nodes>\n" + "\n".join(nodes) + "\n</nodes>\n", encoding="utf-8")
+    sumo_tools.run([sumo_tools.binary("netconvert"), "-s", "raw.net.xml", "--node-files", "isolate.nod.xml",
+                    "--tls.rebuild", "--tls.default-type", "actuated", "-o", out.name], cwd=folder, log="isolate.log")
     return out
 
 
@@ -249,6 +258,7 @@ def summarise(runs: list[dict], demand_total: int, carb_factor: dict) -> dict:
         "co2_kg_per_hour": round(mean("co2_sumo_g") * carb_factor["CO2"] / 1000 * 3600 / MEASURE_S, 1),
         "nox_g_per_hour": round(mean("nox_sumo_g") * carb_factor["NOx"] * 3600 / MEASURE_S, 1),
         "vehicle_miles_per_hour": round(mean("vehicle_miles") * 3600 / MEASURE_S, 1),
+        "co2_g_per_completed_vehicle": round(mean("co2_sumo_g") * carb_factor["CO2"] / completed, 1) if completed else None,
         "teleports": max(r["teleports"] for r in runs),
         "spread": {"mean_delay_s": [min(r["mean_delay_s"] for r in runs), max(r["mean_delay_s"] for r in runs)],
                    "co2_sumo_kg": [round(min(r["co2_sumo_g"] for r in runs) / 1000, 1), round(max(r["co2_sumo_g"] for r in runs) / 1000, 1)]},

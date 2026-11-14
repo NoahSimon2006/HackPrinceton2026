@@ -459,14 +459,20 @@ function updateInspector() {
   const road = selectedRoad, values = road.periods[activePeriod];
   $("road-inspector").hidden = false;
   $("road-name").textContent = road.name;
-  $("road-basis").textContent = `${road.class.replaceAll("_", " ")} · ${integer.format(road.length_m)} m segment · ${road.basis === "historical_count" ? "historical count anchor" : "assumed traffic volume"}`;
+  const basisLabel = { counted: "own LADOT count", same_street: "from counts on this street", class_median: "typical counted volume for this road class", assumed: "assumed volume", historical_count: "historical count anchor", class_assumption: "assumed traffic volume" };
+  $("road-basis").textContent = `${road.class.replaceAll("_", " ")} · ${integer.format(road.length_m)} m segment · ${basisLabel[road.basis] ?? road.basis}`;
   $("road-co2").textContent = values.co2_kg_h.toFixed(1);
   $("road-nox").textContent = values.nox_g_h.toFixed(1);
   $("road-vehicles").textContent = integer.format(values.vehicles_h);
   $("road-speed").textContent = values.speed_kmh.toFixed(1);
+  const share = emissionsData.periods?.[activePeriod]?.share_of_daily;
+  const hourly = share ? ` Hourly volume is ${(share * 100).toFixed(2)}% of daily traffic, as observed on official LADOT 24-hour count sheets.` : "";
+  const detail = road.basis_detail || {};
   $("road-count-detail").textContent = road.count ?
-    `LADOT count at ${road.count.street} / ${road.count.cross}, ${road.count.date}. ${integer.format(road.count.daily)} directional vehicles per day; hourly share is assumed. Approx. ±35% sensitivity.` :
-    `Daily traffic is assumed from road class, then adjusted by simulated route pressure. Approx. ±60% sensitivity.`;
+    `LADOT automated 24-hour count at ${road.count.street} / ${road.count.cross}, ${road.count.date}: ${integer.format(road.count.daily)} vehicles per day in this direction.${hourly}` :
+    road.basis === "same_street" ? `No count on this segment. ${integer.format(road.daily_vehicles)} vehicles per day estimated from ${detail.sources} LADOT count${detail.sources === 1 ? "" : "s"} on the same street and direction (nearest ${integer.format(detail.nearest_m)} m away; ${detail.dates?.join(", ")}).${hourly}` :
+    road.basis === "class_median" ? `No count on this street. ${integer.format(road.daily_vehicles)} vehicles per day is the median of ${detail.counted_roads} counted downtown roads of this class.${hourly}` :
+    `No counted road of this class exists in the pilot; ${integer.format(road.daily_vehicles ?? 0)} vehicles per day is an assumed default.${hourly}`;
 }
 function selectRoad(road) {
   if (selectedLine) selectedLine.setStyle({ color: roadColor(roadValue(selectedRoad)), weight: 3.4, opacity: .9 });
@@ -489,7 +495,7 @@ function renderEmissions() {
   $("pilot-total").textContent = integer.format(activeMetric === "co2" ? sum.co2_kg_h : sum.nox_g_h);
   $("pilot-unit").textContent = activeMetric === "co2" ? "kg CO₂ / hour" : "g NOₓ / hour";
   $("pilot-secondary").textContent = activeMetric === "co2" ? `${integer.format(sum.nox_g_h)} g NOₓ / h` : `${integer.format(sum.co2_kg_h)} kg CO₂ / h`;
-  $("pilot-count").textContent = `${integer.format(emissionsData.quality.historical_anchor_edges)} anchored edges`;
+  $("pilot-count").textContent = `${integer.format(emissionsData.quality.historical_anchor_edges)} counted segments`;
   $("legend-unit").textContent = activeMetric === "co2" ? "CO₂ · kg / h" : "NOₓ · g / h";
   $("legend-low").textContent = `${quantile(values, .1).toFixed(1)}`;
   $("legend-high").textContent = `${quantile(values, .9).toFixed(1)}+`;
@@ -546,7 +552,7 @@ function loadEmissions() {
       $("source-links").append(link);
     }
     renderEmissions();
-    if (emissionsActive()) setStatus("Emissions pilot ready", `${integer.format(emissionsData.quality.road_edges)} modeled road edges · ${integer.format(emissionsData.quality.historical_anchor_edges)} historical count anchors.`);
+    if (emissionsActive()) setStatus("Emissions pilot ready", `${integer.format(emissionsData.quality.road_edges)} road segments · ${integer.format(emissionsData.quality.historical_anchor_edges)} with their own LADOT count.`);
   } catch (error) {
     emissionsData = null;
     emissionsLayer.clearLayers();
@@ -599,6 +605,7 @@ function selectPlanningWorkspace(mode, zoom = false) {
   $("map-eyebrow").textContent = "LOS ANGELES · SITE PLANNING";
   $("map-badge").textContent = water ? "TERRAIN · RAINFALL · DRAINAGE" : "HISTORICAL COUNTS";
   $("reset").innerHTML = water ? "↗ &nbsp; Back to Los Angeles" : "↗ &nbsp; Back to pilot";
+  if (!water && $("emissions-layer").checked) loadEmissions();
   syncEmissionsVisibility();
   document.querySelector(".sidebar-body").scrollTop = 0;
   map.fire("plannerworkspace", { mode: planningMode, visible: true });
