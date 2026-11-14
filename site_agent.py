@@ -5,6 +5,13 @@ import logging
 import re
 from decimal import Decimal
 from threading import RLock
+from concurrent.futures import ThreadPoolExecutor, wait
+
+from agent_activity import Activity, RunCancelled
+from deepagents.backends.utils import create_file_data
+from langchain.tools import ToolRuntime
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
@@ -93,15 +100,23 @@ def review_schema(facts, attempted, required):
 
 
 def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, fetch_property, fetch_hydrology,
-                 *, lon, lat, scenario=None):
+                 *, lon, lat, scenario=None, activity=None, discovery=None):
+    activity = activity or Activity()
     evidence = {"outlines": [], "detections": [], "search": [], "frontages": [], "unavailable": []}
     facts = {item["id"]: item for item in measure_markings(markings, scenario)}
+    if discovery:
+        origin = discovery["source"]
+        facts["discovery-selection"] = fact("discovery-selection", "Selected discovery feature", discovery["value"], discovery["unit"],
+            {"provider":origin["label"],"url":origin["url"],"observed_at":origin.get("observed_at"),"retrieved_at":origin["retrieved_at"],"collection":origin.get("product")},
+            basis="reported" if discovery["classification"]=="reported" else "estimated",
+            method=discovery["method"], note=discovery["period"]+". "+discovery["limitations"])
     warnings, statuses, cached = [], {}, {}
     attempted = set()
     hydrology = None
     lock = RLock()
+    source_locks = {name: RLock() for name in ("outlines", "detections", "search", "property", "hydrology", "traffic")}
     providers = {"outlines": "Vexcel parcel extraction", "detections": "Vexcel detection", "search": "Vexcel imagery search",
-                 "property": "CoStar local property kit", "hydrology": "LA County hydrology"}
+                 "property": "CoStar local property kit", "hydrology": "LA County hydrology", "traffic": "Traffic input inventory"}
 
     def availability(name, message):
         return fact(f"{name}-status", f"{providers[name]} availability", message, "", source(providers[name]),
@@ -109,31 +124,36 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                     note="Unavailable or unmatched evidence is not proof that a physical feature does not exist.")
 
     def collect(name, fetch, measure, store):
-        # The model may issue parallel/repeated tool calls. One source read per
-        # request, and a stable ledger, keep totals and citations reproducible.
-        with lock:
+        # Per-source lock deduplicates requests without serializing providers.
+        with source_locks[name]:
+            activity.check()
             if name in cached:
                 return cached[name]
-            attempted.add(name)
+            specialist = "domain-analysis" if name in ("hydrology", "traffic") else "site-evidence"
+            activity.event(specialist, name, "started", f"Reading {providers[name]}.")
             try:
                 data = fetch()
                 measured, notes = measure(data)
-                store(data)
-                statuses[name] = "ready" if measured or (name == "search" and data) else "empty"
+                status = "ready" if measured or (name == "search" and data) else "empty"
                 if not measured and name != "search":
                     measured = [availability(name, " ".join(notes) or "No usable facts returned.")]
-                facts.update((item["id"], item) for item in measured)
-                warnings.extend(notes)
-                result = {"facts": measured, "warnings": notes, "status": statuses[name]}
+                activity.check()
+                with lock:
+                    store(data)
             except (OSError, ValueError, TypeError, KeyError):
-                evidence["unavailable"].append(name)
-                statuses[name] = "unavailable"
-                message = f"{name}: source unavailable or unusable. No site facts inferred from this failure."
-                warnings.append(message)
-                missing_fact = availability(name, "Source unavailable or unusable in this request.")
-                facts[missing_fact["id"]] = missing_fact
-                result = {"facts": [missing_fact], "warnings": [message], "status": "unavailable"}
-            cached[name] = result
+                status = "unavailable"
+                notes = [f"{name}: source unavailable or unusable. No site facts inferred from this failure."]
+                measured = [availability(name, "Source unavailable or unusable in this request.")]
+            activity.check()
+            result = {"facts":measured, "warnings":notes, "status":status}
+            with lock:
+                attempted.add(name)
+                if status == "unavailable": evidence["unavailable"].append(name)
+                statuses[name] = status
+                facts.update((item["id"],item) for item in measured)
+                warnings.extend(notes)
+                cached[name] = result
+            activity.event(specialist, name, status, f"{providers[name]}: {status}. Inspect the sourced facts.", facts=measured)
             return result
 
     def find_parcel_and_buildings() -> dict:
@@ -168,41 +188,133 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                            *([] if data.get("estimate") else ["No reliable county rainfall estimate was returned."]),
                        ]), store)
 
-    tools = [find_parcel_and_buildings, detect_site_features, search_aerial_imagery, read_costar_property]
-    required = {"outlines", "detections", "property"}
-    if workflow == "water":
-        tools.append(read_rainfall_and_watershed)
-        required.add("hydrology")
-    allowed_tools = {tool.__name__ for tool in tools}
+    def read_traffic_inputs() -> dict:
+        """Check traffic-input availability; no assumed-demand artifact is treated as measured traffic."""
+        return collect("traffic", lambda: None,
+            lambda _: ([availability("traffic", "Verified turning demand, actual signal timing and current queue observations are not connected for this site. The archived assumed-demand simulation is excluded. Traffic benefits remain unassessed.")], []),
+            lambda _: None)
 
-    @wrap_model_call
-    def limit_tools(request, handler):
-        return handler(request.override(tools=[tool for tool in request.tools if tool.name in allowed_tools]))
+    site_tools = [find_parcel_and_buildings, detect_site_features, read_costar_property, search_aerial_imagery]
+    domain_tools = [read_rainfall_and_watershed] if workflow == "water" else [read_traffic_inputs]
+    required = {"outlines", "detections", "property", "hydrology" if workflow == "water" else "traffic"}
+    summaries = {}
+    delegated = False
+    # Each run owns its virtual files; no host filesystem or raw provider records.
+    context = {"workflow": workflow, "planner_facts": list(facts.values()), "data_policy": "Real sourced evidence only; no assumed traffic or invented outcomes."}
+    brief = json.dumps(context)
+    messages = [{"role": "user", "content": f"Planning context: {brief}\nQuestion: {question}"}]
+    files = {"/project/brief.json": create_file_data(brief),
+             "/project/plan.md": create_file_data("1. Inspect sponsor site evidence and domain inputs concurrently.\n2. Check source facts and gaps.\n3. Produce a cited screening review, leaving unsupported impacts unassessed.")}
 
-    model = ChatXAI(model=model_name, api_key=key, base_url="https://api.x.ai/v1", timeout=45, max_retries=0,
-                    max_tokens=2400, reasoning_effort="low")
-    agent = create_deep_agent(
-        model=model, backend=StateBackend(), tools=tools,
-        middleware=[ModelCallLimitMiddleware(run_limit=8, exit_behavior="error"), limit_tools],
-        system_prompt=INSTRUCTIONS,
-        response_format=ToolStrategy(review_schema(facts, attempted, required)),
-    )
-    # Only allowlisted facts go into messages/tools. Raw geometry, coordinates,
-    # property names/addresses, vacancy and full source records remain local.
-    context = {"workflow": workflow, "planner_facts": list(facts.values())}
-    messages = [{"role": "user", "content": f"Planning context: {json.dumps(context)}\nQuestion: {question}"}]
+    def model():
+        return ChatXAI(model=model_name, api_key=key, base_url="https://api.x.ai/v1", timeout=35, max_retries=0,
+                       max_tokens=2400, reasoning_effort="low")
+
+    models = {name: model() for name in ("lead", "site-evidence", "domain-analysis")}
+
+    def build_agent(name, tools, instruction, needed):
+        allowed = {tool.__name__ for tool in tools} | {"read_file", "ls"}
+
+        @wrap_model_call
+        def scoped(request, handler):
+            activity.check()
+            for message in request.messages[-2:]:
+                if isinstance(message, ToolMessage) and message.name == "SiteReview" and str(message.content).startswith("Error"):
+                    content = str(message.content)
+                    category = next((label for needle,label in [("Read the required", "required sources"), ("Unknown fact IDs", "citation IDs"), ("numbers not present", "unsupported numbers")] if needle in content), "structured format")
+                    activity.event(name, "validation", "retry", f"Checking {category} before publishing the review.")
+            # No shell, general-purpose task, network, unrestricted write or host-file tools.
+            return handler(request.override(tools=[tool for tool in request.tools if tool.name in allowed]))
+
+        return create_deep_agent(model=models[name], backend=StateBackend(), tools=tools,
+            middleware=[ModelCallLimitMiddleware(run_limit=4 if name == "lead" else 6, exit_behavior="error"), scoped],
+            system_prompt=instruction, response_format=ToolStrategy(review_schema(facts, attempted, needed)))
+
+    def specialist(name, tools, needed):
+        with tracing_context(enabled=False):
+            activity.event(name, "investigation", "started", "Inspecting sponsor evidence." if name == "site-evidence" else "Checking domain inputs and data gaps.")
+            # Mandatory source reads run inside the scoped specialist job before reasoning.
+            # A failed model still leaves real measured evidence available to the planner.
+            for tool in tools[:3] if name == "site-evidence" else tools:
+                activity.check()
+                tool()
+            activity.check()
+            with lock:
+                scoped_facts = [f for source_name, result in cached.items()
+                                if source_name in needed for f in result["facts"]]
+            local_files = {**files, "/project/evidence.json": create_file_data(json.dumps(scoped_facts))}
+            instruction = "Tool results contain" + INSTRUCTIONS.split("Tool results contain",1)[1] + "\nYou are the " + name + " specialist. Mandatory source reads are already complete. Use the supplied facts; tools may inspect cached source results. Return a short cited summary, uncertainties and checks ONLY within your scope. The lead handles other sources and the full planner request; do not attempt unavailable tools or cite facts from another specialist."
+            agent = build_agent(name, tools, instruction, needed)
+            try:
+                result = agent.invoke({"messages": [{"role":"user", "content":json.dumps({"workflow":workflow,"question":question,"facts":scoped_facts,"planner_facts":context["planner_facts"]})}], "files":local_files}, config={"recursion_limit":24})
+                activity.check()
+                report = result["structured_response"].model_dump()
+                activity.event(name, "investigation", "completed", "Source-validated specialist summary ready.")
+                return {"summary":report, "facts":scoped_facts}
+            except RunCancelled:
+                raise
+            except Exception as failure:
+                logging.getLogger(__name__).warning("Specialist %s failed (%s)", name, type(failure).__name__)
+                activity.event(name, "investigation", "failed", "Specialist summary unavailable; retrieved source facts are preserved.")
+                return {"summary":None, "facts":scoped_facts, "error":"Specialist synthesis unavailable."}
+
+    def investigate_site(plan: list[str], runtime: ToolRuntime) -> Command:
+        """Delegate site-evidence and domain-analysis specialists concurrently, then return their sourced findings. Call once before the final review."""
+        nonlocal delegated
+        activity.check()
+        if not 1 <= len(plan) <= 3 or any(not step.strip() or len(step) > 240 for step in plan):
+            raise ValueError("Provide one to three short investigation steps.")
+        if not delegated:
+            delegated = True
+            files["/project/plan.md"] = create_file_data("\n".join(f"{i+1}. {step}" for i,step in enumerate(plan)))
+            activity.event("lead", "delegation", "started", "Investigating site evidence and domain inputs in parallel.")
+            pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="site-specialist")
+            jobs = {"site-evidence":pool.submit(specialist, "site-evidence", site_tools, {"outlines","detections","property"}),
+                    "domain-analysis":pool.submit(specialist, "domain-analysis", domain_tools, required - {"outlines","detections","property"})}
+            try:
+                pending = set(jobs.values())
+                while pending:
+                    activity.check()
+                    _, pending = wait(pending, timeout=.2)
+                for name, job in jobs.items():
+                    summaries[name] = job.result()
+            finally:
+                pool.shutdown(wait=True, cancel_futures=True)
+            activity.event("lead", "synthesis", "started", "Checking citations and preparing the site review.")
+        payload = {"specialists":summaries, "facts":list(facts.values()), "source_status":statuses}
+        virtual = {"/project/plan.md":files["/project/plan.md"], "/project/evidence.json":create_file_data(json.dumps(list(facts.values()))),
+                   "/project/specialists.json":create_file_data(json.dumps(summaries)),
+                   "/project/assumptions.md":create_file_data("No illustrative traffic inputs permitted. Missing inputs remain missing. No validated physical design or impact comparison in this checkpoint.")}
+        files.update(virtual)
+        return Command(update={"files":virtual, "messages":[ToolMessage(content=json.dumps(payload), tool_call_id=runtime.tool_call_id)]})
+
+    instruction = "Tool results contain" + INSTRUCTIONS.split("Tool results contain",1)[1] + "\nYou are the lead. Read /project/plan.md if needed. First call investigate_site with one to three concise investigation steps in its plan argument to delegate the two named specialists in parallel. Source reads are performed by those specialists; do not attempt their tools yourself. Then synthesize one concise site review with exact supporting fact IDs. Identify which Vexcel and CoStar facts change the decision, or explicitly state their data gap. Use only real sourced data. Do not imply a physical proposal or benefits were calculated."
+    agent = build_agent("lead", [investigate_site], instruction, required)
     report, error = None, None
+    activity.event("lead", "planning", "started", "Preparing a site evidence and domain investigation.")
     try:
         with tracing_context(enabled=False):
-            result = agent.invoke({"messages": messages}, config={"recursion_limit": 40})
+            result = agent.invoke({"messages": messages, "files":files}, config={"recursion_limit":24})
+        activity.check()
         structured = result.get("structured_response")
-        if structured is None:
-            raise ValueError("Missing sourced review.")
+        if structured is None or not delegated:
+            raise ValueError("Missing delegated sourced review.")
         report = structured.model_dump()
+        # Retain only curated virtual artifacts; never return graph messages or reasoning.
+        files.update(result.get("files", {}))
+        files["/project/review.json"] = create_file_data(json.dumps(report))
+        activity.event("lead", "review", "completed", "Site review ready. Unsupported impacts remain unassessed.")
+    except RunCancelled:
+        activity.cancelled.set()
+        error = "Analysis canceled or time budget reached. Retrieved measurements are preserved."
     except Exception as failure:
-        # Provider/model failure must not discard already retrieved measurements.
         logging.getLogger(__name__).warning("Site review failed (%s)", type(failure).__name__)
         error = "The agent could not finish a source-validated review. Available measurements are shown below; retry the analysis."
-    return {"report": report, "analysisError": error, "facts": list(facts.values()),
-            "sourceWarnings": list(dict.fromkeys(warnings)), "sourceStatus": statuses,
-            "evidence": evidence, "hydrology": hydrology}
+        try:
+            activity.event("lead", "review", "failed", "Review unavailable; retrieved evidence is preserved. Retry analysis.")
+        except RunCancelled:
+            pass
+    return {"runId":activity.id, "report":report, "analysisError":error, "facts":list(facts.values()),
+            "sourceWarnings":list(dict.fromkeys(warnings)), "sourceStatus":statuses,
+            "evidence":evidence, "hydrology":hydrology,
+            "virtualFiles":sorted(files), "specialists":{name:bool(value.get("summary")) for name,value in summaries.items()}}

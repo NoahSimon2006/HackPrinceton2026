@@ -6,6 +6,9 @@ import math
 import os
 import re
 import time
+from threading import BoundedSemaphore, Lock
+from agent_activity import Activity
+from discovery import load_discovery, discovery_context
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,8 +25,11 @@ PUBLIC = ROOT / "public"
 LA_BOUNDS = (-118.67, 33.70, -118.10, 34.35)  # west, south, east, north
 LAYERS = "urban,urban-r,wide-area,urban-g"
 VEXCEL = "https://api.vexcelgroup.com/v2"
+ANALYSIS_SLOTS = BoundedSemaphore(2)
+ACTIVE_ANALYSES = {}
+ANALYSIS_LOCK = Lock()
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
-          "/planner.js": "planner.js",
+          "/discovery.js": "discovery.js", "/analysis-stream.js": "analysis-stream.js", "/planner.js": "planner.js", "/proposal.js": "proposal.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
           "/vendor/leaflet.css": "vendor/leaflet.css"}
 
@@ -195,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send(status, json.dumps(data, separators=(",", ":")).encode(), "application/json")
 
     def do_POST(self):
-        if urlsplit(self.path).path != "/api/site-analysis":
+        if urlsplit(self.path).path not in ("/api/site-analysis", "/api/site-analysis/cancel"):
             self.send_json(404, {"error": "Not found."})
             return
         if self.headers.get_content_type() != "application/json" or self.headers.get("Sec-Fetch-Site") == "cross-site":
@@ -206,16 +212,26 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= 32_000:
                 raise ValueError("The site request is too large or empty.")
             data = json.loads(self.rfile.read(length))
+            if urlsplit(self.path).path == "/api/site-analysis/cancel":
+                run_id = data.get("runId")
+                if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
+                    raise ValueError("Invalid analysis reference.")
+                with ANALYSIS_LOCK:
+                    active = ACTIVE_ANALYSES.get(run_id)
+                    if active: active.cancelled.set()
+                self.send_json(202, {"canceled": bool(active)})
+                return
             lon, lat = site_coordinates({"lat": [data["lat"]], "lon": [data["lon"]]})
             workflow = data["workflow"]
             question = data["question"].strip()
             if workflow not in ("street", "water") or not 0 < len(question) <= 1500:
                 raise ValueError("Choose a workflow and enter a question up to 1,500 characters.")
             markings, scenario = validate_inputs(data.get("markings", []), data.get("rainfallScenario"), workflow, lon, lat)
+            selected_discovery = discovery_context(workflow, data.get("discoveryReference"), lon, lat)
             property_id = data.get("propertyId")
             if property_id is not None and (not isinstance(property_id, str) or len(property_id) > 80):
                 raise ValueError("Invalid property reference.")
-        except ValueError as error:
+        except (ValueError, FileNotFoundError) as error:
             self.send_json(400, {"error": str(error)})
             return
         except (AttributeError, KeyError, TypeError):
@@ -250,18 +266,50 @@ class Handler(BaseHTTPRequestHandler):
         except ImportError:
             self.send_json(503, {"error": "Install requirements.txt in the Python environment that runs the map."})
             return
+        if not ANALYSIS_SLOTS.acquire(blocking=False):
+            self.send_json(429, {"error":"Two site analyses are already running. Try again shortly."})
+            return
+        streaming = "application/x-ndjson" in self.headers.get("Accept", "")
+        def write_event(event):
+            self.wfile.write(json.dumps(event, separators=(",", ":")).encode() + b"\n")
+            self.wfile.flush()
+        activity = Activity(write_event if streaming else None)
+        with ANALYSIS_LOCK:
+            ACTIVE_ANALYSES[activity.id] = activity
         try:
+            if streaming:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
             result = analyze_site(
                 key, os.getenv("GROK_MODEL", "grok-4.7"), question, workflow, markings,
                 lambda group: imagery_evidence(vexcel_request, LAYERS, lon, lat, workflow, group),
                 property_context, hydrology_context,
-                lon=lon, lat=lat, scenario=scenario,
+                lon=lon, lat=lat, scenario=scenario, activity=activity, discovery=selected_discovery,
             )
+            if streaming:
+                write_event({"type":"result", "run_id":activity.id, "result":result})
+            else:
+                self.send_json(200, result)
+        except (BrokenPipeError, ConnectionResetError):
+            activity.cancelled.set()
         except Exception as error:
             self.log_error("Planner agent failed (%s)", type(error).__name__)
-            self.send_json(503, {"error": "The planning agent could not finish this request."})
-            return
-        self.send_json(200, result)
+            if streaming:
+                try:
+                    write_event({"type":"error", "run_id":activity.id, "error":"The planning agent could not finish. Retrieved facts remain available; retry analysis."})
+                except OSError:
+                    activity.cancelled.set()
+            else:
+                self.send_json(503, {"error":"The planning agent could not finish this request."})
+        finally:
+            with ANALYSIS_LOCK:
+                ACTIVE_ANALYSES.pop(activity.id, None)
+            ANALYSIS_SLOTS.release()
 
     def do_GET(self):
         path = urlsplit(self.path)
@@ -274,6 +322,20 @@ class Handler(BaseHTTPRequestHandler):
                 # Revalidate the page so reloads don't keep an older app bundle.
                 cache = "public, max-age=3600" if file.parent.name == "vendor" else "no-cache"
                 self.send(200, file.read_bytes(), mime, cache)
+            elif path.path == "/api/discovery":
+                workflow = parse_qs(path.query).get("workflow", [""])[0]
+                self.send_json(200, load_discovery(workflow))
+            elif path.path == "/api/proposal-fixture":
+                from proposal import fixture
+                qs = parse_qs(path.query)
+                try:
+                    result = fixture(float(qs.get("lon", [""])[0]), float(qs.get("lat", [""])[0]),
+                        qs.get("workflow", [""])[0], qs.get("site_id", [""])[0],
+                        int(qs.get("revision", ["1"])[0]), int(qs.get("input_revision", ["0"])[0]))
+                except (ValueError, TypeError):
+                    self.send_json(400, {"error": "Invalid development fixture request."})
+                    return
+                self.send_json(200, result.model_dump(mode="json"))
             elif path.path == "/api/coverage":
                 self.send_json(200, coverage())
             elif path.path == "/api/emissions":

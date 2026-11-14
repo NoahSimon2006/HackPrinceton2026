@@ -32,9 +32,8 @@ let emissionsError = null;
 let emissionLines = new Map();
 let selectedRoad = null;
 let selectedLine = null;
-let plannerActive = false;
-let planningMode = "emissions";
-function emissionsActive() { return plannerActive && planningMode === "emissions"; }
+let planningMode = "street";
+function emissionsActive() { return planningMode === "street"; }
 let activePeriod = "midday";
 let activeMetric = "co2";
 let colorThresholds = [];
@@ -439,8 +438,8 @@ $("emissions-layer").addEventListener("change", () => {
 });
 $("retry-emissions").addEventListener("click", loadEmissions);
 $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(search, 220); });
-$("reset").addEventListener("click", () => emissionsActive() && emissionsData ?
-  map.fitBounds([[emissionsData.bbox[1], emissionsData.bbox[0]], [emissionsData.bbox[3], emissionsData.bbox[2]]],
+$("reset").addEventListener("click", () => emissionsActive() ?
+  map.fitBounds([[34.034, -118.268], [34.070, -118.219]],
     { padding: [35, 35], maxZoom: 14 }) : map.setView(HOME, HOME_ZOOM));
 
 const ROAD_COLORS = ["#7bdec0", "#b8d878", "#f5bb5d", "#ed7757", "#bd354e"];
@@ -508,6 +507,8 @@ function syncEmissionsVisibility() {
   if (!ready) $("road-inspector").hidden = true;
 }
 function loadEmissions() {
+  // Archived class-assumption traffic is not an approved real-data baseline.
+  if ($("emissions-layer").disabled) return;
   if (emissionsData) {
     renderEmissions();
     syncEmissionsVisibility();
@@ -582,79 +583,34 @@ for (const period of ["midday", "pm_peak"]) $(`period-${period}`).addEventListen
 for (const metric of ["co2", "nox"]) $(`metric-${metric}`).addEventListener("click", () => setMetric(metric));
 $("close-inspector").addEventListener("click", () => { selectedRoad = null; selectedLine = null; $("road-inspector").hidden = true; renderEmissions(); });
 
-const audienceTabs = [...document.querySelectorAll("#audience-tabs [role=tab]")];
 function selectPlanningWorkspace(mode, zoom = false) {
-  planningMode = mode;
-  const emissions = emissionsActive();
-  const siteVisible = plannerActive && !emissions;
-  const water = mode === "water";
-  $("planning-workspaces").hidden = !plannerActive;
-  for (const name of ["emissions", "street", "water"]) {
-    $(`workspace-${name}`).setAttribute("aria-pressed", String(name === mode));
-  }
-  $("planner").hidden = !siteVisible;
-  $("planner-title").hidden = !siteVisible;
-  $("site-intro").hidden = !siteVisible;
-  $("planner-title").textContent = water ? "Understand the watershed." : "Plan a safer intersection.";
-  $("site-intro").textContent = water
-    ? "Select a site to see its county subbasin and rainfall estimate. Then explore runoff sources and treatment opportunities."
-    : "Select a site to review crossings, driveways and opportunities for a safer street.";
-  $("planner-controls").hidden = !emissions;
-  $("emissions-layer-row").hidden = !emissions;
-  $("map-workspace").classList.toggle("water-mode", siteVisible && water);
-  $("brand-caption").textContent = plannerActive ? "Urban analytics · Los Angeles" : "Los Angeles · map workspace";
-  $("footer-caption").textContent = emissions ? "SUMO × CARB EMFAC · scenario model" : siteVisible ? "Vexcel × CoStar × LA County" : "V2 map foundation";
-  $("map-title").textContent = emissions ? "Urban emissions atlas" : siteVisible ? (water ? "Watershed & stormwater" : "Intersection redesign") : "Aerial explorer";
-  $("map-eyebrow").textContent = emissions ? "DOWNTOWN LOS ANGELES · PILOT AREA" : "LOS ANGELES, CALIFORNIA";
-  $("map-badge").textContent = emissions ? "SIMULATED / TAILPIPE" : siteVisible ? (water ? "COUNTY HYDROLOGY" : "SITE EVIDENCE") : "VEXCEL IMAGERY";
-  $("reset").innerHTML = emissions ? "↗ &nbsp; Back to pilot" : "↗ &nbsp; Back to Los Angeles";
+  planningMode = mode === "water" ? "water" : "street";
+  const water = planningMode === "water";
+  for (const name of ["street", "water"]) $(`workspace-${name}`).setAttribute("aria-pressed", String(name === planningMode));
+  for (const id of ["planner", "planner-title", "site-intro"]) $(id).hidden = false;
+  $("planner-title").textContent = water ? "Make room for water." : "Better streets start here.";
+  $("site-intro").textContent = water ? "Choose a site to investigate rainfall, drainage and opportunities for greenery." : "Choose an intersection to investigate access, crossings and emissions evidence.";
+  $("planner-controls").hidden = water;
+  $("emissions-layer-row").hidden = water;
+  $("map-workspace").classList.toggle("water-mode", water);
+  $("brand-caption").textContent = "Planning workspace · Los Angeles";
+  $("footer-caption").textContent = "Vexcel × CoStar · sourced site evidence";
+  $("map-title").textContent = water ? "Watershed & stormwater" : "Traffic & emissions";
+  $("map-eyebrow").textContent = "LOS ANGELES · SITE PLANNING";
+  $("map-badge").textContent = water ? "TERRAIN · RAINFALL · DRAINAGE" : "HISTORICAL COUNTS";
+  $("reset").innerHTML = water ? "↗ &nbsp; Back to Los Angeles" : "↗ &nbsp; Back to pilot";
   syncEmissionsVisibility();
   document.querySelector(".sidebar-body").scrollTop = 0;
-  map.fire("plannerworkspace", { mode, visible: siteVisible });
-  if (emissions) {
-    loadEmissions();
-    if (zoom) {
-      const bbox = [-118.268, 34.034, -118.219, 34.070];
-      map.fitBounds([[bbox[1], bbox[0]], [bbox[3], bbox[2]]], { padding: [35, 35], maxZoom: 14 });
-    }
-  } else if (siteVisible) {
-    setStatus(water ? "Stormwater workspace" : "Intersection workspace", "Search for a property or pick a covered map location.");
-  }
-}
-for (const mode of ["emissions", "street", "water"]) {
-  $(`workspace-${mode}`).addEventListener("click", () => selectPlanningWorkspace(mode, true));
-}
-function selectAudience(tab, focus = false) {
-  for (const option of audienceTabs) {
-    const active = option === tab;
-    option.setAttribute("aria-selected", String(active));
-    option.tabIndex = active ? 0 : -1;
-  }
-  $("map-workspace").setAttribute("aria-labelledby", tab.id);
-  plannerActive = tab.id === "urban-planners";
-  $("map-workspace").classList.toggle("planner-mode", plannerActive);
-  $("buyer-intro").hidden = plannerActive;
-  selectPlanningWorkspace(planningMode, true);
-  if (!plannerActive) map.setView(HOME, HOME_ZOOM);
+  map.fire("plannerworkspace", { mode: planningMode, visible: true });
+  if (zoom && !water) map.fitBounds([[34.034, -118.268], [34.070, -118.219]], { padding: [35, 35], maxZoom: 14 });
   setTimeout(() => map.invalidateSize(), 0);
-  if (focus) tab.focus();
 }
-
-for (const [index, tab] of audienceTabs.entries()) {
-  tab.addEventListener("click", () => selectAudience(tab));
-  tab.addEventListener("keydown", (event) => {
-    const last = audienceTabs.length - 1;
-    const target = {
-      ArrowLeft: index === 0 ? last : index - 1,
-      ArrowRight: index === last ? 0 : index + 1,
-      Home: 0,
-      End: last,
-    };
-    if (!Object.hasOwn(target, event.key)) return;
-    event.preventDefault();
-    selectAudience(audienceTabs[target[event.key]], true);
+for (const mode of ["street", "water"]) {
+  $(`workspace-${mode}`).addEventListener("click", () => {
+    window.location.hash = mode === "water" ? "stormwater" : "urban-planners";
   });
 }
+window.addEventListener("hashchange", () => selectPlanningWorkspace(window.location.hash === "#stormwater" ? "water" : "street"));
 document.addEventListener("click", (event) => { if (!event.target.closest(".search-block")) $("results").hidden = true; });
 new ResizeObserver(() => {
   map.invalidateSize({ pan: true });
@@ -662,8 +618,5 @@ new ResizeObserver(() => {
 }).observe($("map"));
 updateMapInfo();
 loadCoverage();
-// A direct overlay link also restores the planner workspace on page reload.
-if (["#urban-planners", "#stormwater", "#intersections"].includes(window.location.hash)) {
-  planningMode = window.location.hash === "#stormwater" ? "water" : window.location.hash === "#intersections" ? "street" : "emissions";
-  selectAudience($("urban-planners"));
-}
+// Keep legacy planner links and independent Stormwater entry.
+selectPlanningWorkspace(window.location.hash === "#stormwater" ? "water" : "street", true);

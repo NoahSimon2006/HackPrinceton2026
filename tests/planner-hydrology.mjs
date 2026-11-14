@@ -29,8 +29,10 @@ function harness(mode = 'water') {
   const requests = [];
   const json = (url, options = {}) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }));
   vm.runInNewContext(source, { $, map, json, planningMode: mode, coverage: null,
+    cancelSiteAnalysis: () => {},
+    streamSiteAnalysis: (payload, options) => json("/api/site-analysis", {body:JSON.stringify(payload), ...options}),
     URLSearchParams, AbortController, document: { createElement: element },
-    L: { layerGroup: layer, geoJSON: layer, circleMarker: layer } });
+    L: { latLng: (lat,lng) => ({lat,lng}), layerGroup: layer, geoJSON: layer, circleMarker: layer } });
   function select(lat, lng) {
     $('pick-site').events.click();
     map.fire('click', { latlng: { lat, lng } });
@@ -129,3 +131,50 @@ const flush = () => new Promise(setImmediate);
   assert.equal(h.$('run-site-analysis').disabled, false);
 }
 console.log('PASS: hydrology, source failures/retry, manual inputs, workspace visibility, site races, caching, scenario submission and stale analysis');
+// Cancel/supersede a run: late activity and results cannot repaint another site.
+{
+  const h=harness('street');
+  h.select(34.05,-118.25);
+  const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  const first=h.requests[0];
+  first.options.onEvent({specialist:'site-evidence',status:'started',summary:'Reading source.',fact_ids:[]});
+  assert.equal(h.$('activity-count').textContent,'· 1');
+  h.select(34.06,-118.26);
+  assert.equal(first.options.signal.aborted,true);
+  first.options.onEvent({specialist:'lead',status:'completed',summary:'OLD RESULT',fact_ids:[]});
+  first.resolve({report:{findings:[],recommendations:[],questions:['OLD RESULT']},facts:[]});
+  await pending;
+  assert.notEqual(h.$('analysis-message').textContent,'OLD RESULT');
+  assert.equal(h.$('activity-count').textContent,'');
+  const second=h.$('site-analysis').events.submit({preventDefault(){}});
+  h.$('cancel-site-analysis').events.click();
+  assert.equal(h.requests[1].options.signal.aborted,true);
+  h.requests[1].resolve({report:null,facts:[]});await second;
+  assert.match(h.$('analysis-message').textContent,/canceled/);
+  assert.equal(h.$('run-site-analysis').disabled,false);
+}
+console.log('PASS: canceled and superseded activity cannot repaint another site');
+
+// Source selections seed the brief without an agent, then submit only a checked
+// local reference; changing features at the same coordinate cancels stale work.
+{
+  const h=harness('street');
+  const selection={workflow:'street',reference:{version:'v1',layer:'counts',feature:'count-one'},
+    source:{label:'LADOT',url:'https://example.org/source',retrieved_at:'2026-11-14'},
+    layer:{unit:'vehicles reported',period:'Historical',method:'No scaling',limitations:'No current demand'},
+    feature:{properties:{label:'Source intersection',center:[-118.25,34.05],value:18102,period:'2014-01-16'}}};
+  h.map.fire('discoveryselect',selection);
+  assert.equal(h.requests.length,0);
+  assert.equal(h.$('discovery-context').hidden,false);
+  assert.match(h.$('discovery-feature-value').textContent,/18,102/);
+  assert.equal(h.$('discovery-feature-period').textContent,'2014-01-16');
+  assert.match(h.$('planning-brief').value,/historical count/);
+  const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  const body=JSON.parse(h.requests[0].options.body);
+  assert.deepEqual(body.discoveryReference,selection.reference);
+  assert.equal(body.source_record,undefined);
+  h.map.fire('discoveryselect',{...selection,reference:{...selection.reference,feature:'count-two'}});
+  assert.equal(h.requests[0].options.signal.aborted,true);
+  h.requests[0].resolve({report:null,facts:[]});await pending;
+}
+console.log('PASS: discovery seeds a dated site brief and submits a reference without an automatic agent call');

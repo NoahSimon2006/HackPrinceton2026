@@ -67,9 +67,36 @@ def emfac_rates():
 
 def edge_data(path):
     tree = ET.parse(path)
+    if len(tree.findall(".//interval")) != 1:
+        raise ValueError("Expected one measurement interval; aggregate explicitly before exporting.")
     return {element.get("id"): {key: float(value) for key, value in element.attrib.items()
                                   if key != "id"}
             for element in tree.findall(".//interval/edge")}
+
+
+def delay_metrics(traffic, begin, end):
+    """Vehicle-time shares, never an unsupported per-vehicle delay estimate.
+
+    Export preparation only: the archived assumed-demand run is not live data.
+    See SUMO's Lane-_or_Edge-based_Traffic_Measures output documentation.
+    """
+    if not all(math.isfinite(v) for v in (begin, end)) or end <= begin:
+        raise ValueError("Invalid SUMO measurement interval.")
+    def value(key):
+        v = traffic.get(key)
+        return v if isinstance(v, (int, float)) and math.isfinite(v) and v >= 0 else None
+    sampled, stopped, lost = (value(k) for k in ("sampledSeconds", "waitingTime", "timeLoss"))
+    def percent(numerator):
+        if not sampled or numerator is None or numerator > sampled + .02:return None
+        return round(100 * min(numerator, sampled) / sampled, 3)
+    return {"sampled_vehicle_seconds":sampled, "stopped_vehicle_seconds":stopped,
+            "time_loss_vehicle_seconds":lost, "stopped_time_percent":percent(stopped),
+            "time_loss_percent":percent(lost), "simulated_entered":value("entered"),
+            "simulated_left":value("left"), "simulated_departed":value("departed"),
+            "simulated_arrived":value("arrived"), "simulated_flow_vehicles_h":value("flow"),
+            "interval_begin_s":begin, "interval_end_s":end, "interval_seconds":end-begin,
+            "halting_speed_threshold_m_s":.1,
+            "basis":"Archived assumed-demand SUMO scenario; unavailable in live discovery."}
 
 
 def direction(edge):
@@ -150,13 +177,15 @@ def main():
     total_teleports = 0
     for period in PERIODS:
         traffic = edge_data(SIM / f"{period}.traffic.xml")
+        interval = ET.parse(SIM / f"{period}.traffic.xml").find(".//interval")
+        window = (float(interval.get("begin")), float(interval.get("end")))
         emissions = edge_data(SIM / f"{period}.emissions.xml")
         stats = ET.parse(SIM / f"{period}.statistics.xml").getroot()
         total_teleports += int(stats.find("teleports").get("total"))
         # SUMO reports mg absolute and meters driven over the 3,000-second
         # measurement window. Normalize its road variation to the EMFAC fleet.
         distance = sum(traffic.get(item["id"], {}).get("distance", 0) for item in edges)
-        simulations[period] = {"traffic": traffic, "emissions": emissions,
+        simulations[period] = {"traffic": traffic, "emissions": emissions, "window": window,
                                "sumo_g_per_mile": {
                                    p: sum(emissions.get(item["id"], {}).get(f"{p}_abs", 0)
                                           for item in edges) / 1000 / (distance / 1609.344)
@@ -181,6 +210,7 @@ def main():
             volume = base_flow if anchor else base_flow * pressure
             distance_m = traffic.get("distance", 0)
             result = {"vehicles_h": round(volume),
+                      "delay": delay_metrics(traffic, *sim["window"]),
                       "speed_kmh": round(traffic.get("speed", item["edge"].getSpeed()) * 3.6, 1)}
             for pollutant, output_key, divisor in (("CO2", "co2_kg_h", 1000), ("NOx", "nox_g_h", 1)):
                 sumo_rate = (emissions.get(f"{pollutant}_abs", 0) / 1000 /
@@ -209,7 +239,8 @@ def main():
                 "volume": "Latest matched weekday LADOT 2011–2016 directional count anchors; other streets use stated functional-class daily-volume assumptions. Midday 6% and PM peak 8.5% of daily traffic.",
                 "emissions": "SUMO edge-level running-emissions variation normalized to 2026 Los Angeles EMFAC2025 v2.1.1 fleet VMT-weighted running-exhaust CO₂ and NOₓ rates. Excludes non-tailpipe and upstream emissions.",
                 "uncertainty": "Illustrative sensitivity: approximately ±35% at historical anchors and ±60% on assumed-volume roads; these are judgmental ranges, not confidence intervals.",
-                "signal": "OSM signal locations and SUMO generated timing; actual signal plans were unavailable."},
+                "signal": "OSM signal locations and SUMO generated timing; actual signal plans were unavailable.",
+                "delay": "Stopped-time share = waitingTime / sampledSeconds × 100; time-loss share = timeLoss / sampledSeconds × 100. The denominator is summed vehicle presence seconds, not vehicles. Halting speed is below 0.1 m/s. Raw vehicle-seconds, measurement interval, entered/left counts and simulated flow accompany each metric. Missing samples remain null. These assumed-demand outputs are excluded from live discovery."},
             "sources": [
                 {"label": "CARB EMFAC2025 v2.1.1, Los Angeles (SC), 2026", "url": "https://emfac.arb.ca.gov/emissions-inventory/3b6469b056eb7e5a47b65c0c96415b33d5e20812"},
                 {"label": "LADOT traffic counts, 2011–2016", "url": "https://data.lacity.org/Transportation/LADOT-Traffic-Counts-Summary/94wu-3ps3"},

@@ -5,39 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=12">
+  <link rel="stylesheet" href="/styles.css?v=15">
   <script defer src="/vendor/leaflet.js"></script>
-  <script defer src="/app.js?v=13"></script>
-  <script defer src="/planner.js?v=8"></script>
+  <script defer src="/app.js?v=15"></script>
+  <script defer src="/proposal.js?v=1"></script>
+  <script defer src="/analysis-stream.js?v=1"></script>
+  <script defer src="/planner.js?v=12"></script>
+  <script defer src="/discovery.js?v=1"></script>
 </head>
 <body>
-  <div id="audience-tabs" class="audience-tabs" role="tablist" aria-label="Map workspace">
-    <button id="home-buyers" type="button" role="tab" aria-selected="true" aria-controls="map-workspace">Home Buyers</button>
-    <button id="urban-planners" type="button" role="tab" aria-selected="false" aria-controls="map-workspace" tabindex="-1">Urban Planners</button>
-  </div>
-  <div id="map-workspace" class="shell" role="tabpanel" aria-labelledby="home-buyers">
+  <div id="map-workspace" class="shell planner-mode">
     <aside class="sidebar" aria-label="Map sidebar">
       <div class="brand"><span class="brand-mark">◈</span><div><strong>Sustainability Map</strong><small id="brand-caption">Los Angeles · map workspace</small></div></div>
       <div class="sidebar-body">
-        <div id="buyer-intro"><div class="section-label">EXPLORE</div>
-        <h1>See the city from above.</h1>
-        <p class="intro">Explore Vexcel aerial imagery and properties across Los Angeles.</p></div>
-        <nav id="planning-workspaces" class="planning-workspaces" aria-label="Planning workspace" hidden>
-          <button id="workspace-emissions" type="button" aria-pressed="true">Emissions</button>
-          <button id="workspace-street" type="button" aria-pressed="false">Intersections</button>
+        <nav id="planning-workspaces" class="planning-workspaces" aria-label="Planning workspace">
+          <button id="workspace-street" type="button" aria-pressed="true">Traffic &amp; Emissions</button>
           <button id="workspace-water" type="button" aria-pressed="false">Stormwater</button>
         </nav>
-        <section id="planner-controls" class="planner-controls" hidden aria-label="Emissions analysis controls">
-          <div class="planner-kicker"><span class="live-pip"></span> DOWNTOWN LA PILOT <span>MODEL / 2026</span></div>
-          <h1>See the emissions<br><em>behind the traffic.</em></h1>
-          <p class="planner-intro">Street-level tailpipe estimates built from traffic simulation and California fleet rates.</p>
-          <div class="control-label">TIME WINDOW</div>
-          <div class="segmented" role="group" aria-label="Simulation period"><button id="period-midday" class="selected" type="button" aria-pressed="true">Midday <small>11 AM – 2 PM</small></button><button id="period-pm_peak" type="button" aria-pressed="false">PM peak <small>4 – 7 PM</small></button></div>
-          <div class="control-label metric-label">MAP METRIC</div>
-          <div class="metric-select" role="group" aria-label="Emissions metric"><button id="metric-co2" class="selected" type="button" aria-pressed="true"><span>CO₂</span><small>kg / hour</small></button><button id="metric-nox" type="button" aria-pressed="false"><span>NOₓ</span><small>g / hour</small></button></div>
-          <div class="metric-card"><div class="metric-card-top"><span>ESTIMATED PILOT TOTAL</span><span class="model-tag">SCENARIO</span></div><div class="metric-main"><strong id="pilot-total">—</strong><span id="pilot-unit">kg CO₂ / hour</span></div><div class="metric-sub"><span id="pilot-secondary">—</span><span id="pilot-count">—</span></div></div>
-          <div class="planner-disclosure"><details><summary>How this estimate works <span>↗</span></summary><p id="method-text">Loading methodology…</p><div id="source-links" class="source-links"></div></details></div>
-        </section>
         <h1 id="planner-title" hidden>Plan a site</h1>
         <p id="site-intro" class="site-intro" hidden></p>
         <div class="search-block">
@@ -53,7 +37,40 @@
             <p id="site-location"></p>
             <p id="site-property"></p>
           </div>
-          <div id="site-tools" hidden>
+          <section id="discovery-context" class="planner-card discovery-context" hidden>
+            <span class="section-label">SELECTED DISCOVERY EVIDENCE</span>
+            <h2 id="discovery-feature-title"></h2><strong id="discovery-feature-value"></strong>
+            <p id="discovery-feature-period"></p>
+            <details><summary>Source, method &amp; limits</summary><div id="discovery-feature-details"></div></details>
+          </section>
+            <form id="site-analysis" class="planner-card">
+              <h2><label for="planning-brief">Ask the planning agent</label></h2>
+              <textarea id="planning-brief" rows="3" maxlength="1500" required aria-describedby="analysis-provider"></textarea>
+              <p id="analysis-provider">Your question, measured summaries and selected property facts go to xAI. Coordinates and polygons stay local.</p>
+              <button id="run-site-analysis" type="submit" disabled>Analyze site</button>
+              <p id="analysis-site-hint">Select a property or pick a map location to enable analysis.</p>
+              <button id="cancel-site-analysis" type="button" hidden>Cancel analysis</button>
+              <details id="agent-activity" class="agent-activity"><summary>Agent activity <span id="activity-count"></span></summary>
+                <p>Live task and source results. Select a source to inspect its measured facts.</p>
+                <ol id="activity-list"></ol>
+              </details>
+              <p id="analysis-message" role="status" hidden></p>
+              <p id="analysis-stale" class="analysis-stale" hidden>Site inputs changed. Analyze again to update the measurements and recommendations.</p>
+              <div id="agent-assessment" class="site-review" aria-live="polite" hidden></div>
+            </form>
+          <section id="proposal-review" class="planner-card proposal-review" hidden aria-live="polite">
+            <span class="fixture-tag">DEVELOPMENT FIXTURE</span>
+            <h2 id="proposal-title"></h2><p id="proposal-summary"></p>
+            <dl class="proposal-metrics"><dt>Test footprint</dt><dd id="proposal-area"></dd><dt>Impact comparison</dt><dd>Unassessed</dd></dl>
+            <p id="proposal-revision"></p><p id="proposal-stale" hidden>Inputs changed. Reload the preview to match this site revision.</p>
+          </section>
+          <details class="planner-card" id="proposal-development"><summary>Development preview</summary>
+            <p>Synthetic geometry to test the map and revision contract only. Not a site design or recommendation; no benefits calculated.</p>
+            <button id="load-proposal-fixture" type="button" disabled>Load UI test fixture</button>
+            <button id="revise-proposal-fixture" type="button" disabled>Test next revision</button>
+            <p id="proposal-message" role="status">Select a site to test the proposal overlay.</p>
+          </details>
+          <details id="site-tools" class="site-details" hidden><summary>Site evidence &amp; adjustments</summary>
             <section id="water-tools" class="planner-card water-card" aria-labelledby="rain-title" hidden>
               <div class="water-card-heading"><h2 id="rain-title">Watershed &amp; rainfall</h2><span>LA COUNTY</span></div>
               <div class="water-summary" aria-live="polite">
@@ -82,15 +99,7 @@
                 </div>
               </details>
             </section>
-            <form id="site-analysis" class="planner-card">
-              <h2><label for="planning-brief">Ask the planning agent</label></h2>
-              <textarea id="planning-brief" rows="3" maxlength="1500" required aria-describedby="analysis-provider"></textarea>
-              <p id="analysis-provider">Your question, measured summaries and selected property facts go to xAI. Coordinates and polygons stay local.</p>
-              <button id="run-site-analysis" type="submit">Analyze site</button>
-              <p id="analysis-message" role="status" hidden></p>
-              <p id="analysis-stale" class="analysis-stale" hidden>Site inputs changed. Analyze again to update the measurements and recommendations.</p>
-              <div id="agent-assessment" class="site-review" aria-live="polite" hidden></div>
-            </form>
+
             <section id="site-facts" class="planner-card" aria-labelledby="site-facts-title" hidden>
               <div class="water-card-heading"><h2 id="site-facts-title">Measurements &amp; sources</h2><span>LOCAL MATH</span></div>
               <p>Measured from source geometry or reported by the named provider. Each recommendation links to its supporting facts.</p>
@@ -112,24 +121,50 @@
               <div id="mark-actions" class="mark-actions"></div>
               <ul id="shape-list" class="shape-list" aria-label="Saved map markings"></ul>
             </details>
-          </div>
+          </details>
         </section>
+        <section id="planner-controls" class="planner-controls" hidden aria-label="Emissions analysis controls">
+          <div class="planner-kicker"><span class="live-pip"></span> DOWNTOWN LA PILOT <span>MODEL / 2026</span></div>
+          <h2>Traffic discovery</h2>
+          <p class="planner-intro">Emissions unavailable: the archived pilot uses assumed demand. Verified traffic inputs are required before this layer can return.</p>
+          <fieldset disabled><div class="control-label">TIME WINDOW</div>
+          <div class="segmented" role="group" aria-label="Simulation period"><button id="period-midday" class="selected" type="button" aria-pressed="true">Midday <small>11 AM – 2 PM</small></button><button id="period-pm_peak" type="button" aria-pressed="false">PM peak <small>4 – 7 PM</small></button></div>
+          <div class="control-label metric-label">MAP METRIC</div>
+          <div class="metric-select" role="group" aria-label="Emissions metric"><button id="metric-co2" class="selected" type="button" aria-pressed="true"><span>CO₂</span><small>kg / hour</small></button><button id="metric-nox" type="button" aria-pressed="false"><span>NOₓ</span><small>g / hour</small></button></div>
+          <div class="metric-card"><div class="metric-card-top"><span>ESTIMATED PILOT TOTAL</span><span class="model-tag">SCENARIO</span></div><div class="metric-main"><strong id="pilot-total">—</strong><span id="pilot-unit">kg CO₂ / hour</span></div><div class="metric-sub"><span id="pilot-secondary">—</span><span id="pilot-count">—</span></div></div>
+          <div class="planner-disclosure"><details><summary>How this estimate works <span>↗</span></summary><p id="method-text">Loading methodology…</p><div id="source-links" class="source-links"></div></details></div>
+</fieldset>        </section>
+        <details class="map-settings"><summary>Map layers &amp; status</summary>
         <div class="divider"></div>
         <div class="section-label">MAP LAYERS</div>
         <div class="layer base"><span class="layer-icon">▧</span><div><strong>Vexcel aerial</strong><small>Base imagery</small></div><span class="active-dot" aria-label="On"></span></div>
         <label class="layer toggle-row" for="labels"><span class="layer-icon">⌖</span><span class="layer-copy"><strong>Place labels</strong><small>Esri reference layer</small></span><input id="labels" type="checkbox" role="switch"><span class="switch"></span></label>
         <label class="layer toggle-row" for="properties"><span class="layer-icon">●</span><span class="layer-copy"><strong>CoStar properties</strong><small>Visible from neighborhood zoom</small></span><input id="properties" type="checkbox" role="switch"><span class="switch"></span></label>
-        <label id="emissions-layer-row" class="layer toggle-row" for="emissions-layer" hidden><span class="layer-icon">≋</span><span class="layer-copy"><strong>Modeled road emissions</strong><small>Downtown pilot · tailpipe only</small></span><input id="emissions-layer" type="checkbox" role="switch" checked><span class="switch"></span></label>
+        <label id="emissions-layer-row" class="layer toggle-row" for="emissions-layer" hidden><span class="layer-icon">≋</span><span class="layer-copy"><strong>Modeled road emissions</strong><small>Unavailable · verified demand needed</small></span><input id="emissions-layer" type="checkbox" role="switch" disabled><span class="switch"></span></label>
         <div id="layer-note" class="layer-note" hidden>Zoom in to level 15 to see property points.</div>
         <div class="divider"></div>
         <div class="section-label">MAP STATUS</div>
         <div class="status-card"><span id="status-dot" class="status-dot"></span><div><strong id="status-title">Checking coverage</strong><p id="status-detail">Connecting to Vexcel…</p></div></div>
         <div class="map-meta"><div><span>Center</span><strong id="coordinates">—</strong></div><div><span>Zoom</span><strong id="zoom">—</strong></div></div>
+        </details>
       </div>
       <div class="sidebar-footer"><span id="footer-caption">V2 map foundation</span><span>Local workspace</span></div>
     </aside>
     <main class="map-area" aria-label="Interactive Los Angeles aerial map">
       <div class="map-heading"><div><span class="eyebrow" id="map-eyebrow">LOS ANGELES, CALIFORNIA</span><h2 id="map-title">Aerial explorer</h2></div><span class="map-badge" id="map-badge">VEXCEL IMAGERY</span></div>
+      <div class="proposal-map-control"><label><input id="show-proposal" type="checkbox" disabled> Show proposal</label><span id="proposal-map-caption">No published proposal</span></div>
+      <section id="discovery-panel" class="discovery-panel" aria-label="Discovery layers">
+        <div class="discovery-panel-heading"><span class="section-label">DISCOVER</span><button id="discovery-focus" type="button">View pilot ↗</button><button id="discovery-collapse" type="button" aria-controls="discovery-body" aria-expanded="true">Hide layers</button></div>
+        <div id="discovery-body">
+        <label for="discovery-layer">Map evidence</label>
+        <select id="discovery-layer" disabled><option>Loading sources…</option></select>
+        <p id="discovery-legend" class="discovery-legend"></p>
+        <p id="discovery-status" role="status">Loading discovery data…</p>
+        <button id="discovery-retry" type="button" hidden>Retry data</button>
+        <details><summary>Browse mapped features</summary><label for="discovery-feature">Choose a feature</label><select id="discovery-feature" disabled><option value="">Select on the map</option></select></details>
+        <p id="discovery-limit" class="discovery-limit"></p>
+        </div>
+      </section>
       <div id="map" role="application" aria-label="Pan and zoom aerial map"></div>
       <div id="emissions-notice" class="emissions-notice" role="status" hidden><span id="emissions-message">Loading road emissions…</span><button id="retry-emissions" type="button" hidden>Retry</button></div>
       <div id="emissions-legend" class="emissions-legend" hidden><div class="legend-top"><span>ROAD EMISSIONS</span><strong id="legend-unit">CO₂ · kg / h</strong></div><div class="legend-bar"></div><div class="legend-values"><span id="legend-low">Lower</span><span id="legend-high">Higher</span></div><small>Modeled running exhaust · click a road for detail</small></div>

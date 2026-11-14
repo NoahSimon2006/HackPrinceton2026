@@ -34,6 +34,7 @@
   let picking = false;
   let draft = null;
   let siteRequest;
+  let activeAnalysis = null;
 
   function addEvidence(item, color, style = {}) {
     const layer = L.geoJSON(item, { style: { color, weight: 2, fillOpacity: .1, ...style } });
@@ -49,7 +50,9 @@
     output.replaceChildren();
     output.hidden = !record.report;
     $("analysis-message").hidden = !record.evidencePending && !record.evidenceError;
-    $("analysis-message").textContent = record.evidencePending ? "Measuring site evidence and checking source-backed recommendations…" : record.evidenceError || "";
+    $("analysis-message").textContent = record.evidencePending ? (record.activitySummary || "Starting site investigation…") : record.evidenceError || "";
+    $("cancel-site-analysis").hidden = !record.evidencePending;
+    showActivity(record);
     $("analysis-stale").hidden = !record.stale;
     if (record.report) {
       for (const [key, heading] of [["findings", "What the evidence shows"], ["recommendations", "Options to evaluate"], ["questions", "Confirm next"]]) {
@@ -70,6 +73,7 @@
             link.textContent = `[${index + 1}]`;
             link.setAttribute("aria-label", `Source ${index + 1}: ${facts[index].label}`);
             link.addEventListener("click", () => {
+              $("site-tools").open = true;
               const row = $(`fact-${id}`);
               row.open = true;
               row.scrollIntoView({ block: "center" });
@@ -83,6 +87,8 @@
     }
     $("site-facts").hidden = !facts.length && !record.sourceStatus;
     const list = $("site-facts-list");
+    const expanded = new Set([...(list.querySelectorAll?.("details[open]") ?? [])].map(row => row.id));
+    const focused = document.activeElement?.id;
     list.replaceChildren();
     const labels = { measured: "Measured", reported: "Reported", estimated: "Estimated", candidate: "Candidate", user_marked: "User marked", assumption: "Assumption", availability: "Source status" };
     facts.forEach((fact, index) => {
@@ -90,6 +96,7 @@
       const detail = document.createElement("details");
       detail.id = `fact-${fact.id}`;
       detail.tabIndex = -1;
+      detail.open = expanded.has(detail.id);
       const summary = document.createElement("summary");
       const name = document.createElement("span");
       name.textContent = `${index + 1}. ${fact.label}`;
@@ -118,6 +125,7 @@
       detail.append(metadata);
       row.append(detail);
       list.append(row);
+      if (focused === detail.id) detail.focus({preventScroll:true});
     });
     const statuses = { outlines: "Parcel & buildings", detections: "Feature detection", property: "CoStar", hydrology: "County hydrology", search: "Imagery search" };
     $("site-source-status").textContent = Object.entries(record.sourceStatus ?? {})
@@ -134,6 +142,7 @@
     record.revision = (record.revision ?? 0) + 1;
     if (record.report || record.evidencePending || record.facts?.length) record.stale = true;
     showReview(record);
+    map.fire("plannerinputs", { inputRevision: record.revision });
   }
 
   function showEvidence() {
@@ -194,8 +203,48 @@
     $("site-evidence-note").textContent = notes.filter(Boolean).join(" ");
   }
 
+  function showActivity(record) {
+    const list = $("activity-list");
+    list.replaceChildren();
+    $("activity-count").textContent = record.activity?.length ? `· ${record.activity.length}` : "";
+    for (const event of record.activity ?? []) {
+      const row = document.createElement("li");
+      row.setAttribute("data-status", event.status);
+      const title = document.createElement("strong");
+      title.textContent = `${event.specialist} · ${event.status}`;
+      const text = document.createElement("span"); text.textContent = event.summary;
+      row.append(title, text);
+      for (const id of event.fact_ids ?? []) {
+        const fact = record.facts?.find(f => f.id === id);
+        if (!fact) continue;
+        const button = document.createElement("button"); button.type = "button";
+        button.textContent = fact.label;
+        button.addEventListener("click", () => {
+          $("site-tools").open = true;
+          const target = $(`fact-${id}`); if (!target) return;
+          target.open = true; target.scrollIntoView({block:"center"}); target.focus({preventScroll:true});
+        });
+        row.append(button);
+      }
+      list.append(row);
+    }
+  }
+
+  function cancelAnalysis() {
+    if (!activeAnalysis) return;
+    const {record, controller} = activeAnalysis;
+    cancelSiteAnalysis(activeAnalysis.serverRunId);
+    activeAnalysis = null; controller.abort();
+    record.evidencePending = false;
+    record.evidenceError = "Analysis canceled. Retrieved evidence is preserved.";
+    record.stale = true;
+    if (site?.[workflow] === record) showEvidence();
+  }
+  $("cancel-site-analysis").addEventListener("click", cancelAnalysis);
+
   async function loadEvidence(event) {
     event.preventDefault();
+    if (!site) return;
     const selected = site;
     const mode = workflow;
     const record = selected[mode];
@@ -220,33 +269,47 @@
     }
     record.evidencePending = true;
     record.evidenceError = "";
-    record.evidence = null;
+    // Keep retrieved evidence visible while the new run is in flight.
     record.report = null;
-    record.facts = [];
-    record.sourceWarnings = [];
-    record.sourceStatus = null;
-    record.stale = false;
+    record.activity = [];
+    record.activitySummary = "Starting site investigation…";
+    record.stale = Boolean(record.facts?.length);
+    const controller = new AbortController();
+    const run = {record, controller}; activeAnalysis = run;
     showEvidence();
     try {
-      const result = await json("/api/site-analysis", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ lat: selected.center.lat, lon: selected.center.lng,
-          propertyId: selected.propertyId, workflow: mode, question,
-          markings, rainfallScenario }),
+      const result = await streamSiteAnalysis({ lat:selected.center.lat, lon:selected.center.lng,
+        propertyId:selected.propertyId, workflow:mode, question, markings, rainfallScenario, discoveryReference:record.discovery?.reference ?? null }, {
+        signal:controller.signal,
+        onEvent(event) {
+          if (activeAnalysis !== run || controller.signal.aborted) return;
+          run.serverRunId = event.run_id;
+          record.activity.push(event);
+          record.activitySummary = event.summary;
+          if (event.facts?.length) {
+            const ledger = new Map((record.facts ?? []).map(f => [f.id,f]));
+            for (const fact of event.facts) ledger.set(fact.id,fact);
+            record.facts = [...ledger.values()];
+          }
+          if (site?.[workflow] === record) showReview(record);
+        },
       });
+      if (activeAnalysis !== run || controller.signal.aborted) return;
       record.evidence = result.evidence;
       record.report = result.report;
-      record.facts = result.facts ?? [];
+      if (result.facts?.length || result.report) record.facts = result.facts ?? [];
       record.sourceWarnings = result.sourceWarnings ?? [];
       record.sourceStatus = result.sourceStatus;
       record.evidenceError = result.analysisError ?? "";
       if (result.hydrology) applyHydrology(selected.water, result.hydrology);
     } catch (error) {
-      record.evidenceError = error.message;
+      if (activeAnalysis !== run) return;
+      record.evidenceError = error.name === "AbortError" ? "Analysis canceled. Retrieved evidence is preserved." : error.message;
     } finally {
+      if (activeAnalysis !== run) return;
+      activeAnalysis = null;
       record.evidencePending = false;
-      record.stale = (record.revision ?? 0) !== revision;
+      record.stale = (record.revision ?? 0) !== revision || Boolean(record.evidenceError);
       if (site?.[workflow] === record) {
         showEvidence();
         showRainfall();
@@ -466,7 +529,11 @@
 
   function showWorkflow() {
     $("water-tools").hidden = workflow !== "water";
-    if (!site) return;
+    renderDiscoveryContext(site?.[workflow]?.discovery);
+    $("run-site-analysis").disabled = !site || Boolean(site[workflow].evidencePending);
+    $("planning-brief").disabled = !site;
+    $("analysis-site-hint").hidden = Boolean(site);
+    if (!site) { $("activity-list").replaceChildren(); $("activity-count").textContent = ""; $("cancel-site-analysis").hidden = true; $("planning-brief").value = workflows[workflow].brief; return; }
     $("planning-brief").value = site[workflow].brief;
     showMarkActions();
     showFeatures();
@@ -482,11 +549,13 @@
       setPicking(false);
       return;
     }
+    cancelAnalysis();
     siteRequest?.abort();
     siteRequest = new AbortController();
     site = sites.get(key) ?? { center, propertyId: property?.id,
       street: { features: [], brief: workflows.street.brief },
       water: { features: [], brief: workflows.water.brief, depth: "", source: "" } };
+    site.key = key;
     sites.set(key, site);
     setPicking(false);
     $("site-card").hidden = false;
@@ -498,6 +567,7 @@
     L.circleMarker(center, { radius: 8, weight: 2, color: "#fff", fillColor: "#a7e5a3",
       fillOpacity: 1, interactive: false }).addTo(siteLayer);
     showWorkflow();
+    map.fire("plannersite", { siteId: key, center, workflow, inputRevision: site[workflow].revision ?? 0 });
     setStatus("");
     $("site-card").scrollIntoView({ block: "start" });
 
@@ -540,18 +610,64 @@
       drawPreview();
     }
   });
+  function renderDiscoveryContext(selected) {
+    $("discovery-context").hidden = !selected;
+    if (!selected) return;
+    const {feature, layer, source} = selected;
+    const p = feature.properties;
+    $("discovery-feature-title").textContent = p.label;
+    $("discovery-feature-value").textContent = `${typeof p.value === "number" ? p.value.toLocaleString() : p.value} ${layer.unit}`;
+    $("discovery-feature-period").textContent = p.period || layer.period;
+    const details = $("discovery-feature-details"); details.replaceChildren();
+    const link = document.createElement("a"); link.textContent = source.label; link.href = source.url; link.target = "_blank"; link.rel = "noopener"; details.append(link);
+    const date = `Source date: ${(layer.id === "counts" && p.period) || source.observed_at || source.published_at || "not supplied"}${source.published_at && !source.observed_at ? " (publication, not acquisition)" : ""}. Retrieved: ${source.retrieved_at || "not recorded"}.`;
+    const detail=p.scalar_detail ?? {}, rows=[];
+    if (detail.count_type) rows.push(`Count method: automated (${detail.count_type}).`);
+    if (detail.directional_reported_counts) rows.push('Reported directions: '+Object.entries(detail.directional_reported_counts).map(([key,value])=>`${({w_b:'Westbound',e_b:'Eastbound',n_b:'Northbound',s_b:'Southbound'})[key] || key} ${value.toLocaleString()}`).join(' · '));
+    if (detail.interval) rows.push(`Reporting interval: ${detail.interval}`);
+    for (const [key,label] of [['upstream_elevation_m','Terrain elevation at path start'],['downstream_elevation_m','Terrain elevation at path end'],['elevation_m','Terrain elevation'],['drop_m','Elevation drop along path'],['path_length_m','Mapped path length']]) {
+      if(detail[key] != null) rows.push(`${label}: ${detail[key].toLocaleString()} m${key.includes('elevation')?' (NAVD88)':''}.`);
+    }
+    if (detail.window_edge_contribution != null) rows.push(`Contributions from the DEM window edge: ${detail.window_edge_contribution?'yes; contributing area is incomplete':'none detected; still limited to this DEM window'}.`);
+    if (detail.county_context) rows.push(`County catchment context: ${detail.county_context}.`);
+    if (detail.classification) rows.push(detail.classification);
+    if (detail.interpolation) rows.push(`Rainfall method: ${detail.interpolation}.`);
+    if (detail.bracketing_contours_in) rows.push(`Surrounding rainfall contours: ${detail.bracketing_contours_in.join('–')} inches.`);
+    if (detail.outfall_reference) rows.push(`County outfall reference: ${detail.outfall_reference}. This does not verify a connection from this site.`);
+    if (detail.scope) rows.push(detail.scope);
+    for (const text of [date,layer.method,layer.limitations,...rows]) {
+      const row = document.createElement("p"); row.textContent = text; details.append(row);
+    }
+  }
+  map.on("discoveryselect", (selected) => {
+    if (selected.workflow !== workflow) return;
+    const [lng,lat] = selected.feature.properties.center;
+    if (coverage && !insideCoverage(L.latLng(lat,lng))) { setStatus("This feature lies outside available imagery coverage."); return; }
+    cancelAnalysis();
+    selectSite(L.latLng(lat,lng));
+    site[workflow].discovery = selected;
+    site[workflow].brief = workflow === "water"
+      ? "Investigate the selected discovery evidence. Verify drainage connections, surface conditions and access before recommending a treatment site. Do not infer flood depth or capture benefits."
+      : "Investigate the selected historical count with current site evidence. Identify the measurements needed before evaluating a physical redesign. Do not extrapolate current demand or claim emissions benefits.";
+    inputsChanged(site[workflow]);
+    $("planning-brief").value = site[workflow].brief;
+    renderDiscoveryContext(selected);
+    setStatus("Discovery evidence added to this site's brief. Analyze when ready.");
+  });
   map.on("plannerproperty", ({ property, searched }) => {
     if (!$("planner").hidden && (searched || (!picking && !draft))) {
       selectSite(L.latLng(property.lat, property.lon), property);
     }
   });
   function showWorkspace({ mode, visible }) {
+    if (mode !== workflow || !visible) cancelAnalysis();
     finishDrawing();
     setPicking(false);
     if (visible) {
       workflow = mode;
       overlays.addTo(map);
       showWorkflow();
+      map.fire("plannersite", site ? { siteId: site.key, center: site.center, workflow, inputRevision: site[workflow].revision ?? 0 } : { workflow });
       setStatus(site ? "" : "Search for a property or pick any covered location.");
       if (site) $("site-card").scrollIntoView({ block: "start" });
     } else {
@@ -612,5 +728,5 @@
       inputsChanged(site.water);
     });
   }
-  $("planning-brief").addEventListener("input", ({ target }) => { site[workflow].brief = target.value; });
+  $("planning-brief").addEventListener("input", ({ target }) => { site[workflow].brief = target.value; inputsChanged(site[workflow]); });
 })();

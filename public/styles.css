@@ -14,41 +14,6 @@ body {
   min-height: 0;
 }
 
-.audience-tabs {
-  display: flex;
-  flex: none;
-  gap: 8px;
-  padding: 8px 16px;
-  background: #141c18;
-  border-bottom: 1px solid #2a382f;
-}
-
-.audience-tabs button {
-  padding: 8px 14px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: #a3b5a8;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.audience-tabs button:hover,
-.audience-tabs button[aria-selected="true"] {
-  background: #26372b;
-  color: #d9f3db;
-}
-
-.audience-tabs button[aria-selected="true"] {
-  border-color: #55765a;
-}
-
-.audience-tabs button:focus-visible {
-  outline: 2px solid #a7e5a3;
-  outline-offset: 1px;
-}
-
 .planner {
   display: grid;
   gap: 8px;
@@ -339,3 +304,38 @@ body {
 .source-status{font-size:10px;color:#91b39a;line-height:1.6;margin-top:10px}
 .source-warnings{font-size:10px;line-height:1.5;color:#d8c6a1;padding-left:15px;margin:10px 0 0}
 .source-warnings:empty{display:none}
+
+.planner #run-site-analysis{display:block;width:100%;padding:12px;background:#a7e5a3;color:#15251a;border-color:#a7e5a3;font-weight:800;font-size:14px}
+.planner #analysis-site-hint{margin-top:8px;font-size:11px;color:#b7cdbf}
+
+/* Checkpoint 1: a single planning workspace with a separate proposal layer. */
+.planning-workspaces{grid-template-columns:1.4fr 1fr;margin-bottom:20px}
+.site-details>summary,.map-settings>summary{cursor:pointer;padding:14px 0;color:#b5c9bc;font-size:12px;font-weight:700}
+.site-details .planner-card{margin-top:10px}.map-settings{margin-top:18px;border-top:1px solid #34473e}
+.planner-controls{margin-top:20px;padding-top:18px;border-top:1px solid #34473e}
+.planner-controls fieldset{display:none}.planner-controls h2{font-size:13px;margin:8px 0}
+.planner-kicker{display:none}.planner-intro{display:block!important;font-size:12px;margin-bottom:0}
+.proposal-map-control{position:absolute;z-index:510;top:112px;left:22px;padding:12px 15px;border:1px solid #7e719c;border-radius:10px;background:#211d2def;box-shadow:0 5px 20px #0003;max-width:calc(100% - 90px)}
+.proposal-map-control label{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:700;cursor:pointer}
+.proposal-map-control input{accent-color:#c9a7ff;width:17px;height:17px}.proposal-map-control>span{display:block;font-size:10px;color:#c5bbd5;margin-top:6px}
+.fixture-tag{font-size:9px;font-weight:800;letter-spacing:.12em;color:#d5b9ff}.proposal-review{border-color:#7e719c!important;background:#211d2d!important}
+.proposal-metrics{display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px}.proposal-metrics dt{color:#b7adca}.proposal-metrics dd{margin:0;text-align:right}
+#proposal-stale{color:#f4d983}#proposal-development button{margin:4px 4px 4px 0}#proposal-revision{font-size:10px}
+button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #b4e6ca;outline-offset:3px}
+@media(max-width:760px){.shell.planner-mode{grid-template-rows:minmax(220px,46dvh) minmax(260px,1fr);height:100dvh;min-height:520px}.planner-mode .sidebar,.water-mode .sidebar{max-height:none}.sidebar-body{min-height:0}.proposal-map-control{top:12px;left:12px;padding:10px 12px}.planner-mode .sidebar h1#planner-title{display:block;font-size:21px}.planner-mode .sidebar .status-card{display:flex}.planner-mode .sidebar .section-label{display:block}.planner-mode .planner-controls{display:block}.planner-controls[hidden]{display:none!important}#map .leaflet-top.leaflet-right{top:12px}.planner-mode .map-heading{display:none}.site-intro{display:block}}
+
+.planner-map-panel{top:190px}
+@media(max-width:760px){.planner-map-panel{top:92px;left:12px;max-width:calc(100% - 24px)}}
+.agent-activity{margin:14px 0 6px;border-top:1px solid #3a5040;padding-top:12px}.agent-activity summary{cursor:pointer;color:#c8dccf;font-size:12px;font-weight:700}.agent-activity>p{font-size:11px;color:#9eb5a8}.agent-activity ol{padding:0;list-style:none;max-height:280px;overflow:auto}.agent-activity li{border-left:2px solid #587c67;padding:5px 0 7px 10px;margin:8px 0;font-size:11px;line-height:1.5}.agent-activity li[data-status=failed],.agent-activity li[data-status=unavailable]{border-color:#efac91}.agent-activity li strong{display:block;color:#c2d8cb;font-size:10px;text-transform:uppercase;letter-spacing:.04em}.agent-activity button{font-size:10px;margin:6px 4px 0 0}#cancel-site-analysis{margin-top:8px}
+/* Source-backed discovery controls live on the map; selected evidence stays by the prompt. */
+.discovery-panel{position:absolute;z-index:505;right:22px;top:112px;width:285px;max-width:calc(100% - 44px);padding:15px 17px;background:#12231eee;border:1px solid #618475;border-radius:12px;box-shadow:0 8px 30px #00180b44;backdrop-filter:blur(12px);max-height:calc(100% - 195px);overflow:auto}
+.discovery-panel-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:11px}.discovery-panel button{background:transparent;color:#ceebdc;border:1px solid #537565;border-radius:6px;padding:5px 8px;cursor:pointer;font-size:10px}
+.discovery-panel label{display:block;font-size:11px;color:#bacfc2;margin:8px 0 6px}.discovery-panel select{width:100%;padding:9px 7px;border:1px solid #557868;background:#21382c;color:#f1f8f4;border-radius:7px;font:inherit;font-size:12px;text-overflow:ellipsis}
+.discovery-panel p{font-size:11px;line-height:1.5;margin:9px 0}.discovery-panel .discovery-legend{color:#bce4da;font-weight:600}.discovery-limit{color:#9db3a6}.discovery-panel details{border-top:1px solid #385446;padding-top:10px;font-size:11px}.discovery-panel summary{cursor:pointer;color:#d4eadd}
+.discovery-context{border-color:#5e8c94!important}.discovery-context>strong{font-size:22px;color:#bdedf2}.discovery-context summary{cursor:pointer;font-size:11px}.discovery-context a{color:#a1dbe6}.discovery-context p{overflow-wrap:anywhere}.discovery-popup strong{font-size:13px}.discovery-popup p{font-size:12px;margin:6px 0}.discovery-popup small{font-size:10px;color:#4f6258}
+#map .leaflet-top.leaflet-right{top:auto;bottom:76px;right:12px}.leaflet-top.leaflet-right .leaflet-control{margin-top:0}
+#map.planner-capture .leaflet-discovery-pane{pointer-events:none}
+@media(max-width:1050px) and (min-width:761px){.discovery-panel{width:245px;top:190px}.map-heading .map-badge{display:none}}
+@media(max-width:760px){.discovery-panel{top:12px;left:12px;right:62px;width:auto;max-width:none;max-height:calc(100% - 74px);padding:10px 12px}.discovery-panel-heading{margin-bottom:5px}.discovery-panel label{margin:3px 0}.discovery-panel p{font-size:10px;margin:6px 0}.discovery-panel .discovery-limit{display:none}.discovery-panel details{padding-top:6px}.proposal-map-control{top:auto;bottom:42px;left:auto;right:12px;max-width:calc(100% - 24px)}.proposal-map-control:has(input:disabled){display:none}#map .leaflet-top.leaflet-right{bottom:60px;right:6px}}
+.discovery-panel-heading{gap:8px}.discovery-panel-heading>.section-label{flex:1}.discovery-panel-heading button{white-space:nowrap}
+@media(max-width:760px){.watershed-legend{display:none}.discovery-panel:has(#discovery-body[hidden]) .discovery-panel-heading{margin-bottom:0}}
