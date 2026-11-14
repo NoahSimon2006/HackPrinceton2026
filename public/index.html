@@ -1,140 +1,45 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Crossing Lab</title>
-<link rel="stylesheet" href="vendor/leaflet.css">
-<link rel="stylesheet" href="styles.css">
-<script defer src="vendor/leaflet.js"></script>
-<script defer src="vendor/leaflet-heat.js"></script>
-<script defer src="app.js"></script>
-<script defer src="investigator.js"></script>
-<script defer src="designer.js"></script>
-<script defer src="emissions.js"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sustainability Map</title>
+  <link rel="stylesheet" href="/vendor/leaflet.css">
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/vendor/leaflet.js"></script>
+  <script defer src="/app.js"></script>
 </head>
 <body>
-<header><div class="brand">Crossing Lab</div><label>City <select id="city"><option value="la">Los Angeles</option><option value="houston">Houston</option></select></label></header>
-<main>
-<section class="intro"><h1>Intersection explorer</h1><p>Investigate crash evidence, inspect the street, and identify the next steps for a safer intersection.</p></section>
-<section id="houston" class="panel" hidden><h2>Houston</h2><p>Local intersection totals are unavailable.</p><a href="https://www.h-gac.com/interactive-web-applications/">Open H-GAC’s Regional Crash Data explorer</a></section>
-<div id="la">
-<div class="explorer">
-<section class="panel map-panel" aria-labelledby="map-title">
-<div class="section-head"><div><p class="eyebrow">Aerial explorer</p><h2 id="map-title">Central Los Angeles</h2></div><span class="tag">Vexcel aerial</span></div>
-<div class="map-toolbar" aria-label="Map controls">
-<label class="map-toggle"><input type="checkbox" id="heat-toggle" role="switch" aria-describedby="heat-description"> Crash heat map</label>
-<label class="map-toggle"><input type="checkbox" id="sim-toggle" disabled> Idling &amp; emissions</label>
-<label class="map-toggle"><input type="checkbox" id="labels-toggle" checked> Place labels</label>
-<button type="button" id="map-overview">View all matches</button>
-<button type="button" id="map-selected" disabled>Selected intersection</button>
-</div>
-<div class="map-frame">
-<div id="map" role="region" aria-label="Aerial map of Central Los Angeles" aria-describedby="map-help"></div>
-<div id="tile-status" class="map-message" role="status" hidden><span id="tile-error-message"></span> <button type="button" id="retry-tiles">Retry imagery</button></div>
-<div id="sim-legend" class="heat-legend sim-legend" hidden><strong id="sim-legend-title"></strong><span id="sim-legend-period"></span><div id="sim-scale" class="sim-scale"></div><span>Click a road for its numbers and causes.</span></div>
-<div id="heat-legend" class="heat-legend" hidden>
-<strong>Reported crash concentration</strong><span id="heat-period">2022–2023 · LAPD</span>
-<div class="heat-ramp" aria-hidden="true"></div><div class="heat-scale"><span>Lower</span><span>Higher</span></div>
-<label for="heat-opacity">Overlay opacity <output id="heat-opacity-value">70%</output></label>
-<input id="heat-opacity" type="range" min="20" max="100" value="70" step="10">
-</div>
-</div>
-<div class="map-caption"><p id="map-help" class="note">Drag to pan · scroll or pinch to zoom · click a dot to inspect</p><p id="map-selection" class="note" aria-live="polite">Choose an intersection</p></div>
-<p id="heat-description" class="note">Heat uses LAPD 2022–2023 counts at representative street-pair locations, not exact crash sites or risk per trip. It follows the year and street filters. CHP 2023–2024 findings appear below.</p>
-</section>
-<section class="panel rankings" aria-labelledby="ranking-title">
-<h2 id="ranking-title">Ranked intersections</h2><p class="note">LAPD · historical report counts</p>
-<div class="filters"><label>Year <select id="year"><option value="all">2022–2023</option><option>2022</option><option>2023</option></select></label><label>Street <input type="search" id="search" placeholder="Search street names"></label></div>
-<p id="status" class="note" role="status">Loading collision totals…</p>
-<ol id="ranking"></ol>
-</section>
-</div>
-<section class="panel sim-panel" id="sim-panel" aria-labelledby="sim-title" hidden>
-<div class="section-head"><div><p class="eyebrow">Traffic simulation</p><h2 id="sim-title">Where cars idle and pollute most</h2></div><span class="tag">Simulated · SUMO</span></div>
-<p class="note">Roads ranked by simulated idling or emissions, with the reason vehicles are held up. This is a model of traffic, separate from the crash records.</p>
-<div class="filters sim-filters"><label>Period <select id="sim-period"></select></label><label>Rank by <select id="sim-measure"></select></label><label class="map-toggle"><input type="checkbox" id="sim-freeways"> Include freeways</label></div>
-<p id="sim-status" class="note" role="status"></p>
-<div class="crash-table"><table class="sim-table">
-<thead><tr><th scope="col">#</th><th scope="col">Road segment</th><th scope="col" id="sim-measure-head"></th><th scope="col">Idling per vehicle</th><th scope="col">Time stopped</th><th scope="col">CO₂ g per vehicle-km</th><th scope="col">Vehicles per hour</th><th scope="col">Volume basis</th><th scope="col">Main reason for idling</th></tr></thead>
-<tbody id="sim-ranking"></tbody>
-</table></div>
-<p id="sim-method" class="note"></p>
-</section>
-<section class="panel investigation designer" id="designer" aria-labelledby="designer-title" hidden>
-<div class="section-head"><div><p class="eyebrow">Grok + LangChain Deep Agents</p><h2 id="designer-title">Design a safer layout with Grok</h2></div><span class="tag">Crashes + idling</span></div>
-<p id="chat-site"></p>
-<p class="note">Ask what the crash record or the traffic simulation shows, get a redesign proposal, then push back or add your own ideas. Grok delegates to a crash analyst, a site analyst that looks at the aerial image, a guidance researcher, and a traffic-flow analyst that reads the simulated idling and emissions. Replies can take up to a couple of minutes.</p>
-<div class="designer-grid">
-<div class="chat">
-<div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-label="Conversation with Grok"></div>
-<div id="chat-suggestions" class="chat-suggestions"></div>
-<form id="chat-form"><label for="chat-input" class="note">Message Grok</label><div class="chat-input"><textarea id="chat-input" rows="2" maxlength="1500" placeholder="For example: add curves on the approaches so drivers slow down" required></textarea><div class="chat-buttons"><button id="chat-send" type="submit">Send</button><button id="chat-cancel" type="button" class="secondary" hidden>Cancel</button></div></div></form>
-<p id="chat-status" class="note" role="status"></p>
-<details id="chat-activity-box" hidden><summary>Agent activity and specialist notes</summary><p id="chat-usage" class="note"></p><ol id="chat-activity"></ol><div id="chat-notes"></div></details>
-</div>
-<div class="design">
-<p id="design-empty" class="note design-empty">A before-and-after layout appears here once Grok proposes a design.</p>
-<div id="design-panel" hidden>
-<div id="design-versions" class="design-versions"></div>
-<h3 id="design-title"></h3>
-<p id="design-target" class="design-target"></p>
-<p id="design-summary"></p>
-<p id="design-idling" class="note" hidden></p>
-<div class="design-diagrams">
-<figure><figcaption><strong>Today</strong><span id="design-before-note" class="note"></span></figcaption><div id="design-before"></div></figure>
-<figure><figcaption><strong>Proposed</strong><span id="design-after-note" class="note"></span></figcaption><div id="design-after"></div></figure>
-</div>
-<p class="note">Schematic only: not to scale, and drawn with the first-named street running left to right.</p>
-<div class="investigation-actions"><button type="button" id="design-overlay" class="secondary">Show on aerial map</button><button type="button" id="design-simulate" class="secondary">Simulate idling and emissions</button></div>
-<p id="design-overlay-note" class="note" hidden></p>
-<div id="design-sim" class="design-sim" hidden></div>
-<h4>Changes</h4><ol id="design-elements" class="design-elements"></ol>
-<div class="design-lists"><div><h4>Tradeoffs</h4><ul id="design-tradeoffs"></ul></div><div><h4>Checks before this could proceed</h4><ul id="design-checks"></ul></div></div>
-<details><summary>Evidence and guidance behind this design</summary><ul id="design-sources" class="note"></ul></details>
-</div>
-</div>
-</div>
-<p class="note investigation-footnote">AI-generated design concepts for discussion, not engineering plans. Crash figures come from CHP 2023–2024 reports matched by street name; some report locations are uncertain. Idling and emissions figures are simulated, not measured, and designs are not re-simulated.</p>
-</section>
-<section class="panel investigation" id="investigator" aria-labelledby="investigation-title" hidden>
-<div class="section-head"><div><p class="eyebrow">Grok + LangChain Deep Agents</p><h2 id="investigation-title">Investigate this intersection</h2></div><span class="tag" id="investigation-badge">Ready</span></div>
-<p id="investigation-site"></p>
-<p class="note">Combines CHP crash evidence, Vexcel aerial observations, and reviewed FHWA guidance. Findings explain what to check next and which improvements may merit evaluation.</p>
-<div class="investigation-actions"><button type="button" id="analyze">Analyze intersection</button><button type="button" id="refresh-analysis" class="secondary" hidden>Run fresh analysis</button><button type="button" id="cancel-analysis" class="secondary" hidden>Cancel</button></div>
-<p id="investigation-status" role="status">Analysis runs only when requested. Allow about one to three minutes.</p>
-<div id="agent-progress" class="agent-progress" hidden></div>
-<p id="investigation-summary" class="investigation-summary"></p>
-<div id="investigation-findings" class="investigation-findings"></div>
-<div id="investigation-limits" class="note"></div>
-<details id="investigation-evidence" hidden><summary>Evidence used in this investigation</summary><div id="evidence-library"></div></details>
-<details id="investigation-activity" hidden><summary>Investigation activity and specialist notes</summary><p id="investigation-usage" class="note"></p><ol id="activity-list"></ol><div id="specialist-notes"></div></details>
-<section id="followup-section" aria-label="Follow-up questions" hidden><h3>Ask about these findings</h3><div id="followup-answers"></div><form id="followup-form"><label for="followup-question">Follow-up question</label><div class="followup-input"><input id="followup-question" type="text" maxlength="1200" placeholder="What should a site visit check first?" required><button id="ask-followup" type="submit">Ask Grok</button></div></form><p class="note">Answers use this investigation’s evidence; they do not run a new search. Up to five questions per investigation.</p></section>
-<p class="note investigation-footnote">AI-assisted planning review · exact figures remain attached to their sources. Candidate improvements require local verification. The investigation uses CHP 2023–2024, independently of the LAPD map filter.</p>
-</section>
-<section class="panel scenario" id="crash-history" aria-labelledby="crash-history-title">
-<div class="section-head"><h2 id="crash-history-title">Crash history</h2><span class="tag">CHP · 2023–2024</span></div>
-<p id="crash-location" role="status">Select a street pair to see why it may warrant a closer look.</p>
-
-<details id="crash-details" hidden>
-<summary id="crash-detail-label">View source reports</summary>
-<div class="crash-table"><table>
-<thead><tr><th scope="col">Date and time</th><th scope="col">Reported road</th><th scope="col">Distance from cross street</th><th scope="col">Collision type</th><th scope="col">Involved with</th><th scope="col">Lighting</th><th scope="col">Injured</th><th scope="col">Killed</th></tr></thead>
-<tbody id="crash-records"></tbody>
-</table></div>
-</details>
-<p class="note">Street pairs are matched from report names. The junction area includes reported offsets of <span id="crash-radius">150</span> ft or less. Missing offsets leave the location uncertain. Patterns are leads for field review. Counts cover reported crashes and do not measure risk per trip.</p>
-<p class="note">Source: <a href="https://data.ca.gov/@california-highway-patrol/ccrs">California Crash Reporting System</a>. This period is separate from the historical ranking filter.</p>
-</section>
-<section class="panel evidence" aria-labelledby="evidence-title">
-<div><h2 id="evidence-title">Intersection evidence</h2><p id="evidence" aria-live="polite">Select a street pair to view its reported collision totals.</p><p class="note"><a href="https://data.lacity.org/Public-Safety/Traffic-Collision-Data-from-2010-to-Present/d5tf-ez2w/about_data">LA Open Data · historical collision reports</a>. Ranked by report count. Counts do not account for traffic exposure. Severity and road-user mode are unavailable in this extract.</p></div>
-<div><h3>Site context</h3><p class="note">Map points use reported coordinates. Surveyed street widths are unavailable.</p><a id="street-map" href="https://www.openstreetmap.org/" hidden>Inspect streets on OpenStreetMap</a></div>
-</section>
-<section class="panel evidence" aria-label="Sponsor site context" id="sponsor" hidden>
-<div><h3>Commercial property context</h3><p class="note">CoStar kit coverage within 250 m of the reported point.</p><p id="costar-status" role="status"></p><ul id="costar-types"></ul></div>
-<div><h3>Aerial imagery</h3><p class="note">Vexcel · approximately 180 m across, centered on the reported point.</p><button type="button" id="load-aerial">Load aerial image</button><p id="aerial-status" role="status"></p><img id="aerial" alt="Vexcel aerial view around the selected intersection" hidden></div>
-</section>
-</div>
-</main>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">◈</span><div><strong>Sustainability Map</strong><small>Los Angeles · map workspace</small></div></div>
+      <div class="sidebar-body">
+        <div class="section-label">EXPLORE</div>
+        <h1>See the city from above.</h1>
+        <p class="intro">Explore Vexcel aerial imagery. Additional sustainability layers will be added step by step.</p>
+        <div class="search-block">
+          <label for="search">Find a CoStar property</label>
+          <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" autocomplete="off" placeholder="Property name or address"></div>
+          <div id="results" class="results" role="listbox" aria-label="Property search results" hidden></div>
+        </div>
+        <div class="divider"></div>
+        <div class="section-label">MAP LAYERS</div>
+        <div class="layer base"><span class="layer-icon">▧</span><div><strong>Vexcel aerial</strong><small>Base imagery</small></div><span class="active-dot" aria-label="On"></span></div>
+        <label class="layer toggle-row" for="labels"><span class="layer-icon">⌖</span><span class="layer-copy"><strong>Place labels</strong><small>Esri reference layer</small></span><input id="labels" type="checkbox" role="switch"><span class="switch"></span></label>
+        <label class="layer toggle-row" for="properties"><span class="layer-icon">●</span><span class="layer-copy"><strong>CoStar properties</strong><small>Visible from neighborhood zoom</small></span><input id="properties" type="checkbox" role="switch"><span class="switch"></span></label>
+        <div id="layer-note" class="layer-note" hidden>Zoom in to level 15 to see property points.</div>
+        <div class="divider"></div>
+        <div class="section-label">MAP STATUS</div>
+        <div class="status-card"><span id="status-dot" class="status-dot"></span><div><strong id="status-title">Checking coverage</strong><p id="status-detail">Connecting to Vexcel…</p></div></div>
+        <div class="map-meta"><div><span>Center</span><strong id="coordinates">—</strong></div><div><span>Zoom</span><strong id="zoom">—</strong></div></div>
+      </div>
+      <div class="sidebar-footer"><span>V2 map foundation</span><span>Local workspace</span></div>
+    </aside>
+    <main class="map-area" aria-label="Interactive Los Angeles aerial map">
+      <div class="map-heading"><div><span class="eyebrow">LOS ANGELES, CALIFORNIA</span><h2>Aerial explorer</h2></div><span class="map-badge">VEXCEL IMAGERY</span></div>
+      <div id="map" role="application" aria-label="Pan and zoom aerial map"></div>
+      <div class="map-bottom"><span>Drag to pan · scroll to zoom</span><button id="reset" type="button">↗ &nbsp; Back to Los Angeles</button></div>
+    </main>
+  </div>
 </body>
 </html>

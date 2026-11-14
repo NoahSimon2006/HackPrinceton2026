@@ -1,315 +1,183 @@
-"""Serve Crossing Lab and its integrations on the local machine."""
+"""Local-only Vexcel map server. Keys and CoStar source records stay on this machine."""
+from __future__ import annotations
+
 import json
 import math
-import mimetypes
 import os
 import re
-from collections import Counter
-from functools import cache, lru_cache
+import time
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import BoundedSemaphore
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import HTTPRedirectHandler, Request, build_opener
-
-from dotenv import load_dotenv
-from designer import ChatError, Chats
-from investigations import Investigations, JobError
-from scenario import ScenarioError, Scenarios
+from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
-load_dotenv(ROOT / ".env")
 PUBLIC = ROOT / "public"
-STATIC = {
-    "/": "index.html", "/index.html": "index.html", "/styles.css": "styles.css",
-    "/app.js": "app.js", "/data/la.json": "data/la.json", "/data/ccrs.json": "data/ccrs.json",
-    "/investigator.js": "investigator.js", "/designer.js": "designer.js",
-    "/emissions.js": "emissions.js", "/data/sim.json": "data/sim.json",
-    "/vendor/leaflet.css": "vendor/leaflet.css",
-    "/vendor/leaflet.js": "vendor/leaflet.js",
-    "/vendor/leaflet-heat.js": "vendor/leaflet-heat.js",
-}
-VEXCEL_URL = "https://api.vexcelgroup.com/v2/ortho/extract"
-VEXCEL_TILE_URL = "https://api.vexcelgroup.com/v2/ortho/tile"
-CRASH_SOURCE = "LA Open Data historical collisions (d5tf-ez2w)"
-MAX_IMAGE = 5 * 1024 * 1024
-EXPENSIVE_RUNS = BoundedSemaphore(2)
-TILE_RUNS = BoundedSemaphore(4)
-MAX_TILE = 512 * 1024
-COSTAR_RADIUS_M = 250
+LA_BOUNDS = (-118.67, 33.70, -118.10, 34.35)  # west, south, east, north
+LAYERS = "urban,urban-r,wide-area,urban-g"
+VEXCEL = "https://api.vexcelgroup.com/v2"
+STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
+          "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
+          "/vendor/leaflet.css": "vendor/leaflet.css"}
 
 
-class RequestError(Exception):
-    def __init__(self, status, message):
-        super().__init__(message)
-        self.status = status
+def load_env():
+    path = ROOT / ".env"
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        return None
+load_env()
 
 
-@cache
-def collision_sites():
-    sites = json.loads((PUBLIC / "data/la.json").read_text())["sites"]
-    return {site["name"]: site for site in sites}
+def vexcel_request(path, params, accept, limit):
+    key = os.getenv("VEXCEL_API_KEY", "").strip()
+    if not key:
+        raise ValueError("Vexcel key is missing from the local .env file.")
+    request = Request(f"{VEXCEL}{path}?{urlencode(params)}",
+                      headers={"X-API-KEY": key, "Accept": accept})
+    try:
+        with urlopen(request, timeout=18) as response:
+            data = response.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError("Vexcel response exceeded the size limit.")
+            return data
+    except HTTPError as error:
+        if error.code in (401, 403):
+            raise ValueError("Vexcel rejected the key or imagery access.") from None
+        if error.code == 404:
+            raise ValueError("No Vexcel imagery is available here.") from None
+        raise ValueError(f"Vexcel request failed ({error.code}).") from None
+    except (URLError, TimeoutError):
+        raise ValueError("Vexcel could not be reached. Check the connection.") from None
 
 
-@cache
-def commercial_properties(directory):
+_coverage = None
+_coverage_time = 0.0
+
+
+def coverage():
+    global _coverage, _coverage_time
+    if _coverage is not None and time.time() - _coverage_time < 3600:
+        return _coverage
+    west, south, east, north = LA_BOUNDS
+    wkt = (f"POLYGON(({west} {south},{east} {south},{east} {north},"
+           f"{west} {north},{west} {south}))")
+    raw = vexcel_request("/ortho/collections", {
+        "wkt": wkt, "srid": 4326, "layer": LAYERS, "metadata-format": "JSON",
+        "include": "layer,collection,geometry", "order-by": "default",
+    }, "application/json", 5_000_000)
+    data = json.loads(raw)
+    features = data.get("features", [])
+    if not features:
+        raise ValueError("Vexcel returned no coverage for Los Angeles.")
+    # Only geometry is needed to enforce the chosen pan boundary.
+    _coverage = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": feature["geometry"], "properties": {}}
+        for feature in features if feature.get("geometry")
+    ], "bounds": LA_BOUNDS}
+    _coverage_time = time.time()
+    return _coverage
+
+
+@lru_cache(maxsize=256)
+def tile(z, x, y):
+    data = vexcel_request("/ortho/tile", {
+        "layer": LAYERS, "zoom": z, "tile-x": x, "tile-y": y,
+        "image-format": "jpeg",
+    }, "image/jpeg", 800_000)
+    if not data.startswith(b"\xff\xd8\xff"):
+        raise ValueError("Vexcel returned an invalid image tile.")
+    return data
+
+
+@lru_cache(maxsize=1)
+def properties():
+    directory = os.getenv("COSTAR_KIT_DIR", "").strip()
+    if not directory:
+        raise ValueError("CoStar kit directory is not configured.")
     root = Path(directory).expanduser()
     types = json.loads((root / "schemas/enums.json").read_text())["PropertyType"]
-    properties = []
-    with (root / "data/commercial-property.jsonl").open(encoding="utf-8") as records:
-        for line in records:
+    items = []
+    with (root / "data/commercial-property.jsonl").open(encoding="utf-8") as file:
+        for line in file:
             record = json.loads(line)
             address = record.get("primaryAddress") or {}
             try:
-                lat = float(address["latitude"])
-                lon = float(address["longitude"])
+                lat, lon = float(address["latitude"]), float(address["longitude"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            if not (LA_BOUNDS[0] <= lon <= LA_BOUNDS[2]
+                    and LA_BOUNDS[1] <= lat <= LA_BOUNDS[3]):
                 continue
-            label = types.get(str(record.get("propertyType")), "Unknown")
-            properties.append((lat, lon, label))
-    return properties
-
-
-def nearby_properties(site):
-    directory = os.getenv("COSTAR_KIT_DIR", "").strip()
-    if not directory:
-        raise RequestError(503, "Set COSTAR_KIT_DIR to the extracted CoStar kit.")
-    try:
-        properties = commercial_properties(directory)
-    except (OSError, KeyError, ValueError):
-        raise RequestError(503, "The CoStar property file or its type lookup could not be read.") from None
-    # Local distance approximation over a 250 m radius from the reported point.
-    meters_per_degree = math.pi * 6_371_000 / 180
-    lon_scale = math.cos(math.radians(site["lat"]))
-    counts = Counter(
-        label for lat, lon, label in properties
-        if meters_per_degree * math.hypot(lat - site["lat"], (lon - site["lon"]) * lon_scale)
-        <= COSTAR_RADIUS_M
-    )
-    return {"radius_m": COSTAR_RADIUS_M, "total": counts.total(), "types": dict(counts.most_common())}
-
-
-def vexcel_image(request, max_bytes=MAX_IMAGE):
-    try:
-        with build_opener(NoRedirect()).open(request, timeout=15) as response:
-            if response.status != 200 or response.headers.get_content_type() != "image/jpeg":
-                raise RequestError(502, "Vexcel did not return aerial imagery for this area.")
-            image = response.read(max_bytes + 1)
-    except HTTPError as error:
-        messages = {
-            401: "Vexcel rejected the API key.",
-            403: "Vexcel denied access to this imagery. Check the key and event coverage.",
-            404: "Vexcel has no imagery for this location.",
-            429: "Vexcel’s request limit was reached. Try again shortly.",
-        }
-        raise RequestError(502, messages.get(error.code, "Vexcel imagery is temporarily unavailable.")) from None
-    except (URLError, TimeoutError):
-        raise RequestError(502, "The Vexcel request timed out or could not connect.") from None
-    if len(image) > max_bytes or not image.startswith(b"\xff\xd8\xff"):
-        raise RequestError(502, "Vexcel returned an invalid or oversized image.")
-    return image
-
-
-@lru_cache(maxsize=128)
-def aerial_tile(zoom, tile_x, tile_y):
-    """Proxy fixed XYZ tiles; retain at most 64 MiB in RAM, never on disk."""
-    if (any(type(value) is not int for value in (zoom, tile_x, tile_y))
-            or not 10 <= zoom <= 20
-            or not 0 <= tile_x < 2 ** zoom or not 0 <= tile_y < 2 ** zoom):
-        raise RequestError(400, "Invalid map tile.")
-    key = os.getenv("VEXCEL_API_KEY", "").strip()
-    if not key:
-        raise RequestError(503, "A Vexcel API key is required. Set VEXCEL_API_KEY in the local .env and restart the server.")
-    query = urlencode({
-        "layer": "urban,urban-r,wide-area,urban-g", "zoom": zoom,
-        "tile-x": tile_x, "tile-y": tile_y, "image-format": "jpeg",
-    })
-    request = Request(f"{VEXCEL_TILE_URL}?{query}", headers={
-        "X-API-KEY": key, "Accept": "image/jpeg",
-    })
-    if not TILE_RUNS.acquire(timeout=10):
-        raise RequestError(429, "Vexcel tiles are still loading. Try again shortly.")
-    try:
-        return vexcel_image(request, MAX_TILE)
-    finally:
-        TILE_RUNS.release()
-
-
-def aerial_image(site):
-    key = os.getenv("VEXCEL_API_KEY", "").strip()
-    if not key:
-        raise RequestError(503, "A Vexcel API key is required.")
-    lat, lon = site["lat"], site["lon"]
-    offset_lat = 90 / 111_195
-    offset_lon = offset_lat / math.cos(math.radians(lat))
-    west, east, south, north = lon - offset_lon, lon + offset_lon, lat - offset_lat, lat + offset_lat
-    corners = [(west, south), (east, south), (east, north), (west, north), (west, south)]
-    polygon = ", ".join(f"{x:.7f} {y:.7f}" for x, y in corners)
-    payload = {
-        "wkt": f"POLYGON(({polygon}))", "srid": 4326,
-        "layer": "urban,urban-r,wide-area,urban-g", "crop": "bounding_box",
-        "image-format": "jpeg", "destination-dimensions": "800,800",
-    }
-    request = Request(VEXCEL_URL, data=json.dumps(payload).encode(), headers={
-        "X-API-KEY": key, "Content-Type": "application/json", "Accept": "image/jpeg",
-    })
-    return vexcel_image(request)
-
-
-INVESTIGATIONS = Investigations(aerial_image)
-SCENARIOS = Scenarios()
-CHATS = Chats(aerial_image, lambda: list(collision_sites().values()), INVESTIGATIONS.latest_report)
+            address_text = " ".join(str(address.get(key) or "").strip() for key in
+                                    ("streetNumber", "streetName", "streetType"))
+            address_text = " ".join(address_text.split())
+            items.append({"id": str(record.get("id", "")), "lat": lat, "lon": lon,
+                          "name": str(record.get("buildingName") or address_text or "Unnamed property"),
+                          "address": address_text,
+                          "type": types.get(str(record.get("propertyType")), "Unknown")})
+    return items
 
 
 class Handler(BaseHTTPRequestHandler):
-    def send_data(self, status, content_type, body):
+    def send(self, status, content, mime, cache="no-store"):
         self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(content)
 
-    def send_json(self, status, payload):
-        self.send_data(status, "application/json", json.dumps(payload).encode())
-
-    def local_request(self):
-        return self.headers.get("Host") in {f"127.0.0.1:{self.server.server_port}",
-                                            f"localhost:{self.server.server_port}"}
+    def send_json(self, status, data):
+        self.send(status, json.dumps(data, separators=(",", ":")).encode(), "application/json")
 
     def do_GET(self):
-        if not self.local_request():
-            self.send_error(404)
-            return
-        tile = re.fullmatch(r"/api/vexcel/tiles/(\d{1,2})/(\d{1,7})/(\d{1,7})\.jpg", self.path)
-        if tile:
-            origin = self.headers.get("Origin")
-            if (self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
-                    or origin not in (None, f"http://{self.headers.get('Host')}")):
-                self.send_json(403, {"error": "Use the local Crossing Lab map."})
-                return
-            try:
-                image = aerial_tile(*(int(value) for value in tile.groups()))
-                self.send_data(200, "image/jpeg", image)
-            except RequestError as error:
-                self.send_json(error.status, {"error": str(error)})
-            except (BrokenPipeError, ConnectionResetError):
-                pass  # Panning can cancel a tile that is no longer visible.
-            except Exception as error:
-                self.log_error("Vexcel tile error (%s)", type(error).__name__)
-                self.send_json(502, {"error": "Vexcel imagery could not load. Try again shortly."})
-            return
-        if self.path not in STATIC:
-            self.send_error(404)
-            return
-        path = PUBLIC / STATIC[self.path]
+        path = urlsplit(self.path)
         try:
-            data = path.read_bytes()
-        except FileNotFoundError:
-            self.send_error(404)
-            return
-        self.send_data(200, mimetypes.guess_type(path.name)[0] or "application/octet-stream", data)
-
-    def read_payload(self):
-        try:
-            size = int(self.headers.get("Content-Length", "0"))
-            if not 0 < size <= 4096:
-                raise ValueError
-            payload = json.loads(self.rfile.read(size))
-            if not isinstance(payload, dict) or not isinstance(payload.get("site"), str):
-                raise ValueError
-        except (ValueError, UnicodeError):
-            raise RequestError(400, "Select a valid intersection.") from None
-        site = collision_sites().get(payload["site"])
-        if site is None:
-            raise RequestError(400, "Select a valid intersection.")
-        return site, payload
-
-    def do_POST(self):
-        origin = self.headers.get("Origin")
-        if (not self.local_request() or origin != f"http://{self.headers.get('Host')}"
-                or self.headers.get_content_type() != "application/json"):
-            self.send_json(403, {"error": "Use the local Crossing Lab page."})
-            return
-        try:
-            site, payload = self.read_payload()
-            if self.path == "/api/investigate":
-                if type(payload.get("refresh", False)) is not bool:
-                    raise RequestError(400, "Refresh must be true or false.")
-                self.send_json(200, INVESTIGATIONS.start(site, payload.get("refresh", False)))
-                return
-            if self.path in {"/api/investigation", "/api/cancel", "/api/followup"}:
-                id_ = payload.get("run_id")
-                if not isinstance(id_, str) or not re.fullmatch(r"[a-f0-9]{32}", id_):
-                    raise RequestError(400, "Select a valid investigation.")
-                if self.path == "/api/investigation":
-                    result = INVESTIGATIONS.snapshot(id_, site["name"])
-                elif self.path == "/api/cancel":
-                    result = INVESTIGATIONS.cancel(id_, site["name"])
+            if path.path in STATIC:
+                file = PUBLIC / STATIC[path.path]
+                mime = "text/html" if file.suffix == ".html" else (
+                    "text/css" if file.suffix == ".css" else "text/javascript")
+                self.send(200, file.read_bytes(), mime, "public, max-age=3600")
+            elif path.path == "/api/coverage":
+                self.send_json(200, coverage())
+            elif path.path == "/api/properties":
+                qs = parse_qs(path.query)
+                raw = qs.get("bbox", [""])[0].split(",")
+                if len(raw) != 4:
+                    raise ValueError("A bounding box is required.")
+                west, south, east, north = map(float, raw)
+                if not all(math.isfinite(v) for v in (west, south, east, north)) or west >= east or south >= north:
+                    raise ValueError("Invalid bounding box.")
+                visible = [p for p in properties() if west <= p["lon"] <= east and south <= p["lat"] <= north]
+                self.send_json(200, {"properties": visible, "total": len(visible)})
+            elif path.path == "/api/search":
+                q = parse_qs(path.query).get("q", [""])[0].strip().casefold()[:100]
+                if len(q) < 2:
+                    self.send_json(200, {"results": []})
                 else:
-                    result = INVESTIGATIONS.followup(id_, site["name"], payload.get("question"))
-                self.send_json(200, result)
-                return
-            if self.path in {"/api/chat", "/api/chat-state", "/api/chat-cancel"}:
-                id_ = payload.get("chat_id")
-                if id_ is not None and (not isinstance(id_, str) or not re.fullmatch(r"[a-f0-9]{32}", id_)):
-                    raise RequestError(400, "Select a valid conversation.")
-                if self.path == "/api/chat":
-                    result = CHATS.send(site, id_, payload.get("message"))
-                elif id_ is None:
-                    raise RequestError(400, "Select a valid conversation.")
-                elif self.path == "/api/chat-state":
-                    result = CHATS.snapshot(id_, site["name"])
-                else:
-                    result = CHATS.cancel(id_, site["name"])
-                self.send_json(200, result)
-                return
-            if self.path == "/api/simulate":
-                id_, version = payload.get("chat_id"), payload.get("version")
-                if not isinstance(id_, str) or not re.fullmatch(r"[a-f0-9]{32}", id_) or type(version) is not int:
-                    raise RequestError(400, "Select a design to simulate.")
-                design = CHATS.design(id_, site["name"], version)
-                self.send_json(200, SCENARIOS.start(site, design, lambda result: CHATS.attach_simulation(id_, site["name"], version, result)))
-                return
-            if self.path in {"/api/simulate-state", "/api/simulate-cancel"}:
-                id_ = payload.get("run_id")
-                if not isinstance(id_, str) or not re.fullmatch(r"[a-f0-9]{32}", id_):
-                    raise RequestError(400, "Select a valid simulation run.")
-                run = SCENARIOS.snapshot if self.path == "/api/simulate-state" else SCENARIOS.cancel
-                self.send_json(200, run(id_, site["name"]))
-                return
-            if self.path == "/api/costar":
-                self.send_json(200, nearby_properties(site))
-                return
-            if self.path != "/api/vexcel":
-                raise RequestError(404, "Unknown feature.")
-            if not EXPENSIVE_RUNS.acquire(blocking=False):
-                raise RequestError(429, "Two requests are already running. Try again shortly.")
-            try:
-                self.send_data(200, "image/jpeg", aerial_image(site))
-            finally:
-                EXPENSIVE_RUNS.release()
-        except (RequestError, JobError, ChatError, ScenarioError) as error:
-            self.send_json(error.status, {"error": str(error)})
-        except FileNotFoundError:
-            self.send_json(503, {"error": "Run python3 scripts/import_la.py to load LA collision totals."})
-        except Exception as error:
-            # Provider exceptions can include request details. Log only the class.
-            self.log_error("Integration error (%s)", type(error).__name__)
-            self.send_json(502, {"error": "This integration could not complete the request."})
+                    results = [p for p in properties() if q in (p["name"] + " " + p["address"]).casefold()]
+                    self.send_json(200, {"results": results[:8]})
+            elif re.fullmatch(r"/api/tiles/\d{1,2}/\d{1,7}/\d{1,7}\.jpg", path.path):
+                _, _, _, z, x, filename = path.path.split("/")
+                z, x, y = int(z), int(x), int(filename[:-4])
+                if not (10 <= z <= 20 and 0 <= x < 2**z and 0 <= y < 2**z):
+                    raise ValueError("Invalid tile coordinates.")
+                self.send(200, tile(z, x, y), "image/jpeg")
+            else:
+                self.send_json(404, {"error": "Not found."})
+        except (ValueError, OSError, KeyError, json.JSONDecodeError) as error:
+            self.send_json(503, {"error": str(error)})
 
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
-    with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
-        print(f"Crossing Lab is listening at http://127.0.0.1:{port}", flush=True)
-        server.serve_forever()
+    print(f"Sustainability Map: http://127.0.0.1:{port}")
+    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
