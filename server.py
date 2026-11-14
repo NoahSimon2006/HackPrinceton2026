@@ -13,12 +13,15 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
+from hydrology import RAINFALL, WATERSHEDS, rainfall_at, rainfall_contours, watershed_at
+
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
 LA_BOUNDS = (-118.67, 33.70, -118.10, 34.35)  # west, south, east, north
 LAYERS = "urban,urban-r,wide-area,urban-g"
 VEXCEL = "https://api.vexcelgroup.com/v2"
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
+          "/planner.js": "planner.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
           "/vendor/leaflet.css": "vendor/leaflet.css"}
 
@@ -97,13 +100,14 @@ def tile(z, x, y):
 
 
 @lru_cache(maxsize=1)
-def properties():
+def property_catalog():
     directory = os.getenv("COSTAR_KIT_DIR", "").strip()
     if not directory:
         raise ValueError("CoStar kit directory is not configured.")
     root = Path(directory).expanduser()
     types = json.loads((root / "schemas/enums.json").read_text())["PropertyType"]
     items = []
+    details = {}
     with (root / "data/commercial-property.jsonl").open(encoding="utf-8") as file:
         for line in file:
             record = json.loads(line)
@@ -115,14 +119,39 @@ def properties():
             if not (LA_BOUNDS[0] <= lon <= LA_BOUNDS[2]
                     and LA_BOUNDS[1] <= lat <= LA_BOUNDS[3]):
                 continue
-            address_text = " ".join(str(address.get(key) or "").strip() for key in
-                                    ("streetNumber", "streetName", "streetType"))
-            address_text = " ".join(address_text.split())
-            items.append({"id": str(record.get("id", "")), "lat": lat, "lon": lon,
-                          "name": str(record.get("buildingName") or address_text or "Unnamed property"),
-                          "address": address_text,
-                          "type": types.get(str(record.get("propertyType")), "Unknown")})
-    return items
+            address_text = " ".join(" ".join(str(address.get(key) or "") for key in
+                                    ("streetNumber", "streetDirection", "streetName", "streetType")).split())
+            item = {
+                "id": str(record.get("id", "")), "lat": lat, "lon": lon,
+                "name": str(record.get("buildingName") or address_text or "Unnamed property").strip(),
+                "address": address_text,
+                "type": types.get(str(record.get("propertyType")), "Unknown"),
+            }
+            items.append(item)
+            apartment = record.get("propertyApartment") or {}
+            vacancy = apartment.get("vacancyPercent")
+            parking = [entry["totalSpaces"] for entry in (record.get("parking") or [])
+                       if entry.get("totalSpaces") is not None]
+            subtype = record.get("propertyIndustrial") or record.get("propertyRetail") or record.get("propertyFlex") or {}
+            docks = [subtype[key] for key in ("numExternalLoadingDocks", "numInternalLoadingDocks")
+                     if subtype.get(key) is not None]
+            details[item["id"]] = {
+                "units": apartment.get("totalNumUnits"),
+                "vacancyPercent": vacancy if isinstance(vacancy, (int, float)) and 0 <= vacancy <= 100 else None,
+                "reportedParkingSpaces": sum(parking) if parking else None,
+                "buildingAreaSqFt": record.get("grossBuildingAreaSquareFeet"),
+                "reportedLoadingDocks": sum(docks) if docks else None,
+            }
+    return items, details
+
+
+def site_coordinates(query):
+    lat = float(query.get("lat", [""])[0])
+    lon = float(query.get("lon", [""])[0])
+    west, south, east, north = LA_BOUNDS
+    if not (west <= lon <= east and south <= lat <= north):
+        raise ValueError("Select a site within the Los Angeles map.")
+    return lon, lat
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -156,15 +185,39 @@ class Handler(BaseHTTPRequestHandler):
                 west, south, east, north = map(float, raw)
                 if not all(math.isfinite(v) for v in (west, south, east, north)) or west >= east or south >= north:
                     raise ValueError("Invalid bounding box.")
-                visible = [p for p in properties() if west <= p["lon"] <= east and south <= p["lat"] <= north]
+                visible = [p for p in property_catalog()[0] if west <= p["lon"] <= east and south <= p["lat"] <= north]
                 self.send_json(200, {"properties": visible, "total": len(visible)})
             elif path.path == "/api/search":
                 q = parse_qs(path.query).get("q", [""])[0].strip().casefold()[:100]
                 if len(q) < 2:
                     self.send_json(200, {"results": []})
                 else:
-                    results = [p for p in properties() if q in (p["name"] + " " + p["address"]).casefold()]
+                    words = q.split()
+                    results = [p for p in property_catalog()[0]
+                               if all(word in (p["name"] + " " + p["address"]).casefold() for word in words)]
                     self.send_json(200, {"results": results[:8]})
+            elif path.path == "/api/property-detail":
+                property_id = parse_qs(path.query).get("id", [""])[0]
+                detail = property_catalog()[1].get(property_id)
+                if detail is None:
+                    self.send_json(404, {"error": "Property not found."})
+                else:
+                    self.send_json(200, detail)
+            elif path.path in ("/api/rainfall", "/api/watershed"):
+                try:
+                    lon, lat = site_coordinates(parse_qs(path.query))
+                except ValueError:
+                    self.send_json(400, {"error": "Select a valid location within the Los Angeles map."})
+                    return
+                try:
+                    if path.path == "/api/rainfall":
+                        self.send_json(200, {"estimate": rainfall_at(lon, lat, rainfall_contours(LA_BOUNDS)),
+                                             "source": RAINFALL})
+                    else:
+                        self.send_json(200, {"type": "FeatureCollection", "features": watershed_at(lon, lat),
+                                             "source": WATERSHEDS})
+                except (OSError, ValueError, KeyError, TypeError):
+                    self.send_json(503, {"error": "LA County hydrology data is temporarily unavailable."})
             elif re.fullmatch(r"/api/tiles/\d{1,2}/\d{1,7}/\d{1,7}\.jpg", path.path):
                 _, _, _, z, x, filename = path.path.split("/")
                 z, x, y = int(z), int(x), int(filename[:-4])
