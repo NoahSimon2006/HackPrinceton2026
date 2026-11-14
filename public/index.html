@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sustainability Map</title>
+  <link rel="stylesheet" href="/vendor/leaflet.css">
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/vendor/leaflet.js"></script>
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">◈</span><div><strong>Sustainability Map</strong><small>Los Angeles · map workspace</small></div></div>
+      <div class="sidebar-body">
+        <div class="section-label">EXPLORE</div>
+        <h1>See the city from above.</h1>
+        <p class="intro">Explore Vexcel aerial imagery. Additional sustainability layers will be added step by step.</p>
+        <div class="search-block">
+          <label for="search">Find a CoStar property</label>
+          <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" autocomplete="off" placeholder="Property name or address"></div>
+          <div id="results" class="results" role="listbox" aria-label="Property search results" hidden></div>
+        </div>
+        <div class="divider"></div>
+        <div class="section-label">MAP LAYERS</div>
+        <div class="layer base"><span class="layer-icon">▧</span><div><strong>Vexcel aerial</strong><small>Base imagery</small></div><span class="active-dot" aria-label="On"></span></div>
+        <label class="layer toggle-row" for="labels"><span class="layer-icon">⌖</span><span class="layer-copy"><strong>Place labels</strong><small>Esri reference layer</small></span><input id="labels" type="checkbox" role="switch"><span class="switch"></span></label>
+        <label class="layer toggle-row" for="properties"><span class="layer-icon">●</span><span class="layer-copy"><strong>CoStar properties</strong><small>Visible from neighborhood zoom</small></span><input id="properties" type="checkbox" role="switch"><span class="switch"></span></label>
+        <div id="layer-note" class="layer-note" hidden>Zoom in to level 15 to see property points.</div>
+        <div class="divider"></div>
+        <div class="section-label">MAP STATUS</div>
+        <div class="status-card"><span id="status-dot" class="status-dot"></span><div><strong id="status-title">Checking coverage</strong><p id="status-detail">Connecting to Vexcel…</p></div></div>
+        <div class="map-meta"><div><span>Center</span><strong id="coordinates">—</strong></div><div><span>Zoom</span><strong id="zoom">—</strong></div></div>
+      </div>
+      <div class="sidebar-footer"><span>V2 map foundation</span><span>Local workspace</span></div>
+    </aside>
+    <main class="map-area" aria-label="Interactive Los Angeles aerial map">
+      <div class="map-heading"><div><span class="eyebrow">LOS ANGELES, CALIFORNIA</span><h2>Aerial explorer</h2></div><span class="map-badge">VEXCEL IMAGERY</span></div>
+      <div id="map" role="application" aria-label="Pan and zoom aerial map"></div>
+      <div class="map-bottom"><span>Drag to pan · scroll to zoom</span><button id="reset" type="button">↗ &nbsp; Back to Los Angeles</button></div>
+    </main>
+  </div>
+</body>
+</html>
