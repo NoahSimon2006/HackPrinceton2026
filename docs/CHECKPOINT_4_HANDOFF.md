@@ -103,10 +103,12 @@ Daily volume by basis:
 
 | | Baseline | EB curb extension (1 of 3 lanes, 60 m) | WB bus lane (1 of 3 lanes, 80 m) |
 |---|---|---|---|
+| CO₂ per completed vehicle | 97.3 g | 91.8 g (−5.7%) | 103.4 g |
+| CO₂ per hour | 367.3 kg | 388.9 kg | 350.3 kg |
 | Completion | 67% | 75% | 60% (ineligible: strands traffic) |
 | Mean delay | 873 s | 935 s | 1,181 s |
 
-No layout was recommended. The baseline is oversaturated because OSM gives the northbound Main St approach 2 lanes for 3,044 vehicles an hour. The Vexcel aerial (2025) suggests more lanes plus a bike lane, but the approach is in shadow. **The lane count is unverified.** Do not change it without evidence. The plan allows an explicit lane override labeled user-provided if the planner confirms it.
+**The EB curb extension is recommended** on the CO₂-per-completed-vehicle ranking. Two identical runs reproduced every number exactly. Both layouts were published through `from_traffic_comparison` and validated, with MultiPolygon footprints (script: `private/run_layouts.py`, git-ignored). The baseline is oversaturated because OSM gives the northbound Main St approach 2 lanes for 3,044 vehicles an hour. The Vexcel aerial (2025) suggests more lanes plus a bike lane, but the approach is in shadow. **The lane count is unverified.** Do not change it without evidence. The plan allows an explicit lane override labeled user-provided if the planner confirms it.
 
 Hill & 1st (2016) was also simulated: 75% completion before the study area was isolated. It has not been re-run since.
 
