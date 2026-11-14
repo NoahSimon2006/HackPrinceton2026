@@ -252,6 +252,7 @@
     const question = record.brief.trim();
     if (!question) return;
     const revision = record.revision ?? 0;
+    const proposalRevision = (record.proposalRevision ?? 0) + 1;
     const markings = record.features.map(({ kind, points }) => {
       const coordinates = points.map(({ lat, lng }) => [lng, lat]);
       return { kind, geometry: kind === "crossing" ? { type: "LineString", coordinates }
@@ -268,6 +269,7 @@
       rainfallScenario = { inches, source: record.source.trim() };
     }
     record.evidencePending = true;
+    record.proposalRevision = proposalRevision;
     record.evidenceError = "";
     // Keep retrieved evidence visible while the new run is in flight.
     record.report = null;
@@ -279,7 +281,9 @@
     showEvidence();
     try {
       const result = await streamSiteAnalysis({ lat:selected.center.lat, lon:selected.center.lng,
-        propertyId:selected.propertyId, workflow:mode, question, markings, rainfallScenario, discoveryReference:record.discovery?.reference ?? null }, {
+        propertyId:selected.propertyId, workflow:mode, question, markings, rainfallScenario,
+        siteId:selected.key, inputRevision:revision, proposalRevision,
+        discoveryReference:record.discovery?.reference ?? null }, {
         signal:controller.signal,
         onEvent(event) {
           if (activeAnalysis !== run || controller.signal.aborted) return;
@@ -302,6 +306,12 @@
       record.sourceStatus = result.sourceStatus;
       record.evidenceError = result.analysisError ?? "";
       if (result.hydrology) applyHydrology(selected.water, result.hydrology);
+      // A changed site or marking must never publish geometry from an older run.
+      if (site === selected && workflow === mode && (record.revision ?? 0) === revision &&
+          (result.proposal || result.comparison)) {
+        map.fire("plannerresult", {siteId:selected.key, workflow:mode, inputRevision:revision,
+          revision:proposalRevision, proposal:result.proposal ?? null, comparison:result.comparison ?? null});
+      }
     } catch (error) {
       if (activeAnalysis !== run) return;
       record.evidenceError = error.name === "AbortError" ? "Analysis canceled. Retrieved evidence is preserved." : error.message;
@@ -528,6 +538,7 @@
   }
 
   function showWorkflow() {
+    $("traffic-design-guide").hidden = workflow !== "street";
     $("water-tools").hidden = workflow !== "water";
     renderDiscoveryContext(site?.[workflow]?.discovery);
     $("run-site-analysis").disabled = !site || Boolean(site[workflow].evidencePending);
@@ -648,7 +659,9 @@
     site[workflow].discovery = selected;
     site[workflow].brief = workflow === "water"
       ? "Investigate the selected discovery evidence. Verify drainage connections, surface conditions and access before recommending a treatment site. Do not infer flood depth or capture benefits."
-      : "Investigate the selected historical count with current site evidence. Identify the measurements needed before evaluating a physical redesign. Do not extrapolate current demand or claim emissions benefits.";
+      : selected.reference?.layer === "turning"
+        ? "Compare at least two physical lane-reallocation layouts using this sourced historical turning count and measured site evidence. Preserve access, disclose missing inputs and simulation assumptions, and recommend a layout only if the comparison supports it. Do not present historical demand as current traffic."
+        : "Investigate the selected historical count with current site evidence. Identify the measurements needed before evaluating a physical redesign. Do not extrapolate current demand or claim emissions benefits.";
     inputsChanged(site[workflow]);
     $("planning-brief").value = site[workflow].brief;
     renderDiscoveryContext(selected);

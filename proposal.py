@@ -61,6 +61,8 @@ class Metric(StrictModel):
     def missing_is_not_zero(self):
         if self.status == "unassessed" and (self.baseline is not None or self.proposed is not None):
             raise ValueError("Unassessed metrics must have null values.")
+        if self.status == "calculated" and self.proposed is None:
+            raise ValueError("A calculated metric needs a proposed value.")
         return self
 
 
@@ -151,12 +153,25 @@ def fixture(lon: float, lat: float, workflow: str, site_id: str, revision: int =
 
 METRICS = [  # (id, unit, result key, method)
     ("co2_per_vehicle", "g CO₂ / completed vehicle", "co2_g_per_completed_vehicle",
-     "SUMO emissions over the measured hour, scaled to CARB 2026 LA fleet rate, divided by vehicles that completed their trip."),
-    ("co2_per_hour", "kg CO₂ / hour", "co2_kg_per_hour", "SUMO emissions over the measured hour, scaled to CARB 2026 LA fleet rate."),
-    ("mean_delay", "s / vehicle", "mean_delay_s", "Mean time loss plus waiting-to-enter time, trips departing in the measured hour."),
-    ("completion", "share of counted demand", "completion_share", "Vehicles completing trips in the measured hour ÷ counted demand."),
-    ("unable_to_enter", "share of vehicles", "unable_to_enter_share", "Vehicles never inserted ÷ vehicles generated, whole run."),
+     "Emissions of the offered peak-hour cohort through 15-minute clearance divided by completed trips from that cohort; includes unfinished emissions, not an individual-trip average."),
+    ("co2_per_hour", "kg CO₂ / demand hour", "co2_kg_per_hour", "Emissions of one hour of offered demand, including unfinished trips through 15-minute clearance. Not an instantaneous rate. Uses the calibration stated in the comparison."),
+    ("nox_per_hour", "g NOₓ / demand hour", "nox_g_per_hour", "NOₓ from the same offered cohort and clearance window as CO₂; calibration is stated in the comparison."),
+    ("mean_delay", "s / offered vehicle", "mean_delay_s", "Time loss plus entry waiting for every offered peak-hour trip, including unentered waiting and unfinished-trip lower bounds through clearance."),
+    ("completion", "share of offered demand", "completion_share", "Measured-hour scheduled trips completed by the end of 15-minute clearance ÷ offered trips."),
+    ("unable_to_enter", "share of offered demand", "unable_to_enter_share", "Measured-hour scheduled trips still unable to enter at clearance end ÷ offered trips."),
 ]
+
+
+def comparison_fingerprint(comparison: dict, *, site_id: str, revision: int, input_revision: int):
+    """Bind the local publication to all geometry, sources, inputs and results.
+
+    Identity metadata is excluded from the comparison payload so the same hash
+    can be attached before or after the proposal without changing its meaning.
+    """
+    metadata = {"site_id", "workflow", "revision", "input_revision", "input_hash"}
+    payload = {k: v for k, v in comparison.items() if k not in metadata}
+    identity = dict(site_id=site_id, revision=revision, input_revision=input_revision, comparison=payload)
+    return sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
 def _maximum(values: dict):
@@ -174,19 +189,22 @@ def from_traffic_comparison(comparison: dict, layout_name: str, *, site_id: str,
     base, proposed = results["baseline"], results[layout_name]
     checks = comparison["checks"][layout_name]
     verdict = comparison["ranking"]["verdicts"][layout_name]
-    identity = dict(site_id=site_id, revision=revision, input_revision=input_revision, layout=params,
-                    sheet=comparison["sheet_url"], period=comparison["period"], seeds=base["seeds"],
-                    keep_clear=checks.get("keep_clear_conflict"))
-    fingerprint = sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    fingerprint = comparison_fingerprint(comparison, site_id=site_id, revision=revision, input_revision=input_revision)
     common = dict(revision=revision, input_hash=fingerprint)
-    metrics = [Metric(id=i, unit=u, baseline=base[k], proposed=proposed[k], status="calculated", method=m, **common)
-               for i, u, k, m in METRICS if base.get(k) is not None and proposed.get(k) is not None]
-    metrics.append(Metric(id="max_queue", unit="m", baseline=_maximum(base["max_queue_m"]), proposed=_maximum(proposed["max_queue_m"]),
-                          status="calculated", method="Longest queue on any counted approach lane, max over seeds.", **common))
+    metrics = []
+    for i, u, k, m in METRICS:
+        complete = base.get(k) is not None and proposed.get(k) is not None
+        metrics.append(Metric(id=i, unit=u, baseline=base[k] if complete else None,
+                              proposed=proposed[k] if complete else None,
+                              status="calculated" if complete else "unassessed", method=m, **common))
+    queue_before, queue_after = _maximum(base["max_queue_m"]), _maximum(proposed["max_queue_m"])
+    queues = None not in (queue_before, queue_after)
+    metrics.append(Metric(id="max_queue", unit="m", baseline=queue_before if queues else None, proposed=queue_after if queues else None,
+                          status="calculated" if queues else "unassessed", method="Maximum over time and paired seeds of the simultaneous sum of longest-lane queues along a fixed approach chain; queues beyond the study boundary are not measured.", **common))
     noise_before, noise_after = _maximum(base["max_noise_db"]), _maximum(proposed["max_noise_db"])
     metrics.append(Metric(id="roadway_noise", unit="dB(A)", baseline=noise_before, proposed=noise_after,
                           status="calculated" if None not in (noise_before, noise_after) else "unassessed",
-                          method="SUMO Harmonoise source level on approach edges; not building exposure.", **common)
+                          method="Spatial maximum of hourly mean SUMO Harmonoise source levels on approach edges across paired seeds; not a temporal noise peak or building exposure.", **common)
                    if None not in (noise_before, noise_after) else
                    Metric(id="roadway_noise", unit="dB(A)", baseline=None, proposed=None, status="unassessed",
                           method="Noise output unavailable.", **common))
@@ -199,8 +217,8 @@ def from_traffic_comparison(comparison: dict, layout_name: str, *, site_id: str,
         evidence.append(EvidenceReference(id=ids.get("outlines", "vexcel-outlines"), source="Vexcel parcel and building outlines", classification="observed"))
     if checks["access_conflicts"] is not None:
         evidence.append(EvidenceReference(id=ids.get("property", "costar-frontage"), source="CoStar frontage and curb cuts", classification="reported"))
-    overlap = (Finding(status="unassessed", text="Vexcel parcel and building outlines were not available for this run.", evidence_ids=[])
-               if checks["parcel_overlap_m2"] is None else
+    overlap = (Finding(status="unassessed", text="Complete Vexcel parcel and building checks were not available for this run; an unavailable check is not zero overlap.", evidence_ids=[])
+               if checks["parcel_overlap_m2"] is None or checks["building_overlap_m2"] is None else
                Finding(status="checked", text=f"Footprint overlaps mapped parcels by {checks['parcel_overlap_m2']} m² and buildings by {checks['building_overlap_m2']} m².",
                        evidence_ids=[evidence[2].id]))
     access = (Finding(status="unassessed", text="CoStar frontage and curb-cut data were not available for this run.", evidence_ids=[])
@@ -218,7 +236,7 @@ def from_traffic_comparison(comparison: dict, layout_name: str, *, site_id: str,
         " Not recommended: " + "; ".join(verdict["ineligible_reasons"]) + ".")
     return Proposal(site_id=site_id, workflow="street", revision=revision, input_revision=input_revision, input_hash=fingerprint,
                     development_fixture=False, evidence=evidence,
-                    design=Design(kind="lane_reallocation", length_m=params["length_m"], width_m=3.2 * params["lanes_removed"],
+                    design=Design(kind="lane_reallocation", length_m=params["length_m"], width_m=checks["footprint_m2"] / params["length_m"],
                                   approach=params["approach"], lanes_removed=params["lanes_removed"], new_use=params["new_use"]),
                     geometry=geometry, existing_geometry_ids=[], proposed_geometry_ids=[geometry[0].id], metrics=metrics,
                     assumptions=list(comparison["assumptions"]), access=access, overlap=overlap, recommendation=text)

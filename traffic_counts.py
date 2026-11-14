@@ -199,7 +199,13 @@ def find_sheet(primary: str, cross: str, count_date: str, kind: str, cache: Path
     errors = []
     for name in sheet_names(primary, cross, count_date, kind):
         try:
-            return load_sheet(name, cache)
+            sheet = load_sheet(name, cache)
+            _check(sheet["date"] == count_date[:10], "Count date does not match the source record.")
+            if kind == "MAN":
+                expected = {street_token(primary), street_token(cross)}
+                actual = {street_token(sheet["north_south"]), street_token(sheet["east_west"])}
+                _check(actual == expected, "Counted streets do not match the source record.")
+            return sheet
         except SheetError as error:
             errors.append(f"{name}: {error}")
     raise SheetError("; ".join(errors))

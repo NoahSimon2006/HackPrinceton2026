@@ -8,7 +8,7 @@ import re
 import time
 from threading import BoundedSemaphore, Lock
 from agent_activity import Activity
-from discovery import load_discovery, discovery_context
+from discovery import load_discovery, discovery_context, traffic_context
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -66,7 +66,8 @@ def vexcel_request(path, params, accept, limit, *, post=False, timeout=18):
         if error.code in (401, 403):
             raise ValueError("Vexcel rejected the key or imagery access.") from None
         if error.code == 404:
-            raise ValueError("No Vexcel imagery is available here.") from None
+            raise ValueError("No Vexcel property outlines are available at this point." if path == "/property/extract"
+                             else "No Vexcel imagery is available here.") from None
         raise ValueError(f"Vexcel request failed ({error.code}).") from None
     except (URLError, TimeoutError):
         raise ValueError("Vexcel could not be reached. Check the connection.") from None
@@ -187,6 +188,16 @@ def site_coordinates(query):
     return lon, lat
 
 
+def analysis_identity(data):
+    site_id = data.get("siteId")
+    revision, input_revision = data.get("proposalRevision"), data.get("inputRevision")
+    if (not isinstance(site_id, str) or not site_id.strip() or len(site_id) > 160
+            or type(revision) is not int or not 1 <= revision <= 100
+            or type(input_revision) is not int or not 0 <= input_revision <= 10000):
+        raise ValueError("Invalid site revision. Reload the map and select the site again.")
+    return {"site_id": site_id, "revision": revision, "input_revision": input_revision}
+
+
 class Handler(BaseHTTPRequestHandler):
     def send(self, status, content, mime, cache="no-store"):
         self.send_response(status)
@@ -228,6 +239,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("Choose a workflow and enter a question up to 1,500 characters.")
             markings, scenario = validate_inputs(data.get("markings", []), data.get("rainfallScenario"), workflow, lon, lat)
             selected_discovery = discovery_context(workflow, data.get("discoveryReference"), lon, lat)
+            traffic = traffic_context(data.get("discoveryReference"), lon, lat) if workflow == "street" else None
+            identity = analysis_identity(data)
             property_id = data.get("propertyId")
             if property_id is not None and (not isinstance(property_id, str) or len(property_id) > 80):
                 raise ValueError("Invalid property reference.")
@@ -273,7 +286,7 @@ class Handler(BaseHTTPRequestHandler):
         def write_event(event):
             self.wfile.write(json.dumps(event, separators=(",", ":")).encode() + b"\n")
             self.wfile.flush()
-        activity = Activity(write_event if streaming else None)
+        activity = Activity(write_event if streaming else None, seconds=420 if traffic else 180)
         with ANALYSIS_LOCK:
             ACTIVE_ANALYSES[activity.id] = activity
         try:
@@ -290,6 +303,8 @@ class Handler(BaseHTTPRequestHandler):
                 lambda group: imagery_evidence(vexcel_request, LAYERS, lon, lat, workflow, group),
                 property_context, hydrology_context,
                 lon=lon, lat=lat, scenario=scenario, activity=activity, discovery=selected_discovery,
+                traffic_context=traffic, analysis_identity=identity, allow_generated_timing=True,
+                ranking_policy="strict-v1",
             )
             if streaming:
                 write_event({"type":"result", "run_id":activity.id, "result":result})

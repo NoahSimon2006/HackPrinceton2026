@@ -23,9 +23,9 @@ function harness(mode = 'water') {
     layers.push(result);
     return result;
   };
-  const map = { handlers: {}, createPane() {}, getPane: () => ({ style: {} }),
+  const map = { handlers: {}, events: [], createPane() {}, getPane: () => ({ style: {} }),
     on(name, handler) { this.handlers[name] = handler; },
-    fire(name, event) { this.handlers[name]?.(event); }, setView() {}, closePopup() {}, getZoom: () => 17 };
+    fire(name, event) { this.events.push({name,event}); this.handlers[name]?.(event); }, setView() {}, closePopup() {}, getZoom: () => 17 };
   const requests = [];
   const json = (url, options = {}) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }));
   vm.runInNewContext(source, { $, map, json, planningMode: mode, coverage: null,
@@ -123,12 +123,17 @@ const flush = () => new Promise(setImmediate);
   const body = JSON.parse(h.requests[2].options.body);
   assert.deepEqual(body.rainfallScenario, { inches: 1.5, source: 'Sensitivity scenario' });
   assert.deepEqual(body.markings, []);
+  assert.equal(body.siteId, '34.050000,-118.250000');
+  assert.equal(body.inputRevision, 2);
+  assert.equal(body.proposalRevision, 1);
   h.$('rain-depth').events.input({ target: { value: '2' } });
   h.requests[2].resolve({ report: { findings: [], recommendations: [], questions: ['Confirm drainage?'] },
-    evidence: { outlines: [], detections: [], frontages: [], search: [], unavailable: [] }, facts: [], sourceStatus: {} });
+    evidence: { outlines: [], detections: [], frontages: [], search: [], unavailable: [] }, facts: [], sourceStatus: {},
+    proposal:{revision:1}, comparison:{revision:1} });
   await pending;
   assert.equal(h.$('analysis-stale').hidden, false);
   assert.equal(h.$('run-site-analysis').disabled, false);
+  assert.equal(h.map.events.filter(e=>e.name==='plannerresult').length, 0, 'changed inputs must not publish a stale proposal');
 }
 console.log('PASS: hydrology, source failures/retry, manual inputs, workspace visibility, site races, caching, scenario submission and stale analysis');
 // Cancel/supersede a run: late activity and results cannot repaint another site.
@@ -178,3 +183,29 @@ console.log('PASS: canceled and superseded activity cannot repaint another site'
   h.requests[0].resolve({report:null,facts:[]});await pending;
 }
 console.log('PASS: discovery seeds a dated site brief and submits a reference without an automatic agent call');
+
+// Real turning counts request physical alternatives; result identity follows the
+// exact selected site and input revision, including repeated analyses.
+{
+  const h=harness('street');
+  const selection={workflow:'street',reference:{version:'v1',layer:'turning',feature:'turning-one'},
+    source:{label:'LADOT',url:'https://example.org/source',retrieved_at:'2026-11-14'},
+    layer:{unit:'vehicles reported',period:'Historical',method:'Verified count',limitations:'Not current demand'},
+    feature:{properties:{label:'Counted intersection',center:[-118.25,34.05],value:4000,period:'2011-11-08'}}};
+  h.map.fire('discoveryselect',selection);
+  assert.match(h.$('planning-brief').value,/at least two physical/);
+  const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  const body=JSON.parse(h.requests[0].options.body);
+  assert.equal(body.siteId,'34.050000,-118.250000');
+  assert.equal(body.inputRevision,1);assert.equal(body.proposalRevision,1);
+  h.requests[0].resolve({report:null,facts:[],proposal:{revision:1},comparison:{revision:1}});await pending;
+  const published=h.map.events.filter(e=>e.name==='plannerresult');
+  assert.equal(published.length,1);assert.equal(published[0].event.siteId,body.siteId);
+  assert.equal(published[0].event.workflow,'street');assert.equal(published[0].event.inputRevision,1);
+  assert.equal(published[0].event.revision,1);
+  const repeated=h.$('site-analysis').events.submit({preventDefault(){}});
+  assert.equal(JSON.parse(h.requests[1].options.body).proposalRevision,2);
+  h.select(34.06,-118.26);h.requests[1].resolve({report:null,facts:[],proposal:{revision:2},comparison:{revision:2}});await repeated;
+  assert.equal(h.map.events.filter(e=>e.name==='plannerresult').length,1,'superseded site analysis must not emit a proposal');
+}
+console.log('PASS: turning-count brief, proposal identity, monotonic revisions and suppressed stale/superseded publication');

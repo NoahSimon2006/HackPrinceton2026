@@ -23,6 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from site_measurements import (fact, source, hydrology_facts, measure_candidates, measure_markings,
                                measure_outlines, property_facts)
+from street_design import Layout
+from traffic_analysis import TrafficAnalysis
 
 INSTRUCTIONS = """You assist a planner screening one selected Los Angeles site.
 Before completing a review, call find_parcel_and_buildings, detect_site_features and
@@ -69,7 +71,7 @@ def numeric_tokens(text):
             re.findall(r"(?<![\w.])\d+(?:,\d{3})*(?:\.\d+)?(?!\w)", text)}
 
 
-def review_schema(facts, attempted, required):
+def review_schema(facts, attempted, required, recommendation_check=None):
     """Bind output validation to facts actually returned during this request."""
     class SiteReview(BaseModel):
         model_config = ConfigDict(extra="forbid")
@@ -91,16 +93,27 @@ def review_schema(facts, attempted, required):
                     item = facts[identifier]
                     supported |= numeric_tokens(" ".join(str(item[key]) for key in ("label", "display", "method", "note")))
                     supported |= numeric_tokens(item["source"].get("observed_at") or "")
-                if numeric_tokens(statement.text) - supported:
-                    raise ValueError("A statement contains numbers not present in its cited facts. Use exact display values, not new calculations or design dimensions.")
+                unsupported = numeric_tokens(statement.text) - supported
+                if unsupported:
+                    tokens = ", ".join(format(value, "f") for value in sorted(unsupported))
+                    displays = "; ".join(f"{identifier}: {facts[identifier]['display']}"
+                                         for identifier in statement.fact_ids)
+                    raise ValueError(f"A statement contains numbers not present in its cited facts: {tokens}. "
+                                     f"Cited fact display values: {displays}. "
+                                     "Remove unsupported numbers or copy the exact supported display/date/time wording. "
+                                     "Do not add totals, percentages, ages, rounded values, remaining lane counts or proposed dimensions. "
+                                     "Do not number prose statements.")
             if any(not question.strip() or len(question) > 600 for question in self.questions):
                 raise ValueError("Keep field-check questions nonempty and under 600 characters.")
+            if recommendation_check:
+                recommendation_check(self.recommendations)
             return self
     return SiteReview
 
 
 def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, fetch_property, fetch_hydrology,
-                 *, lon, lat, scenario=None, activity=None, discovery=None):
+                 *, lon, lat, scenario=None, activity=None, discovery=None, traffic_context=None,
+                 analysis_identity=None, allow_generated_timing=False, ranking_policy=None):
     activity = activity or Activity()
     evidence = {"outlines": [], "detections": [], "search": [], "frontages": [], "unavailable": []}
     facts = {item["id"]: item for item in measure_markings(markings, scenario)}
@@ -113,6 +126,13 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     warnings, statuses, cached = [], {}, {}
     attempted = set()
     hydrology = None
+    traffic = TrafficAnalysis(traffic_context, analysis_identity, activity,
+                              allow_generated_timing=allow_generated_timing, policy=ranking_policy) if workflow == "street" else None
+    instructions = INSTRUCTIONS
+    if traffic:
+        instructions = instructions.replace(
+            "No runoff, capture,\ndelay, emissions reduction or construction feasibility has been calculated in this pass.\nDo not imply a design was generated.",
+            "No runoff or capture is calculated in Traffic. Traffic performance may only be described after the local evaluate_designs tool returns sourced modeled metrics. Generated signal timing and all other simulation assumptions must be identified; these are historical-demand modeled comparisons, not measured current performance. No construction feasibility is established.")
     lock = RLock()
     source_locks = {name: RLock() for name in ("outlines", "detections", "search", "property", "hydrology", "traffic")}
     providers = {"outlines": "Vexcel parcel extraction", "detections": "Vexcel detection", "search": "Vexcel imagery search",
@@ -189,10 +209,11 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                        ]), store)
 
     def read_traffic_inputs() -> dict:
-        """Check traffic-input availability; no assumed-demand artifact is treated as measured traffic."""
-        return collect("traffic", lambda: None,
-            lambda _: ([availability("traffic", "Verified turning demand, actual signal timing and current queue observations are not connected for this site. The archived assumed-demand simulation is excluded. Traffic benefits remain unassessed.")], []),
-            lambda _: None)
+        """Read this selected site's verified historical turning counts and mapped approach dimensions; missing inputs stay unavailable."""
+        result = collect("traffic", lambda: traffic.prepare(), lambda data: data, lambda _: None)
+        if traffic.ready:
+            required.add("comparison")
+        return result
 
     site_tools = [find_parcel_and_buildings, detect_site_features, read_costar_property, search_aerial_imagery]
     domain_tools = [read_rainfall_and_watershed] if workflow == "water" else [read_traffic_inputs]
@@ -200,7 +221,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     summaries = {}
     delegated = False
     # Each run owns its virtual files; no host filesystem or raw provider records.
-    context = {"workflow": workflow, "planner_facts": list(facts.values()), "data_policy": "Real sourced evidence only; no assumed traffic or invented outcomes."}
+    context = {"workflow": workflow, "planner_facts": list(facts.values()), "data_policy": "Real sourced evidence only; no invented demand or outcomes. Historical-count simulation with explicitly labeled generated timing is authorized." if traffic and allow_generated_timing else "Real sourced evidence only; no assumed traffic or invented outcomes."}
     brief = json.dumps(context)
     messages = [{"role": "user", "content": f"Planning context: {brief}\nQuestion: {question}"}]
     files = {"/project/brief.json": create_file_data(brief),
@@ -212,23 +233,66 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
 
     models = {name: model() for name in ("lead", "site-evidence", "domain-analysis")}
 
+    def check_recommendations(recommendations):
+        if not traffic or not traffic.comparison:
+            return
+        winner = traffic.comparison["ranking"].get("recommended")
+        if not winner and recommendations:
+            raise ValueError("No tested layout is recommended. Leave recommendations empty and put evidence-gathering next steps in questions.")
+        if winner and any(f"traffic-{winner}-verdict" not in statement.fact_ids for statement in recommendations):
+            raise ValueError("Recommend only the selected eligible layout and cite its traffic verdict fact. Put other next steps in questions.")
+
     def build_agent(name, tools, instruction, needed):
         allowed = {tool.__name__ for tool in tools} | {"read_file", "ls"}
+        model_calls = 0
 
         @wrap_model_call
         def scoped(request, handler):
+            nonlocal model_calls
             activity.check()
             for message in request.messages[-2:]:
+                if not isinstance(message, ToolMessage):
+                    continue
                 if isinstance(message, ToolMessage) and message.name == "SiteReview" and str(message.content).startswith("Error"):
                     content = str(message.content)
                     category = next((label for needle,label in [("Read the required", "required sources"), ("Unknown fact IDs", "citation IDs"), ("numbers not present", "unsupported numbers")] if needle in content), "structured format")
                     activity.event(name, "validation", "retry", f"Checking {category} before publishing the review.")
+                elif message.name == "evaluate_designs" and getattr(message, "status", None) == "error":
+                    activity.event(name, "validation", "retry", "Correcting bounded design parameters before simulation.")
+                else:
+                    try:
+                        payload = json.loads(message.content)
+                    except (ValueError, TypeError):
+                        payload = None
+                    if isinstance(payload, dict) and payload.get("status") == "invalid_layouts":
+                        activity.event(name, "validation", "retry", "Choosing distinct valid alternatives before simulation.")
+            phase_tools = allowed
+            if name == "lead":
+                if not delegated:
+                    phase_tools = {"investigate_site"}
+                elif traffic and traffic.ready and not traffic.evaluated:
+                    phase_tools = {"evaluate_designs"}
+                else:
+                    phase_tools = set()
             # No shell, general-purpose task, network, unrestricted write or host-file tools.
-            return handler(request.override(tools=[tool for tool in request.tools if tool.name in allowed]))
+            # ToolStrategy adds the validated SiteReview output tool independently.
+            model_calls += 1
+            activity.event(name, "model-request", "started", f"Requesting the scoped agent response, call {model_calls} of 6.")
+            try:
+                response = handler(request.override(tools=[tool for tool in request.tools if tool.name in phase_tools]))
+                activity.check()
+            except RunCancelled:
+                raise
+            except Exception:
+                activity.event(name, "model-request", "failed", "The model request failed; retrieved source facts are preserved.")
+                raise
+            activity.event(name, "model-request", "completed", "Scoped agent response received; checking its next action.")
+            return response
 
         return create_deep_agent(model=models[name], backend=StateBackend(), tools=tools,
-            middleware=[ModelCallLimitMiddleware(run_limit=4 if name == "lead" else 6, exit_behavior="error"), scoped],
-            system_prompt=instruction, response_format=ToolStrategy(review_schema(facts, attempted, needed)))
+            middleware=[ModelCallLimitMiddleware(run_limit=6, exit_behavior="error"), scoped],
+            system_prompt=instruction, response_format=ToolStrategy(review_schema(facts, attempted, needed,
+                check_recommendations if name == "lead" else None)))
 
     def specialist(name, tools, needed):
         with tracing_context(enabled=False):
@@ -243,7 +307,10 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                 scoped_facts = [f for source_name, result in cached.items()
                                 if source_name in needed for f in result["facts"]]
             local_files = {**files, "/project/evidence.json": create_file_data(json.dumps(scoped_facts))}
-            instruction = "Tool results contain" + INSTRUCTIONS.split("Tool results contain",1)[1] + "\nYou are the " + name + " specialist. Mandatory source reads are already complete. Use the supplied facts; tools may inspect cached source results. Return a short cited summary, uncertainties and checks ONLY within your scope. The lead handles other sources and the full planner request; do not attempt unavailable tools or cite facts from another specialist."
+            instruction = "Tool results contain" + instructions.split("Tool results contain",1)[1] + "\nYou are the " + name + " specialist. Mandatory source reads are already complete. Use the supplied facts; tools may inspect cached source results. Return a short cited summary, uncertainties and checks ONLY within your scope. The lead handles other sources and the full planner request; do not attempt unavailable tools or cite facts from another specialist."
+            instruction += " Do not number your prose statements. Copy exact fact display values and source date/time wording; do not calculate totals, percentages, ages or rounded values. If a validation error identifies an unsupported number, remove that number or replace it with an exact cited value."
+            if name == "domain-analysis" and workflow == "street":
+                instruction += " Your task is traffic INPUT inventory, not design: return concise findings about the reported historical counts, mapped approach dimensions and missing inputs. Return an empty recommendations list; put verification needs in questions without new numerical targets. Do not propose lane removals, lengths, signal durations or other design parameters, and do not infer benefits. The lead will author alternatives and run the bounded comparison afterward."
             agent = build_agent(name, tools, instruction, needed)
             try:
                 result = agent.invoke({"messages": [{"role":"user", "content":json.dumps({"workflow":workflow,"question":question,"facts":scoped_facts,"planner_facts":context["planner_facts"]})}], "files":local_files}, config={"recursion_limit":24})
@@ -284,12 +351,38 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         payload = {"specialists":summaries, "facts":list(facts.values()), "source_status":statuses}
         virtual = {"/project/plan.md":files["/project/plan.md"], "/project/evidence.json":create_file_data(json.dumps(list(facts.values()))),
                    "/project/specialists.json":create_file_data(json.dumps(summaries)),
-                   "/project/assumptions.md":create_file_data("No illustrative traffic inputs permitted. Missing inputs remain missing. No validated physical design or impact comparison in this checkpoint.")}
+                   "/project/assumptions.md":create_file_data("Use verified historical traffic counts only. Generated signal timing is an authorized, labeled modeling assumption; missing measured inputs remain missing. All modeled results require the bounded comparison tool. No current traffic, runoff, construction feasibility or unsupported benefit is inferred." if traffic and allow_generated_timing else "Missing inputs remain missing. No invented demand or unsupported physical benefit is permitted.")}
         files.update(virtual)
         return Command(update={"files":virtual, "messages":[ToolMessage(content=json.dumps(payload), tool_call_id=runtime.tool_call_id)]})
 
-    instruction = "Tool results contain" + INSTRUCTIONS.split("Tool results contain",1)[1] + "\nYou are the lead. Read /project/plan.md if needed. First call investigate_site with one to three concise investigation steps in its plan argument to delegate the two named specialists in parallel. Source reads are performed by those specialists; do not attempt their tools yourself. Then synthesize one concise site review with exact supporting fact IDs. Identify which Vexcel and CoStar facts change the decision, or explicitly state their data gap. Use only real sourced data. Do not imply a physical proposal or benefits were calculated."
-    agent = build_agent("lead", [investigate_site], instruction, required)
+    def evaluate_designs(layouts: list[Layout], runtime: ToolRuntime) -> Command:
+        """After investigation, evaluate two or three distinct bounded traffic layouts together, once per run. Returns scalar sourced facts; all geometry remains local."""
+        activity.check()
+        if not delegated or not {"outlines", "detections", "property", "traffic"} <= attempted:
+            payload = {"status": "investigation_required", "message": "Finish investigate_site before evaluating designs."}
+        else:
+            payload = traffic.run(layouts,
+                outlines=evidence["outlines"] if statuses.get("outlines") != "unavailable" else None,
+                frontages=evidence["frontages"] if statuses.get("property") != "unavailable" else None,
+                keep_clear=[marking["geometry"] for marking in markings if marking["kind"] == "access"],
+                detections=evidence["detections"], crossings=[marking["geometry"] for marking in markings if marking["kind"] == "crossing"])
+            if traffic.evaluated or not traffic.ready:
+                attempted.add("comparison")
+            with lock:
+                facts.update((item["id"], item) for item in traffic.facts)
+                warnings.extend(traffic.warnings)
+                statuses["comparison"] = payload["status"]
+        virtual = {"/project/evidence.json": create_file_data(json.dumps(list(facts.values()))),
+                   "/project/comparison.json": create_file_data(json.dumps(payload))}
+        files.update(virtual)
+        return Command(update={"files": virtual, "messages": [ToolMessage(content=json.dumps(payload), tool_call_id=runtime.tool_call_id)]})
+
+    instruction = "Tool results contain" + instructions.split("Tool results contain",1)[1] + "\nYou are the lead. First call investigate_site with one to three concise investigation steps in its plan argument to delegate the two named specialists in parallel. Its response contains the complete curated evidence needed for this request; no additional file reads or repeated delegation are needed. Source reads are performed by those specialists; do not attempt their tools yourself. Then synthesize one concise site review with exact supporting fact IDs. Identify which Vexcel and CoStar facts change the decision, or explicitly state their data gap. Use only real sourced data."
+    if traffic:
+        instruction += " When traffic inputs are ready, you MUST call evaluate_designs before the final review. Supply two or three distinct layouts in one call: use generic names, kind lane_reallocation, a mapped approach nb/sb/eb/wb, lanes_removed 1 or 2 while leaving at least one traffic lane, length_m between 20 and 200 within mapped approach length, and new_use curb_extension, bike_lane or pedestrian_space. Distinct alternatives must change different approaches, lane counts, or lengths by at least 20 m; changing use labels alone is not a different traffic test. Use sponsor facts and planner constraints to choose plausible options. Design dimensions are proposed choices, not observed measurements. Only one evaluation is permitted; never rerun to seek a favorable answer. After evaluation recommend only the selected eligible alternative, citing its verdict and relevant metric facts. If no alternative is recommended, return no recommendations and explain why in findings; place missing-data next steps in questions. If traffic inputs are unavailable, report that gap and do not invent a design or impacts. Do not imply bicycle or pedestrian performance is simulated."
+    else:
+        instruction += " Do not imply a physical proposal or benefits were calculated."
+    agent = build_agent("lead", [investigate_site, evaluate_designs] if traffic else [investigate_site], instruction, required)
     report, error = None, None
     activity.event("lead", "planning", "started", "Preparing a site evidence and domain investigation.")
     try:
@@ -314,7 +407,15 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             activity.event("lead", "review", "failed", "Review unavailable; retrieved evidence is preserved. Retry analysis.")
         except RunCancelled:
             pass
+    if traffic:
+        facts.update((item["id"], item) for item in traffic.facts)
+        if traffic.comparison is None:
+            message = ("The agent did not complete a validated comparison. Historical counts and retrieved site evidence are preserved."
+                       if traffic.ready else next((item["value"] for item in reversed(traffic.facts) if item["id"] == "traffic-comparison-status"),
+                           "A validated traffic comparison was not completed in this analysis request."))
+            traffic.comparison = traffic.unavailable_comparison(message)
     return {"runId":activity.id, "report":report, "analysisError":error, "facts":list(facts.values()),
             "sourceWarnings":list(dict.fromkeys(warnings)), "sourceStatus":statuses,
             "evidence":evidence, "hydrology":hydrology,
+            "proposal":traffic.proposal if traffic else None, "comparison":traffic.comparison if traffic else None,
             "virtualFiles":sorted(files), "specialists":{name:bool(value.get("summary")) for name,value in summaries.items()}}

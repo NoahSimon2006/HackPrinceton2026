@@ -11,19 +11,23 @@ from pydantic import Field, ValidationError
 from site_agent import analyze_site, review_schema
 from site_measurements import fact, source
 from test_site_measurements import LON, LAT, feature, polygon
+from test_traffic_analysis import context as traffic_context, study as traffic_study, comparison as traffic_comparison, LAYOUTS, IDENTITY
 
 
 class ScriptedModel(BaseChatModel):
     responses: list = Field(default_factory=list)
     seen: list = Field(default_factory=list)
     tool_names: list = Field(default_factory=list)
+    tool_sets: list = Field(default_factory=list)
 
     @property
     def _llm_type(self):
         return "site-agent-test"
 
     def bind_tools(self, tools, **kwargs):
-        self.tool_names.extend(tool.name if hasattr(tool, "name") else tool.get("function", {}).get("name") for tool in tools)
+        names = [tool.name if hasattr(tool, "name") else tool.get("function", {}).get("name") for tool in tools]
+        self.tool_names.extend(names)
+        self.tool_sets.append(set(names))
         return self
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
@@ -46,6 +50,69 @@ def complete():
 
 
 class AgentTest(unittest.TestCase):
+    def test_invalid_design_arguments_emit_sanitized_activity_before_one_comparison(self):
+        review = AIMessage(content="", tool_calls=[{"name": "SiteReview", "id": "review", "args": {
+            "findings": [], "recommendations": [], "questions": ["Verify missing source coverage?"]}}])
+        def evaluation(identifier, layouts):
+            return AIMessage(content="", tool_calls=[{"name": "evaluate_designs", "id": identifier, "args": {"layouts": layouts}}])
+        bad_schema = [{**LAYOUTS[0], "name": "private-argument", "length_m": 999}, LAYOUTS[1]]
+        duplicates = [LAYOUTS[0], {**LAYOUTS[0], "name": "duplicate"}]
+        lead = ScriptedModel(responses=[calls("investigate_site"), evaluation("schema-error", bad_schema),
+                                       evaluation("duplicate-error", duplicates), evaluation("valid", LAYOUTS), review])
+        events = []
+        with patch("site_agent.ChatXAI", side_effect=[lead, ScriptedModel(responses=[review]), ScriptedModel(responses=[review])]), \
+             patch("traffic_analysis.Study", return_value=traffic_study()), \
+             patch("traffic_analysis.evaluate", return_value=traffic_comparison(None)) as evaluate:
+            result = analyze_site("unused", "fake", "Compare layouts", "street", [], lambda _: [], lambda: ({}, []), lambda: {},
+                lon=LON, lat=LAT, traffic_context=traffic_context(), analysis_identity=IDENTITY,
+                allow_generated_timing=True, activity=Activity(events.append))
+        self.assertIsNone(result["analysisError"])
+        evaluate.assert_called_once()
+        retries = [e["summary"] for e in events if e["stage"] == "validation"]
+        self.assertIn("Correcting bounded design parameters before simulation.", retries)
+        self.assertIn("Choosing distinct valid alternatives before simulation.", retries)
+        self.assertNotIn("private-argument", str(events))
+        self.assertNotIn("999", str(events))
+        self.assertEqual(lead.tool_sets[-1], {"SiteReview"})
+
+    def test_traffic_lead_must_evaluate_then_cites_local_metrics_without_sending_geometry(self):
+        def review():
+            return AIMessage(content="", tool_calls=[{"name": "SiteReview", "id": "review", "args": {
+                "findings": [{"text": "Historical counted movements anchor this comparison.", "fact_ids": ["traffic-count-total"]}],
+                "recommendations": [{"text": "Evaluate the selected north-curb layout with the field team.", "fact_ids": ["traffic-north-curb-verdict"]}],
+                "questions": ["Can the field team verify access and the generated signal timing?"]}}])
+        empty_review = AIMessage(content="", tool_calls=[{"name": "SiteReview", "id": "summary", "args": {
+            "findings": [], "recommendations": [], "questions": ["Verify the source evidence on site?"]}}])
+        evaluation = AIMessage(content="", tool_calls=[{"name": "evaluate_designs", "id": "evaluate", "args": {"layouts": LAYOUTS}}])
+        lead = ScriptedModel(responses=[calls("investigate_site"), review(), evaluation, review()])
+        site = ScriptedModel(responses=[empty_review])
+        domain = ScriptedModel(responses=[empty_review])
+        events = []
+        with patch("site_agent.ChatXAI", side_effect=[lead, site, domain]), \
+             patch("traffic_analysis.Study", return_value=traffic_study()), \
+             patch("traffic_analysis.evaluate", return_value=traffic_comparison()) as evaluate:
+            result = analyze_site("unused", "fake", "Compare lower-emission layouts", "street", [],
+                lambda _: [], lambda: ({"propertyType": "Office"}, []), lambda: {},
+                lon=LON, lat=LAT, traffic_context=traffic_context(), analysis_identity=IDENTITY,
+                allow_generated_timing=True, ranking_policy="strict-v1", activity=Activity(events.append))
+        self.assertIsNone(result["analysisError"])
+        self.assertTrue(result["report"])
+        self.assertTrue(result["proposal"])
+        self.assertEqual(result["comparison"]["input_hash"], result["proposal"]["input_hash"])
+        evaluate.assert_called_once()
+        sent = " ".join(str(message.content) for model in (lead, site, domain) for group in model.seen for message in group) + str(events)
+        for forbidden in ["PRIVATE", "coordinates", "node_id", str(LON), str(LAT), str(traffic_context()["lon"]), str(traffic_context()["lat"])]:
+            self.assertNotIn(forbidden, sent)
+        self.assertIn("Read the required source tools first: comparison", sent)
+        self.assertIn("evaluate_designs", lead.tool_names)
+        self.assertNotIn("evaluate_designs", site.tool_names + domain.tool_names)
+        self.assertIn("/project/comparison.json", result["virtualFiles"])
+        self.assertEqual(lead.tool_sets, [{"investigate_site", "SiteReview"}, {"evaluate_designs", "SiteReview"},
+                                          {"evaluate_designs", "SiteReview"}, {"SiteReview"}])
+        self.assertIn("search_aerial_imagery", site.tool_names)
+        self.assertEqual(len([e for e in events if e["stage"] == "model-request" and e["status"] == "started"]), 6)
+        self.assertEqual(len([e for e in events if e["stage"] == "model-request" and e["status"] == "completed"]), 6)
+
     def test_real_agent_graph_collects_facts_validates_references_and_redacts_geometry(self):
         model = ScriptedModel(responses=[complete(), calls("investigate_site"), complete()])
         site_model = ScriptedModel(responses=[complete()])
@@ -88,6 +155,7 @@ class AgentTest(unittest.TestCase):
         self.assertNotIn("execute", model.tool_names)
         self.assertNotIn("task", model.tool_names)
         self.assertIn("SiteReview", model.tool_names)
+        self.assertEqual(model.tool_sets[-1], {"SiteReview"})
 
     def test_model_failure_preserves_measurements_and_source_failure_is_not_zero(self):
         model = ScriptedModel(responses=[calls("investigate_site"), RuntimeError("provider failed")])
@@ -107,8 +175,10 @@ class AgentTest(unittest.TestCase):
         def report(text, refs):
             return {"findings": [{"text": text, "fact_ids": refs}], "recommendations": [], "questions": ["Verify endpoints?"]}
         schema.model_validate(report("The marked crossing is 25.00 m / 82.0 ft.", ["crossing"]))
-        with self.assertRaises(ValidationError):
+        with self.assertRaises(ValidationError) as rejection:
             schema.model_validate(report("The crossing is 99 m.", ["crossing"]))
+        self.assertIn("numbers not present in its cited facts: 99", str(rejection.exception))
+        self.assertIn("crossing: 25.00 m / 82.0 ft", str(rejection.exception))
         with self.assertRaises(ValidationError):
             schema.model_validate(report("The crossing is 25 m.", ["invented-source"]))
 

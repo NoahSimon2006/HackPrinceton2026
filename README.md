@@ -2,7 +2,7 @@
 
 A local planning workspace for Los Angeles, using a Python server, bundled Leaflet, Vexcel aerial imagery and CoStar site evidence. **Traffic & Emissions** opens with dated historical traffic counts. **Stormwater** opens with terrain screening around Kipling Apartments, with optional county rainfall and drainage-context layers.
 
-**Current review: [Checkpoint 3 — discovery maps](docs/CHECKPOINT_3.md).** Checkpoint 4 has not started. The user requires real dataset/API inputs: the archived assumed-demand emissions scenario is disabled. CO₂, NOₓ, delay and redesign benefits remain unavailable until verified inputs support them. The separately labeled development proposal fixture tests UI behavior only.
+**Current review: [Checkpoint 4 — traffic redesign and comparison](docs/CHECKPOINT_4.md).** Official historical turning counts now drive bounded physical-layout comparisons with explicitly approved generated signal timing and strict total-CO₂/throughput/regression gates. Missing sponsor evidence prevents a recommendation. The archived assumed-demand city emissions layer remains disabled. Checkpoint 5 has not started.
 
 Earlier review records: [Checkpoints 0–1](docs/CHECKPOINTS_0_1.md), [Checkpoint 2](docs/CHECKPOINT_2.md).
 
@@ -16,7 +16,7 @@ python3 -m venv .venv
 PORT=8001 .venv/bin/python server.py
 ```
 
-Open <http://127.0.0.1:8001>. After backend changes, restart the Python server and reload the page. Local JavaScript/CSS revalidate on reload. Vexcel imagery and optional Esri labels require network access. Discovery reads local prebuilt source snapshots; missing snapshots produce an explicit unavailable state, never substitute data. A Grok key is needed only when **Analyze site** is selected.
+Open <http://127.0.0.1:8001>. After backend changes, restart the Python server and reload the page. Local JavaScript/CSS revalidate on reload. Vexcel imagery and optional Esri labels require network access. Discovery reads local prebuilt source snapshots; missing snapshots produce an explicit unavailable state, never substitute data. A Grok key is needed only when **Analyze site** is selected. Traffic comparisons also require `requirements-sim.txt`, the local OSM network, verified turning-sheet discovery data, and the official CARB export described in the Checkpoint 4 report.
 
 ## Build discovery data
 
@@ -48,7 +48,7 @@ A different OSM extract may produce different matches; network hashes identify t
 4. Choose **Analyze site** to run one lead Deep Agent with concurrent site-evidence and domain specialists. Expand **Agent activity** to follow actual tool results and inspect cited facts. Changing sites/modes cancels the followed run; a changed discovery selection also cancels the old analysis, including when two features share coordinates.
 5. Under **Site evidence & adjustments**, inspect returned outlines, detections, frontages and locally measured facts. Drawings and manually edited rainfall remain distinct from source values. They do not constitute verified drainage, current traffic, a physical proposal or a benefit calculation. Editing inputs marks prior results stale.
 
-All site work is held for the current page session. The labeled **Development preview** proposal remains a UI test, separate from source-backed discovery and agent findings. Editable physical designs, traffic comparisons and treatment sizing are later checkpoints.
+All site work is held for the current page session. The labeled **Development preview** proposal remains a UI test, separate from source-backed discovery and agent findings. Traffic comparisons are available at verified turning-count sites. Editable designs beyond the bounded traffic templates and stormwater treatment sizing are later checkpoints.
 
 ## Measurement and sharing boundaries
 
@@ -74,4 +74,4 @@ Install `requirements-discovery.txt` for terrain/builder tests. Most tests use e
 
 `public/data/emissions.json`, `scripts/run_pilot.py` and `scripts/build_emissions.py` preserve the earlier illustrative SUMO/EMFAC work for reference. It used random origin–destination demand, generated signals, road-class volume assumptions and assumed hourly shares. Its historical-count interpretation is not the source-only discovery method, and its predictions are excluded from the current UI and agent evidence.
 
-The exporter can now retain stopped/time-loss vehicle-seconds, normalized by sampled vehicle-seconds, plus interval and simulated volume context for both periods. This is export preparation only. Checkpoint 3 did not rerun the simulation or rebuild the archived artifact. A future live comparison requires verified demand, turning movements, signals and validation observations; historical totals alone do not provide those inputs.
+The exporter can now retain stopped/time-loss vehicle-seconds, normalized by sampled vehicle-seconds, plus interval and simulated volume context for both periods. This is export preparation only. Checkpoint 3 did not rerun the simulation or rebuild the archived artifact. The Checkpoint 4 comparison uses separately verified manual turning sheets and labels generated signal timing explicitly. Historical automated totals alone still cannot support a comparison.

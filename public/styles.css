@@ -339,3 +339,34 @@ button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-vi
 @media(max-width:760px){.discovery-panel{top:12px;left:12px;right:62px;width:auto;max-width:none;max-height:calc(100% - 74px);padding:10px 12px}.discovery-panel-heading{margin-bottom:5px}.discovery-panel label{margin:3px 0}.discovery-panel p{font-size:10px;margin:6px 0}.discovery-panel .discovery-limit{display:none}.discovery-panel details{padding-top:6px}.proposal-map-control{top:auto;bottom:42px;left:auto;right:12px;max-width:calc(100% - 24px)}.proposal-map-control:has(input:disabled){display:none}#map .leaflet-top.leaflet-right{bottom:60px;right:6px}}
 .discovery-panel-heading{gap:8px}.discovery-panel-heading>.section-label{flex:1}.discovery-panel-heading button{white-space:nowrap}
 @media(max-width:760px){.watershed-legend{display:none}.discovery-panel:has(#discovery-body[hidden]) .discovery-panel-heading{margin-bottom:0}}
+
+/* Evaluated designs keep historical evidence and simulated outcomes explicit. */
+.proposal-review[data-fixture="false"]{border-color:#b8944b!important;background:#29281d!important}
+.proposal-review[data-fixture="false"] .fixture-tag{color:#ffdc83}
+.proposal-review[data-fixture="false"] .proposal-metrics dt{color:#cfcaab}
+#proposal-checks p{font-size:11px;line-height:1.55;color:#d3cfba}
+.traffic-comparison{border-color:#577769!important}
+.traffic-comparison h2{font-size:18px;line-height:1.35;margin-top:12px}
+.traffic-comparison .comparison-period{color:#c8e3d3;font-weight:700;font-size:12px}
+.traffic-comparison .comparison-method{font-size:11px;color:#a8b8af;line-height:1.6}
+.comparison-table{overflow-x:auto;margin:18px -2px 14px;border:1px solid #40584a;border-radius:8px}
+.comparison-table:focus-visible{outline:2px solid #a8d8b4;outline-offset:3px}
+.comparison-table table{border-collapse:collapse;width:100%;font-size:11px;font-variant-numeric:tabular-nums}
+.comparison-table th,.comparison-table td{padding:11px 9px;text-align:right;border-bottom:1px solid #36473c;min-width:80px}
+.comparison-table thead th{background:#22372c;color:#d6e6dc;font-size:10px;font-weight:700;vertical-align:bottom}
+.comparison-table th:first-child{text-align:left;min-width:118px}
+.comparison-table tbody th{font-weight:500;color:#d6e0d9}
+.comparison-table th small{display:block;font-size:9px;color:#9eb2a5;margin-top:4px;font-weight:400}
+.comparison-table tbody tr:first-child{color:#f7dfa2;background:#302f21;font-weight:700}
+.comparison-table tr:last-child>*{border-bottom:0}
+.comparison-table .recommended-column{background:#96cba013}
+.comparison-alternatives details{border-top:1px solid #40584a;padding:12px 0}
+.comparison-alternatives summary{font-size:12px;font-weight:700;line-height:1.6;cursor:pointer}
+.comparison-verdict{display:block;margin:4px 0 0 15px;font-size:10px;letter-spacing:.02em;color:#e2c780;font-weight:500}
+.comparison-alternatives p,.comparison-alternatives li,#comparison-assumptions li{font-size:11px;line-height:1.6;color:#bccbc1}
+.comparison-alternatives ul,#comparison-assumptions{padding-left:18px}
+#comparison-sources{margin-top:12px;font-size:11px}#comparison-sources a{color:#b4dfbf}
+#comparison-revision{font-size:10px;color:#97ac9e}
+.proposal-result-message{padding:13px 15px;border:1px solid #8a713c;border-radius:8px;background:#302c20;color:#f0d69a;font-size:12px;line-height:1.6}
+.traffic-design-guide{font-size:12px;line-height:1.65;color:#afc4b8;padding:12px 14px;border-left:2px solid #91cba2;background:#a3d8b107;margin:0 0 16px}
+.traffic-design-guide strong{color:#d9eddf;font-weight:600}.traffic-comparison,.proposal-review{min-width:0;overflow-wrap:anywhere}

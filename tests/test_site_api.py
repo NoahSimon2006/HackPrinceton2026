@@ -9,6 +9,7 @@ from test_site_measurements import LAT, LON, polygon
 
 
 def request(payload):
+    payload = {"siteId":"api-test-site","inputRevision":0,"proposalRevision":1,**payload}
     body = json.dumps(payload).encode()
     handler = Handler.__new__(Handler)
     handler.path = "/api/site-analysis"
@@ -28,6 +29,7 @@ class SiteApiTest(unittest.TestCase):
         selected={"value":18102,"unit":"vehicles reported"}
         with patch.dict("os.environ", {"GROK_API_KEY":"test-only"}), \
              patch("server.discovery_context",return_value=selected) as resolve, \
+             patch("server.traffic_context",return_value=None), \
              patch("site_agent.analyze_site",return_value={"report":None}) as analyze:
             status,_=request({"lat":LAT,"lon":LON,"workflow":"street","question":"Review","discoveryReference":reference})
             self.assertEqual(status,200)
@@ -47,6 +49,8 @@ class SiteApiTest(unittest.TestCase):
         self.assertEqual(analyze.call_args.args[4], markings)
         self.assertEqual(analyze.call_args.kwargs["scenario"], scenario)
         self.assertEqual(analyze.call_args.kwargs["lon"], LON)
+        self.assertEqual(analyze.call_args.kwargs["analysis_identity"],{"site_id":"api-test-site","revision":1,"input_revision":0})
+        self.assertEqual(analyze.call_args.kwargs["ranking_policy"],"strict-v1")
 
     def test_invalid_inputs_do_not_reach_model(self):
         with patch("site_agent.analyze_site") as analyze:

@@ -3,7 +3,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from proposal import Design, Proposal, from_traffic_comparison
+from proposal import Design, Proposal, from_traffic_comparison, comparison_fingerprint
 
 
 def result(delay, co2_trip, queue=90.0, noise=72.0):
@@ -62,6 +62,34 @@ class TrafficProposalTest(unittest.TestCase):
             Design(kind="lane_reallocation", length_m=60, width_m=3.2)
         with self.assertRaises(ValidationError):
             Design(kind="test_island", length_m=12, width_m=2, approach="nb")
+
+    def test_fingerprint_covers_source_geometry_constraints_and_results(self):
+        original = comparison()
+        identity = dict(site_id="s", revision=1, input_revision=0)
+        before = comparison_fingerprint(original, **identity)
+        for mutate in (
+            lambda c: c["results"]["eb-curb"].update(co2_kg_per_hour=999),
+            lambda c: c.update(sheet_sha256="changed-source"),
+            lambda c: c["geometry"]["eb-curb"]["geometry"]["coordinates"][0][0].__setitem__(0,-118.24),
+            lambda c: c.update(keep_clear_geometry=[{"changed":"constraint"}]),
+        ):
+            changed = copy.deepcopy(original); mutate(changed)
+            self.assertNotEqual(comparison_fingerprint(changed, **identity), before)
+        original.update(**identity,input_hash=before,workflow="street")
+        self.assertEqual(comparison_fingerprint(original, **identity), before)
+
+    def test_partial_metrics_and_outlines_are_not_reported_as_zero(self):
+        c = comparison(parcel=12.5)
+        c["checks"]["eb-curb"]["building_overlap_m2"] = None
+        c["results"]["eb-curb"]["mean_delay_s"] = None
+        c["results"]["baseline"]["max_queue_m"] = {"nb":None}
+        p = from_traffic_comparison(c,"eb-curb",site_id="s",revision=1,input_revision=0)
+        self.assertEqual(p.overlap.status,"unassessed")
+        for key in ("mean_delay","max_queue","nox_per_hour"):
+            m = next(x for x in p.metrics if x.id == key)
+            self.assertEqual(m.status,"unassessed")
+            self.assertIsNone(m.baseline)
+            self.assertIsNone(m.proposed)
 
 
 if __name__ == "__main__":

@@ -33,7 +33,9 @@ let emissionLines = new Map();
 let selectedRoad = null;
 let selectedLine = null;
 let planningMode = "street";
-function emissionsActive() { return planningMode === "street"; }
+// The legacy city layer contains assumed class-default volumes. Only comparisons
+// backed by a selected official turning sheet are enabled in this checkpoint.
+function emissionsActive() { return planningMode === "street" && !$("emissions-layer").disabled; }
 let activePeriod = "midday";
 let activeMetric = "co2";
 let colorThresholds = [];
@@ -596,7 +598,7 @@ function selectPlanningWorkspace(mode, zoom = false) {
   for (const id of ["planner", "planner-title", "site-intro"]) $(id).hidden = false;
   $("planner-title").textContent = water ? "Make room for water." : "Better streets start here.";
   $("site-intro").textContent = water ? "Choose a site to investigate rainfall, drainage and opportunities for greenery." : "Choose an intersection to investigate access, crossings and emissions evidence.";
-  $("planner-controls").hidden = water;
+  $("planner-controls").hidden = true;
   $("emissions-layer-row").hidden = water;
   $("map-workspace").classList.toggle("water-mode", water);
   $("brand-caption").textContent = "Planning workspace · Los Angeles";

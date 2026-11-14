@@ -100,6 +100,28 @@ class DiscoveryTest(unittest.TestCase):
             data['layers'][0]['status']='unavailable'
             with self.assertRaises(ValueError):discovery.discovery_context('street',reference)
 
+    def test_turning_context_rejects_changed_pdf_and_parsed_data(self):
+        from hashlib import sha256
+        data = snapshot(); layer = data['layers'][0]; feature = layer['features'][0]
+        layer['id'] = 'turning'; p = feature['properties']
+        blob = b'%PDF test source'
+        sheet = {'filename':'MAIN.1ST.111108-MAN.pdf','sha256':sha256(blob).hexdigest(),
+                 'url':'https://navigatela.lacity.org/test.pdf','date':'2014-01-16','approaches':{'nb':123}}
+        p.update(sheet_url=sheet['url'],sheet_sha256=sheet['sha256'],network_node='node')
+        ref = {'version':data['version'],'layer':'turning','feature':feature['id']}
+        with tempfile.TemporaryDirectory() as folder, patch('discovery.DATA',Path(folder)), \
+             patch('discovery.load_discovery',return_value=data), patch('traffic_counts.load_sheet',return_value=sheet):
+            cache = Path(folder)/'sheets'; cache.mkdir(); pdf=cache/sheet['filename']; pdf.write_bytes(blob)
+            parsed = Path(folder)/'turning-sheets.json'; parsed.write_text(json.dumps({feature['id']:sheet}))
+            result = discovery.traffic_context(ref,-118.25,34.05)
+            self.assertEqual(result['sheet'],sheet)
+            self.assertEqual(result['node_id'],'node')
+            pdf.write_bytes(b'%PDF changed')
+            with self.assertRaises(ValueError):discovery.traffic_context(ref,-118.25,34.05)
+            pdf.write_bytes(blob)
+            parsed.write_text(json.dumps({feature['id']:{**sheet,'approaches':{'nb':999}}}))
+            with self.assertRaises(ValueError):discovery.traffic_context(ref,-118.25,34.05)
+
     def test_missing_snapshot_never_uses_fixture_and_partial_sources_survive(self):
         with tempfile.TemporaryDirectory() as folder, patch('discovery.DATA',Path(folder)):
             with self.assertRaises(FileNotFoundError):discovery.load_discovery('water')

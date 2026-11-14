@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=15">
+  <link rel="stylesheet" href="/styles.css?v=16">
   <script defer src="/vendor/leaflet.js"></script>
-  <script defer src="/app.js?v=16"></script>
-  <script defer src="/proposal.js?v=1"></script>
+  <script defer src="/app.js?v=17"></script>
+  <script defer src="/proposal.js?v=3"></script>
   <script defer src="/analysis-stream.js?v=1"></script>
-  <script defer src="/planner.js?v=12"></script>
+  <script defer src="/planner.js?v=13"></script>
   <script defer src="/discovery.js?v=2"></script>
 </head>
 <body>
@@ -30,6 +30,7 @@
           <div id="results" class="results" role="listbox" aria-label="Property search results" hidden></div>
         </div>
         <section id="planner" class="planner" aria-labelledby="planner-title" hidden>
+          <p id="traffic-design-guide" class="traffic-design-guide">To compare street layouts, choose <strong>Turning-movement counts</strong> in Map evidence, select a counted intersection, then choose <strong>Analyze site</strong>.</p>
           <button id="pick-site" type="button" class="planner-action" aria-pressed="false">Pick a site on the map</button>
           <p id="planner-status" class="planner-status" role="status">Search for a property or pick any covered location.</p>
           <div id="site-card" class="planner-card" hidden>
@@ -55,14 +56,31 @@
                 <ol id="activity-list"></ol>
               </details>
               <p id="analysis-message" role="status" hidden></p>
-              <p id="analysis-stale" class="analysis-stale" hidden>Site inputs changed. Analyze again to update the measurements and recommendations.</p>
+              <p id="analysis-stale" class="analysis-stale" hidden>Inputs changed or the review is incomplete. Analyze again to refresh the assessment.</p>
               <div id="agent-assessment" class="site-review" aria-live="polite" hidden></div>
             </form>
+          <p id="proposal-result-message" class="proposal-result-message" role="status" hidden></p>
           <section id="proposal-review" class="planner-card proposal-review" hidden aria-live="polite">
-            <span class="fixture-tag">DEVELOPMENT FIXTURE</span>
+            <span id="proposal-kind" class="fixture-tag">DEVELOPMENT FIXTURE</span>
             <h2 id="proposal-title"></h2><p id="proposal-summary"></p>
-            <dl class="proposal-metrics"><dt>Test footprint</dt><dd id="proposal-area"></dd><dt>Impact comparison</dt><dd>Unassessed</dd></dl>
-            <p id="proposal-revision"></p><p id="proposal-stale" hidden>Inputs changed. Reload the preview to match this site revision.</p>
+            <dl class="proposal-metrics"><dt id="proposal-area-label">Test footprint</dt><dd id="proposal-area"></dd><dt>Impact comparison</dt><dd id="proposal-impact">Unassessed</dd></dl>
+            <div id="proposal-checks"></div>
+            <p id="proposal-revision"></p><p id="proposal-stale" hidden>Inputs changed. Analyze again to update this proposal. Development fixtures can be reloaded from the preview below.</p>
+          </section>
+          <section id="traffic-comparison" class="planner-card traffic-comparison" hidden aria-live="polite">
+            <span class="section-label">TRAFFIC DESIGN COMPARISON</span>
+            <h2 id="comparison-title"></h2><p id="comparison-outcome"></p>
+            <p id="comparison-period" class="comparison-period"></p>
+            <p class="comparison-method">Modeled results from historical demand. These are not measured current traffic conditions or ambient pollution concentrations.</p>
+            <p class="comparison-method">Emissions cover one hour of offered traffic, including a 15-minute clearance period. Completion is measured after clearance.</p>
+            <p id="comparison-stale" class="analysis-stale" hidden>Site inputs changed. This comparison belongs to an earlier revision; analyze again.</p>
+            <div id="comparison-table" class="comparison-table" role="region" aria-label="Traffic metrics before and after each layout" tabindex="0"></div>
+            <div id="comparison-alternatives" class="comparison-alternatives"></div>
+            <details><summary>Sources &amp; simulation assumptions</summary>
+              <p class="comparison-method">Delay includes waiting to enter; unfinished trips contribute a lower bound. Queue is the maximum simultaneous total along an approach. Noise is the highest hourly mean source level across approach edges and paired runs. Roadway noise is a modeled source level, not exposure at a building. A 10% noise-energy increase is about 0.414 dB; percentages are not applied directly to decibels.</p>
+              <div id="comparison-sources"></div><ul id="comparison-assumptions"></ul>
+            </details>
+            <p id="comparison-revision"></p>
           </section>
           <details class="planner-card" id="proposal-development"><summary>Development preview</summary>
             <p>Synthetic geometry to test the map and revision contract only. Not a site design or recommendation; no benefits calculated.</p>
@@ -140,7 +158,7 @@
         <div class="layer base"><span class="layer-icon">▧</span><div><strong>Vexcel aerial</strong><small>Base imagery</small></div><span class="active-dot" aria-label="On"></span></div>
         <label class="layer toggle-row" for="labels"><span class="layer-icon">⌖</span><span class="layer-copy"><strong>Place labels</strong><small>Esri reference layer</small></span><input id="labels" type="checkbox" role="switch"><span class="switch"></span></label>
         <label class="layer toggle-row" for="properties"><span class="layer-icon">●</span><span class="layer-copy"><strong>CoStar properties</strong><small>Visible from neighborhood zoom</small></span><input id="properties" type="checkbox" role="switch"><span class="switch"></span></label>
-        <label id="emissions-layer-row" class="layer toggle-row" for="emissions-layer" hidden><span class="layer-icon">≋</span><span class="layer-copy"><strong>Road emissions</strong><small>Counted traffic × CARB fleet rates</small></span><input id="emissions-layer" type="checkbox" role="switch" checked><span class="switch"></span></label>
+        <label id="emissions-layer-row" class="layer toggle-row" for="emissions-layer" hidden><span class="layer-icon">≋</span><span class="layer-copy"><strong>Road emissions unavailable</strong><small>Requires verified traffic inputs · use historical counts</small></span><input id="emissions-layer" type="checkbox" role="switch" disabled><span class="switch"></span></label>
         <div id="layer-note" class="layer-note" hidden>Zoom in to level 15 to see property points.</div>
         <div class="divider"></div>
         <div class="section-label">MAP STATUS</div>

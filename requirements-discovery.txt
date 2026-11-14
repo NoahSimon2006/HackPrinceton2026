@@ -4,3 +4,4 @@ numpy==2.5.4
 pyproj==3.8.0
 shapely==2.2.0
 sumolib==1.28.0
+pypdf==6.3.0
