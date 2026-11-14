@@ -1,4 +1,5 @@
 deepagents==0.7.38
+langchain[mcp]==1.5.0
 langchain-xai==1.3.0
 python-dotenv==1.2.4
 eclipse-sumo==1.28.0
@@ -7,3 +8,4 @@ traci==1.28.0
 numpy==2.5.4
 scipy==1.18.1
 pyproj==3.8.0
+shapely==2.1.2

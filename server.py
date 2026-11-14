@@ -1,22 +1,23 @@
 """Serve Crossing Lab and its integrations on the local machine."""
 import json
-import math
 import mimetypes
 import os
 import re
-from collections import Counter
 from functools import cache, lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import BoundedSemaphore
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request, build_opener
 
 from dotenv import load_dotenv
-from designer import ChatError, Chats
+from designer import ChatError, Chats, street_bearings
 from investigations import Investigations, JobError
 from scenario import ScenarioError, Scenarios
+from sponsor_data import NoRedirect, SponsorError, nearby_properties, verified_scan
+from street_geometry import FEATURED_SITE, METERS_PER_DEGREE, lon_scale, street_stops
+from vexcel_scene import CESIUM, PREFIX, scene_resource
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -26,6 +27,7 @@ STATIC = {
     "/app.js": "app.js", "/data/la.json": "data/la.json", "/data/ccrs.json": "data/ccrs.json",
     "/investigator.js": "investigator.js", "/designer.js": "designer.js",
     "/emissions.js": "emissions.js", "/data/sim.json": "data/sim.json",
+    "/street-view.js": "street-view.js",
     "/vendor/leaflet.css": "vendor/leaflet.css",
     "/vendor/leaflet.js": "vendor/leaflet.js",
     "/vendor/leaflet-heat.js": "vendor/leaflet-heat.js",
@@ -37,7 +39,6 @@ MAX_IMAGE = 5 * 1024 * 1024
 EXPENSIVE_RUNS = BoundedSemaphore(2)
 TILE_RUNS = BoundedSemaphore(4)
 MAX_TILE = 512 * 1024
-COSTAR_RADIUS_M = 250
 
 
 class RequestError(Exception):
@@ -46,55 +47,10 @@ class RequestError(Exception):
         self.status = status
 
 
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-
 @cache
 def collision_sites():
     sites = json.loads((PUBLIC / "data/la.json").read_text())["sites"]
     return {site["name"]: site for site in sites}
-
-
-@cache
-def commercial_properties(directory):
-    root = Path(directory).expanduser()
-    types = json.loads((root / "schemas/enums.json").read_text())["PropertyType"]
-    properties = []
-    with (root / "data/commercial-property.jsonl").open(encoding="utf-8") as records:
-        for line in records:
-            record = json.loads(line)
-            address = record.get("primaryAddress") or {}
-            try:
-                lat = float(address["latitude"])
-                lon = float(address["longitude"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-                continue
-            label = types.get(str(record.get("propertyType")), "Unknown")
-            properties.append((lat, lon, label))
-    return properties
-
-
-def nearby_properties(site):
-    directory = os.getenv("COSTAR_KIT_DIR", "").strip()
-    if not directory:
-        raise RequestError(503, "Set COSTAR_KIT_DIR to the extracted CoStar kit.")
-    try:
-        properties = commercial_properties(directory)
-    except (OSError, KeyError, ValueError):
-        raise RequestError(503, "The CoStar property file or its type lookup could not be read.") from None
-    # Local distance approximation over a 250 m radius from the reported point.
-    meters_per_degree = math.pi * 6_371_000 / 180
-    lon_scale = math.cos(math.radians(site["lat"]))
-    counts = Counter(
-        label for lat, lon, label in properties
-        if meters_per_degree * math.hypot(lat - site["lat"], (lon - site["lon"]) * lon_scale)
-        <= COSTAR_RADIUS_M
-    )
-    return {"radius_m": COSTAR_RADIUS_M, "total": counts.total(), "types": dict(counts.most_common())}
 
 
 def vexcel_image(request, max_bytes=MAX_IMAGE):
@@ -147,9 +103,10 @@ def aerial_image(site):
     key = os.getenv("VEXCEL_API_KEY", "").strip()
     if not key:
         raise RequestError(503, "A Vexcel API key is required.")
+    # A square in local meters covers all approaches in the design workspace.
     lat, lon = site["lat"], site["lon"]
-    offset_lat = 90 / 111_195
-    offset_lon = offset_lat / math.cos(math.radians(lat))
+    offset_lat = 90 / METERS_PER_DEGREE
+    offset_lon = 90 / lon_scale(site)
     west, east, south, north = lon - offset_lon, lon + offset_lon, lat - offset_lat, lat + offset_lat
     corners = [(west, south), (east, south), (east, north), (west, north), (west, south)]
     polygon = ", ".join(f"{x:.7f} {y:.7f}" for x, y in corners)
@@ -166,15 +123,15 @@ def aerial_image(site):
 
 INVESTIGATIONS = Investigations(aerial_image)
 SCENARIOS = Scenarios()
-CHATS = Chats(aerial_image, lambda: list(collision_sites().values()), INVESTIGATIONS.latest_report)
+CHATS = Chats(aerial_image, lambda: list(collision_sites().values()), INVESTIGATIONS.latest_report, nearby_properties)
 
 
 class Handler(BaseHTTPRequestHandler):
-    def send_data(self, status, content_type, body):
+    def send_data(self, status, content_type, body, cache_control="no-store"):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache_control)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
@@ -186,15 +143,17 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("Host") in {f"127.0.0.1:{self.server.server_port}",
                                             f"localhost:{self.server.server_port}"}
 
+    def same_origin(self):
+        return (self.headers.get("Sec-Fetch-Site") in (None, "same-origin", "none")
+                and self.headers.get("Origin") in (None, f"http://{self.headers.get('Host')}"))
+
     def do_GET(self):
         if not self.local_request():
             self.send_error(404)
             return
         tile = re.fullmatch(r"/api/vexcel/tiles/(\d{1,2})/(\d{1,7})/(\d{1,7})\.jpg", self.path)
         if tile:
-            origin = self.headers.get("Origin")
-            if (self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
-                    or origin not in (None, f"http://{self.headers.get('Host')}")):
+            if not self.same_origin():
                 self.send_json(403, {"error": "Use the local Crossing Lab map."})
                 return
             try:
@@ -207,6 +166,31 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 self.log_error("Vexcel tile error (%s)", type(error).__name__)
                 self.send_json(502, {"error": "Vexcel imagery could not load. Try again shortly."})
+            return
+        path = urlsplit(self.path).path
+        if path.startswith(PREFIX):
+            if not self.same_origin():
+                self.send_json(403, {"error": "Use the local Crossing Lab street view."})
+                return
+            try:
+                content_type, data = scene_resource(path.removeprefix(PREFIX), urlsplit(self.path).query)
+                self.send_data(200, content_type, data)
+            except SponsorError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # Leaving street view may cancel an in-flight tile.
+            return
+        if path.startswith("/vendor/cesium/"):
+            relative = path.removeprefix("/vendor/cesium/")
+            target = (CESIUM / relative).resolve()
+            if not target.is_relative_to(CESIUM.resolve()) or not target.is_file():
+                self.send_error(404)
+                return
+            kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+            self.send_data(200, kind, target.read_bytes(), "public, max-age=86400")
+            return
+        if path == "/api/featured-site":
+            self.send_json(200, FEATURED_SITE)
             return
         if self.path not in STATIC:
             self.send_error(404)
@@ -229,7 +213,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError
         except (ValueError, UnicodeError):
             raise RequestError(400, "Select a valid intersection.") from None
-        site = collision_sites().get(payload["site"])
+        site = FEATURED_SITE if payload["site"] == FEATURED_SITE["name"] else collision_sites().get(payload["site"])
         if site is None:
             raise RequestError(400, "Select a valid intersection.")
         return site, payload
@@ -264,7 +248,7 @@ class Handler(BaseHTTPRequestHandler):
                 if id_ is not None and (not isinstance(id_, str) or not re.fullmatch(r"[a-f0-9]{32}", id_)):
                     raise RequestError(400, "Select a valid conversation.")
                 if self.path == "/api/chat":
-                    result = CHATS.send(site, id_, payload.get("message"))
+                    result = CHATS.send(site, id_, payload.get("message"), payload.get("constraints", []))
                 elif id_ is None:
                     raise RequestError(400, "Select a valid conversation.")
                 elif self.path == "/api/chat-state":
@@ -290,6 +274,18 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/costar":
                 self.send_json(200, nearby_properties(site))
                 return
+            if self.path == "/api/matterport":
+                model_id = payload.get("model_id")
+                if not isinstance(model_id, str) or not any(
+                    model_id == scan["id"] for prop in nearby_properties(site)["properties"] for scan in prop["scans"]
+                ):
+                    raise RequestError(404, "This scan is outside the selected property context.")
+                self.send_json(200, verified_scan(model_id))
+                return
+            if self.path == "/api/street-view":
+                bearings = street_bearings(site, list(collision_sites().values()) if not site.get("featured") else [])
+                self.send_json(200, {"tileset": PREFIX + "tileset", "stops": street_stops(site, bearings)})
+                return
             if self.path != "/api/vexcel":
                 raise RequestError(404, "Unknown feature.")
             if not EXPENSIVE_RUNS.acquire(blocking=False):
@@ -298,7 +294,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_data(200, "image/jpeg", aerial_image(site))
             finally:
                 EXPENSIVE_RUNS.release()
-        except (RequestError, JobError, ChatError, ScenarioError) as error:
+        except (RequestError, JobError, ChatError, ScenarioError, SponsorError) as error:
             self.send_json(error.status, {"error": str(error)})
         except FileNotFoundError:
             self.send_json(503, {"error": "Run python3 scripts/import_la.py to load LA collision totals."})

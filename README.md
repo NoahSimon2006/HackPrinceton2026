@@ -1,34 +1,43 @@
 # Crossing Lab
 
-Local intersection planning demo using historical collision reports for Central Los Angeles. Houston links to the H-GAC regional crash explorer.
+Traffic engineering copilot for early intersection redesign. Explore real streets, ask for a change, and compare the same concept on a Vexcel map and a navigable 3D street. The prototype opens at Olympic Boulevard and Wall Street in Los Angeles. The inherited Houston tab links to H-GAC's regional explorer.
 
 ## Run locally
 
-From the repository root, run:
+Use Python 3.12 and Node.js 22. From the repository root:
 
 ```sh
-python3 -m venv .venv
+python3.12 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
+npm ci
+.venv/bin/python scripts/import_la.py
+.venv/bin/python scripts/import_ccrs.py
 .venv/bin/python server.py
 ```
 
-If `public/data/la.json` is missing, run `.venv/bin/python scripts/import_la.py` to download the LA collision totals.
+Set the local credentials below before starting the server. Open [Crossing Lab](http://localhost:8000) in a WebGL-enabled browser. Vexcel, Matterport, and Grok requests require internet access. If a Python installation uses a separate certificate store, configure its trusted CA bundle before running the server and imports.
 
-Open [Crossing Lab](http://127.0.0.1:8000). The data import and aerial map tiles need internet access. The ranking and crossing comparison still work if map tiles are unavailable after the import.
+## Walk a revised design
+
+1. At the featured intersection, choose **Plant a corner** or send your own design request.
+2. Switch to **Street view**, then **Proposed**. Drag to look around. Use the on-screen arrows or W and S to move, and the keyboard arrow keys to look. Switching between existing and proposed keeps the same viewpoint.
+3. In **Aerial map**, choose **Mark keep-clear area** and click two corners around a driveway or proposed treatment. Choose **Ask Grok to revise**. The completed proposal gets a new version, with recalculated footprint, crossing width, and modeled tree-shade area. Overlapping physical treatments are rejected by the geometry tool so the agent can try a different position.
+4. Under **Nearby property access**, open the linked Matterport exterior and loading-dock scan at 510 E Olympic Boulevard. CoStar properties supply recorded use, parking and loading fields where known. The user confirms access footprints from imagery and scans.
+
+Vexcel's city mesh captures the existing street at aerial photogrammetry quality. The proposal is a 3D concept over that mesh. It uses the same projected geometry as the map. The shade figure is the projected footprint of the proposed tree crowns at 4 p.m. PDT on July 15, before overlap with existing shadows. It is not a temperature estimate. Crossing widths use concept dimensions, and keep-clear checks test footprint overlap. Vehicle swept paths, accessible clearances and right-of-way need separate verification.
 
 ## Credentials and data
 
-The collision rankings and walking-time comparison work without API keys. The main aerial map requires the configured Vexcel key. Add optional settings to the Git-ignored `.env`:
+Use `.env.example` as a template for the Git-ignored `.env`:
 
-- `COSTAR_KIT_DIR` points to the extracted kit. The app reads the commercial property JSONL and enum lookup from that folder, then shows counts by property type within 250 m of the selected crash point. This is coverage within the kit, not a full property inventory. An extracted kit does not need a ZIP password.
-- `VEXCEL_API_KEY` supplies the main, pannable aerial map and the optional close-up image button. The server authenticates requests to Vexcel; the browser never receives the key. No imagery is saved to disk.
-- `GROK_API_KEY` enables the planning brief. The app sends the public collision aggregate and calculated crossing comparison to xAI through LangChain Deep Agents when you request a brief. The model defaults to `grok-4.3` and can be overridden with `GROK_MODEL`. Review the brief against the evidence shown on the page.
+- `VEXCEL_API_KEY` supplies the orthomosaic, aerial extracts and street-level 3D mesh through the local server.
+- `GROK_API_KEY` enables design chat and investigation using LangChain Deep Agents. `GROK_MODEL` selects the model and defaults to `grok-4.7`.
+- `COSTAR_KIT_DIR` points to the extracted kit. The property context reads records within 250 m of the site, including links to relevant scan captions.
+- `MATTERPORT_API_KEY` and `MATTERPORT_API_TOKEN` verify access to a linked public Showcase model. The server sends only the verified URL to the browser.
 
-Start `server.py` for these features. It binds to your computer and serves only the app files and public collision totals. Keep the original kit outside the repository. Git ignores the local `.env`, data folders, and ZIP archives.
+The server binds to loopback. Credentials stay on the server. Git ignores `.env`, the CoStar kit, local data imports and ZIP archives.
 
 The [LA Open Data legacy collision dataset](https://data.lacity.org/Public-Safety/Traffic-Collision-Data-from-2010-to-Present/d5tf-ez2w/about_data) supplies the 2022–2023 Central reporting area extract. The import requests only date, streets, and coordinates. It writes ignored aggregates containing street pairs, representative coordinates, and annual totals. It skips missing or duplicate street names, missing or out-of-area coordinates, and street pairs with fewer than three reports across the two years. The app groups reports by normalized street pair, so different street spellings may appear separately. The map uses the most frequent reported point for each pair. The ranking uses raw counts. Severity and road-user mode are unavailable in this extract.
-
-The crossing comparison divides an assumed crossing length by an assumed walking speed. It does not estimate traffic delay, emissions, or crash reduction.
 
 ## Crash history
 

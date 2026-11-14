@@ -5,11 +5,16 @@
   const NS = 'http://www.w3.org/2000/svg';
   const chats = new Map();      // site name -> latest snapshot
   const shown = new Map();      // site name -> design version on display
-  let site = null, revision = 0, pollTimer, lastKey = '', overlay, overlayOn = false, overlayCenter = null, simTimer;
+  const constraints = new Map();
+  let site = null, revision = 0, pollTimer, lastKey = '', lastDesignKey, overlay, overlayOn = true, simTimer;
   const sims = new Map();       // chat id + design version -> re-simulation run
   const roles = {lead:'Lead designer', 'crash-analyst':'Crash analyst', 'site-analyst':'Site analyst', 'guidance-researcher':'Guidance researcher', 'traffic-analyst':'Traffic-flow analyst', 'follow-up':'Lead designer'};
-  const typeNames = {chicane:'Chicane (deliberate curves)', lane_reduction:'Lane reduction', roundabout:'Roundabout', median_refuge:'Median / refuge island', curb_extension:'Curb extensions', raised_crossing:'Raised crossing', high_visibility_crosswalk:'High-visibility crosswalk', speed_cushion:'Speed cushions', protected_left_turn:'Protected left turn', leading_pedestrian_interval:'Leading pedestrian interval', signal_visibility:'Signal visibility', lighting:'Lighting', daylighting:'Corner daylighting', protected_bike_lane:'Protected bike lane', hardened_centerline:'Hardened centreline', other:'Other change'};
-  const suggestions = ['What crash pattern stands out here, and what redesign would you try first?', 'Design something that makes drivers naturally slow down on the approaches.', 'Which approach idles and pollutes most here, why, and what would you change?'];
+  const typeNames = {chicane:'Chicane (deliberate curves)', lane_reduction:'Lane reduction', roundabout:'Roundabout', median_refuge:'Median / refuge island', curb_extension:'Curb extensions', planted_curb_extension:'Planted curb extension', raised_crossing:'Raised crossing', high_visibility_crosswalk:'High-visibility crosswalk', speed_cushion:'Speed cushions', protected_left_turn:'Protected left turn', leading_pedestrian_interval:'Leading pedestrian interval', signal_visibility:'Signal visibility', lighting:'Lighting', daylighting:'Corner daylighting', protected_bike_lane:'Protected bike lane', hardened_centerline:'Hardened centreline', other:'Other change'};
+  const suggestions = [
+    ['Plant a corner', 'Design one planted curb extension near a crossing. Keep existing through lanes and check nearby property loading access. Draw a specific proposal and compare pavement converted and crossing width.'],
+    ['Investigate crash patterns', 'What crash pattern stands out here, and what should I check on site?'],
+    ['Explore idling and emissions', 'What does the available traffic simulation show here?'],
+  ];
   const node = (tag, text, className) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (className) n.className = className; return n; };
   const svg = (tag, attrs, parent) => { const n = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v); parent?.append(n); return n; };
 
@@ -73,7 +78,11 @@
         if (has('speed_cushion', s.key)) svg('rect', {x:C + side * 92 - 3, y:C - s.lanes * lane / 2 + 1, width:6, height:s.lanes * lane - 2, rx:1.5, fill:'#e3b34c'}, g);
         if (has('protected_left_turn', s.key)) svg('text', {x:x + side * 20, y:C + side * (lane * .5) + 3.5, 'font-size':10, fill:'#fff', 'text-anchor':'middle', 'font-weight':700}, g).textContent = side < 0 ? '↰' : '↲';
         for (const edge of [-1, 1]) {
-          if (has('curb_extension', s.key)) svg('rect', {x:Math.min(x - side * 6, x + side * 12), y: edge < 0 ? top - 1 : top + s.curb - 6, width:18, height:7, rx:3, fill:walk, stroke:'#7d8a80', 'stroke-width':.7}, g);
+          const extension = proposed && design.elements.find(e => ['curb_extension','planted_curb_extension'].includes(e.type)
+            && (e.street === s.key || e.street === 'both') && (e.approach === 'both' || e.approach === (side > 0 ? 'positive' : 'negative'))
+            && (e.side === 'both' || e.side === (edge > 0 ? 'right' : 'left')));
+          if (extension) svg('rect', {x:Math.min(x - side * 6, x + side * 12), y: edge < 0 ? top - 1 : top + s.curb - 6, width:18, height:7, rx:3,
+            fill:extension.type === 'planted_curb_extension' ? '#7fbb86' : walk, stroke:'#7d8a80', 'stroke-width':.7}, g);
           if (has('daylighting', s.key)) svg('line', {x1:x + side * 6, x2:x + side * 28, y1:C + edge * s.half, y2:C + edge * s.half, stroke:'#d9534f', 'stroke-width':2.4}, g);
         }
       }
@@ -105,6 +114,7 @@
   function markerSpot(element, i, info, C) {
     const index = element.street === 'second' ? 1 : 0, s = info[index], o = info[1 - index];
     const spots = {chicane:[52, C - s.half - 24], lane_reduction:[250, C - s.half - 14], roundabout:[C, C], median_refuge:[78, C + s.half + 14], curb_extension:[C - o.half - 26, C - s.half - 14],
+      planted_curb_extension:[C + (element.approach === 'negative' ? -1 : 1) * (o.half + 17), C + (element.side === 'left' ? -1 : 1) * (s.half + 11)],
       raised_crossing:[C + o.half + 8, C + s.half + 16], high_visibility_crosswalk:[C + o.half + 8, C + s.half + 16], speed_cushion:[C + 92, C + s.half + 14], protected_left_turn:[C - o.half - 44, C + s.half + 14],
       leading_pedestrian_interval:[C - o.half - 46, C - s.half - 34], signal_visibility:[C + o.half + 46, C + s.half + 34], lighting:[C + o.half + 22, C - s.half - 22], daylighting:[C + o.half + 34, C - s.half - 12],
       protected_bike_lane:[222, C + s.half + 14], hardened_centerline:[C + o.half + 34, C + s.half + 14], other:[18 + i * 20, 286]};
@@ -113,65 +123,87 @@
     return [Math.max(10, Math.min(290, x)), Math.max(10, Math.min(290, y))];
   }
 
-  // ---------- Aerial overlay ----------
-  function drawOverlay(design, snapshot) {
-    overlay?.remove(); overlay = null;
-    if (!overlayOn || typeof map === 'undefined' || !map || !window.L) return;
-    overlay = L.layerGroup().addTo(map);
-    const centre = overlayCenter || snapshot.location, rad = Math.PI / 180;
-    const streets = streetsOf(design).map(s => ({...s, bearing:snapshot.bearings[s.key], half:Math.max(s.before, s.after) * 3.3 / 2 + 1}));
-    const at = (street, along, lateral) => {
-      const b = street.bearing * rad, east = along * Math.sin(b) + lateral * Math.cos(b), north = along * Math.cos(b) - lateral * Math.sin(b);
-      return [centre.lat + north / 111195, centre.lon + east / (111195 * Math.cos(centre.lat * rad))];
-    };
-    const box = (s, a1, a2, l1, l2, style) => L.polygon([at(s, a1, l1), at(s, a2, l1), at(s, a2, l2), at(s, a1, l2)], {weight:1, color:'#fff', fillOpacity:.85, interactive:false, ...style}).addTo(overlay);
-    const line = (points, style) => L.polyline(points, {interactive:false, ...style}).addTo(overlay);
-    const range = (a, b, step) => { const out = []; for (let v = a; v <= b; v += step) out.push(v); return out; };
-    design.elements.forEach((element, i) => {
-      const targets = streets.filter(s => element.street === 'both' || s.key === element.street);
-      let anchor = null;
-      targets.forEach(s => {
-        const o = streets.find(x => x !== s), start = o.half + 4;
-        for (const side of [-1, 1]) {
-          const A = (v) => side * v;
-          switch (element.type) {
-            case 'chicane':
-              for (const edge of [-1, 0, 1]) line(range(start + 8, start + 92, 3).map(a => at(s, A(a), edge * (s.half - 1.5) + 3.4 * Math.sin((a - start - 8) / 84 * 2 * Math.PI))), {color: edge ? '#ffd23f' : '#fff', weight: edge ? 4 : 2, opacity:.95, dashArray: edge ? null : '6 8'});
-              anchor ??= at(s, A(start + 30), s.half + 5); break;
-            case 'lane_reduction': {
-              const edge = s.after * 3.3 / 2;
-              for (const t of [-1, 1]) { line([at(s, A(start), t * edge), at(s, A(125), t * edge)], {color:'#7df0a0', weight:3, dashArray:'10 6'}); box(s, A(start), A(125), t * edge, t * (s.half - .5), {fillColor:'#58d68d', fillOpacity:.35, weight:0}); }
-              anchor ??= at(s, A(70), s.half + 5); break; }
-            case 'protected_bike_lane':
-              for (const t of [-1, 1]) box(s, A(start), A(125), t * (s.half - 2.4), t * (s.half - .4), {fillColor:'#35c46a', fillOpacity:.75, weight:0});
-              anchor ??= at(s, A(90), -(s.half + 5)); break;
-            case 'median_refuge': box(s, A(start + 5), A(start + 42), -1.3, 1.3, {fillColor:'#6fcf7f'}); anchor ??= at(s, A(start + 24), 6); break;
-            case 'raised_crossing': box(s, A(start - 2), A(start + 3), -s.half, s.half, {fillColor:'#e0a14f'}); anchor ??= at(s, A(start + 1), s.half + 5); break;
-            case 'high_visibility_crosswalk': box(s, A(start - 2), A(start + 2.5), -s.half, s.half, {fillColor:'#fff', fillOpacity:.8, color:'#234538', dashArray:'3 3'}); anchor ??= at(s, A(start + 1), s.half + 5); break;
-            case 'speed_cushion': box(s, A(start + 55), A(start + 58.5), -(s.half - 1.5), s.half - 1.5, {fillColor:'#f2b632'}); anchor ??= at(s, A(start + 57), s.half + 5); break;
-            case 'hardened_centerline': line([at(s, A(start + 3), 0), at(s, A(start + 24), 0)], {color:'#ffd23f', weight:5, dashArray:'4 4'}); anchor ??= at(s, A(start + 14), 5); break;
-            case 'curb_extension': for (const t of [-1, 1]) box(s, A(start - 3), A(start + 6), t * (s.half - 2.6), t * (s.half + .3), {fillColor:'#f4f1de'}); anchor ??= at(s, A(start + 2), s.half + 6); break;
-            case 'daylighting': for (const t of [-1, 1]) line([at(s, A(start), t * s.half), at(s, A(start + 10), t * s.half)], {color:'#ff5a4f', weight:5}); anchor ??= at(s, A(start + 5), -(s.half + 6)); break;
-            case 'lighting': for (const t of [-1, 1]) L.circleMarker(at(s, A(o.half + 2), t * (s.half + 2)), {radius:6, color:'#fff', weight:1, fillColor:'#ffd23f', fillOpacity:1, interactive:false}).addTo(overlay); anchor ??= at(s, A(o.half + 8), s.half + 8); break;
-            case 'roundabout': break;
-            default: anchor ??= at(s, A(start + 12 + i * 3), -(s.half + 7));
-          }
-        }
-      });
-      if (element.type === 'roundabout') {
-        const r = Math.max(...streets.map(s => s.half)) + 7;
-        L.circle([centre.lat, centre.lon], {radius:r, color:'#fff', weight:3, fillColor:'#59615e', fillOpacity:.75, interactive:false}).addTo(overlay);
-        L.circle([centre.lat, centre.lon], {radius:r * .45, color:'#fff', weight:2, fillColor:'#6fcf7f', fillOpacity:.95, interactive:false}).addTo(overlay);
-        anchor = at(streets[0], r + 4, r + 4);
-      }
-      const label = node('span', `${i + 1}. ${element.label}`);
-      L.marker(anchor || [centre.lat, centre.lon], {icon:L.divIcon({className:'design-pin', html:String(i + 1), iconSize:[22, 22]}), keyboard:false}).bindTooltip(label).addTo(overlay);
-    });
-    const handle = L.marker([centre.lat, centre.lon], {draggable:true, icon:L.divIcon({className:'design-handle', html:'✥', iconSize:[26, 26]}), title:'Drag to line the overlay up with the junction'}).addTo(overlay);
-    handle.on('dragend', () => { const p = handle.getLatLng(); overlayCenter = {lat:p.lat, lon:p.lng}; drawOverlay(design, snapshot); });
+  // Both views use the GeoJSON generated and measured by the design tool.
+  function drawOverlay(design) {
+    overlay?.remove();
+    overlay = null;
+    if (!overlayOn || !design?.geometry?.features.length || !map) return;
+    const colors = { planted:'#71ab5d', concrete:'#eadfc5', marking:'#fffbec',
+      amber:'#ffd066', bike:'#68c977', reallocated:'#87a59a', shade:'#4966a6' };
+    overlay = L.geoJSON(design.geometry, {
+      style: feature => ({ color: '#20362b', weight: 1.2, fillOpacity: feature.properties.kind === 'shade' ? .46 : .87,
+        fillColor: colors[feature.properties.kind], interactive: false }),
+      pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 4, color: '#f2f9df', weight: 1.4,
+        fillColor: feature.properties.kind === 'tree' ? '#37734a' : '#ffc65d', fillOpacity: 1 }),
+      onEachFeature: (feature, layer) => layer.bindTooltip(node('span', feature.properties.label)),
+    }).addTo(map);
   }
 
-  // ---------- Rendering ----------
+  function renderMetrics(design) {
+    const list = el('design-metrics');
+    list.replaceChildren();
+    const metrics = design?.geometry?.metrics;
+    list.hidden = !metrics;
+    if (!metrics) return;
+    const crossing = metrics.crossings.reduce((best, next) =>
+      !best || next.before_m - next.after_m > best.before_m - best.after_m ? next : best, null);
+    const entries = [['Pavement converted', `${metrics.converted_m2} m²`], ['Concept trees', String(metrics.trees)]];
+    if (metrics.modeled_tree_shade_m2) entries.push(['Modeled tree shade · 4 p.m.', `${metrics.modeled_tree_shade_m2} m²`]);
+    if (crossing) entries.unshift(['Crossing width at treatment', `${crossing.before_m} → ${crossing.after_m} m`]);
+    for (const [label, value] of entries) {
+      const item = node('div');
+      item.append(node('dt', label), node('dd', value));
+      list.append(item);
+    }
+  }
+
+  let areaStart = null, drawingArea = false, keepClearLayer;
+  function areas() { return site ? (constraints.get(site.name) || []) : []; }
+  function redrawAreas() {
+    keepClearLayer?.remove();
+    keepClearLayer = null;
+    if (!site || !map) return;
+    keepClearLayer = L.layerGroup().addTo(map);
+    for (const [index, [west, south, east, north]] of areas().entries()) {
+      L.rectangle([[south, west], [north, east]], { color:'#f9b64b', fillOpacity:.22, weight:2.5, dashArray:'6 4', interactive:false }).addTo(keepClearLayer);
+      L.marker([(south+north)/2, (west+east)/2], { keyboard:false, interactive:false,
+        icon:L.divIcon({className:'keep-clear-pin', html:String(index+1), iconSize:[20,20]}) }).addTo(keepClearLayer);
+    }
+    if (areaStart) L.circleMarker(areaStart, { radius:5, color:'#ffe28b', interactive:false }).addTo(keepClearLayer);
+  }
+  function updateDrawing(message = '') {
+    const onStreet = window.streetView.isOpen();
+    const count = areas().length;
+    const snapshot = chats.get(site?.name);
+    el('mark-area').disabled = !site || !map || onStreet;
+    el('mark-area').setAttribute('aria-pressed', String(drawingArea));
+    el('mark-area').textContent = drawingArea ? 'Cancel marking' : 'Mark keep-clear area';
+    el('constraint-bar').hidden = !site || onStreet || !(drawingArea || count || message);
+    el('constraint-status').textContent = message || (drawingArea
+      ? (areaStart ? 'Click the opposite corner.' : 'Click the first corner of the keep-clear area.')
+      : `${count} keep-clear ${count === 1 ? 'area' : 'areas'} marked`);
+    el('undo-area').disabled = !count;
+    el('revise-areas').disabled = !count || !!snapshot?.running;
+    redrawAreas();
+  }
+  function clearDrawing() { areaStart = null; drawingArea = false; }
+  function addArea(event) {
+    if (!site || !drawingArea) return;
+    if (!areaStart) { areaStart = event.latlng; updateDrawing(); return; }
+    const {lat, lng} = event.latlng;
+    const bounds = [Math.min(areaStart.lng, lng), Math.min(areaStart.lat, lat),
+      Math.max(areaStart.lng, lng), Math.max(areaStart.lat, lat)];
+    clearDrawing();
+    if (bounds[2] - bounds[0] < .000008 || bounds[3] - bounds[1] < .000008) {
+      updateDrawing('Mark two corners at least one meter apart.'); return;
+    }
+    if (bounds.some((value, i) => Math.abs(value - (i % 2 ? site.lat : site.lon)) * (i % 2 ? 111195 : 111195 * Math.cos(site.lat * Math.PI / 180)) > 170)) {
+      updateDrawing('Keep-clear areas must be within 170 m of the intersection.'); return;
+    }
+    constraints.set(site.name, [...areas(), bounds]);
+    updateDrawing();
+  }
+
   function currentDesign(snapshot) {
     if (!snapshot?.designs.length) return null;
     const version = shown.get(snapshot.site) ?? snapshot.designs.at(-1).version;
@@ -180,7 +212,10 @@
   function renderDesign(snapshot) {
     const design = currentDesign(snapshot), panel = el('design-panel');
     el('design-empty').hidden = !!design; panel.hidden = !design;
-    if (!design) { overlay?.remove(); overlay = null; return; }
+    const key = design ? `${snapshot.id}:${snapshot.designs.length}:${design.version}:${overlayOn}` : null;
+    if (key === lastDesignKey) return;
+    lastDesignKey = key;
+    if (!design) { overlay?.remove(); overlay = null; window.streetView.design(null); renderMetrics(null); return; }
     design.siteName = snapshot.site;
     const versions = el('design-versions'); versions.replaceChildren();
     if (snapshot.designs.length > 1) snapshot.designs.forEach(d => {
@@ -208,8 +243,11 @@
     });
     el('design-overlay').textContent = overlayOn ? 'Hide from aerial map' : 'Show on aerial map';
     el('design-overlay-note').hidden = !overlayOn;
-    el('design-overlay-note').textContent = `Approximate placement: street angles are ${snapshot.bearings.basis}, widths are illustrative, and the map point may sit off the junction. Drag the ✥ handle to line it up.`;
-    drawOverlay(design, snapshot);
+    el('design-overlay-note').textContent = `Concept geometry. Orientations use ${snapshot.bearings.basis}. Verify widths and access in the field.`;
+    drawOverlay(design);
+    window.streetView.design(design.geometry, `${snapshot.id}:${design.version}`);
+    el('walk-design').disabled = !design.geometry?.features.length;
+    renderMetrics(design);
     renderSim(snapshot, design);
   }
   // ---------- Re-simulation of a design ----------
@@ -258,6 +296,7 @@
     const log = el('chat-log');
     el('chat-suggestions').hidden = !!snapshot?.messages.length;
     el('chat-send').disabled = !!snapshot?.running; el('chat-cancel').hidden = !snapshot?.running;
+    el('revise-areas').disabled = !areas().length || !!snapshot?.running;
     if (key !== lastKey) {
       lastKey = key; log.replaceChildren();
       (snapshot?.messages || []).forEach(m => {
@@ -289,31 +328,36 @@
     }, 1500);
   }
   async function send(text) {
-    if (!site || !text.trim()) return;
+    if (!site || !text.trim() || el('chat-send').disabled) return;
     const token = revision, previous = chats.get(site.name);
     el('chat-send').disabled = true; el('chat-status').textContent = '';
+    el('revise-areas').disabled = true;
+    el('chat-status').textContent = 'Sending the request…';
     try {
-      const next = await api('chat', {message:text.trim(), ...(previous ? {chat_id:previous.id} : {})});
+      const next = await api('chat', {message:text.trim(), constraints:areas(), ...(previous ? {chat_id:previous.id} : {})});
       chats.set(next.site, next);
-      if (token === revision) { el('chat-input').value = ''; render(next); schedule(next, token); }
+      if (token === revision) { el('chat-input').value = ''; el('chat-status').textContent = ''; render(next); schedule(next, token); }
     } catch (error) {
       if (token !== revision) return;
       if (/expired/.test(error.message)) chats.delete(site.name);
       el('chat-status').textContent = error.message; el('chat-send').disabled = false;
+      el('revise-areas').disabled = !areas().length;
     }
   }
   window.designSelect = (next) => {
     if (site?.name === next?.name) return;
-    site = next; revision++; clearTimeout(pollTimer); lastKey = ''; overlayCenter = null;
+    site = next; revision++; clearTimeout(pollTimer); lastKey = ''; clearDrawing();
     el('designer').hidden = !site;
+    el('chat-sidebar').hidden = !site;
     overlay?.remove(); overlay = null;
-    if (!site) return;
+    updateDrawing();
+    if (!site) { renderMetrics(null); return; }
     el('chat-site').textContent = site.name; el('chat-status').textContent = ''; el('chat-input').value = '';
     const snapshot = chats.get(site.name);
     render(snapshot); if (snapshot) schedule(snapshot, revision);
   };
   const chips = el('chat-suggestions');
-  suggestions.forEach(text => { const b = node('button', text, 'chip'); b.type = 'button'; b.addEventListener('click', () => send(text)); chips.append(b); });
+  suggestions.forEach(([label, text]) => { const b = node('button', label, 'chip'); b.type = 'button'; b.addEventListener('click', () => send(text)); chips.append(b); });
   el('chat-form').addEventListener('submit', (event) => { event.preventDefault(); send(el('chat-input').value); });
   el('chat-input').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); el('chat-form').requestSubmit(); } });
   el('chat-cancel').addEventListener('click', async () => {
@@ -324,8 +368,27 @@
     overlayOn = !overlayOn;
     const snapshot = chats.get(site?.name); if (!snapshot) return;
     renderDesign(snapshot);
-    if (overlayOn && typeof map !== 'undefined' && map) { map.stop(); map.flyTo([snapshot.location.lat, snapshot.location.lon], 19, {duration:.6}); el('map').scrollIntoView({block:'center', behavior:'smooth'}); }
+    if (overlayOn && map) { el('view-aerial').click(); map.stop(); map.flyTo([snapshot.location.lat, snapshot.location.lon], 19, {duration:.6}); el('map').scrollIntoView({block:'center', behavior:'smooth'}); }
   });
+  el('walk-design').addEventListener('click', () => {
+    void window.streetView.show(true);
+    el('street-frame').scrollIntoView({block:'center', behavior:'smooth'});
+  });
+  el('mark-area').addEventListener('click', () => {
+    if (drawingArea) { clearDrawing(); updateDrawing(); return; }
+    if (areas().length >= 8) { updateDrawing('Remove an area before marking another.'); return; }
+    drawingArea = true;
+    if (map.getZoom() < 18) map.setView([site.lat, site.lon], 19);
+    updateDrawing();
+  });
+  el('undo-area').addEventListener('click', () => {
+    if (!site) return;
+    constraints.set(site.name, areas().slice(0, -1));
+    updateDrawing();
+  });
+  el('revise-areas').addEventListener('click', () => send('Revise the current proposal to keep all marked areas clear. Keep the greenery goal and show what changed. If there is no current proposal, draw one respecting the marked areas.'));
+  document.addEventListener('streetviewchange', () => { clearDrawing(); updateDrawing(); });
+  map?.on('click', addArea);
   el('design-simulate').addEventListener('click', async () => {
     const snapshot = chats.get(site?.name), design = currentDesign(snapshot), token = revision; if (!design) return;
     const key = simKey(snapshot, design);

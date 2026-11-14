@@ -48,7 +48,7 @@ class Investigations:
         if not key:
             raise JobError(503, "Add the Grok key to the local .env and restart the server.")
         evidence = build_evidence(site)
-        model = os.getenv("GROK_MODEL") or "grok-4.3"
+        model = os.getenv("GROK_MODEL") or "grok-4.7"
         cache_key = fingerprint([site["name"], evidence["source_version"], model, PROMPT_VERSION, GUIDANCE])
         with self.lock:
             self._prune()

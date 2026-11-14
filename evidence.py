@@ -210,6 +210,9 @@ def build_evidence(site, path=None):
     sources["E-location"] = {"id": "E-location", "kind": "context", "title": "Location and evidence limits",
         "text": "Street-name matches may be ambiguous. Junction screening uses reported offsets, not surveyed crash coordinates. The aerial center is a representative historical LAPD point. Traffic volumes, speed measurements, signal timing, and surveyed widths are unavailable. No cause or risk per trip is established.",
         "url": CHP_URL}
+    if site.get("featured"):
+        sources["E-location"]["text"] = ("The junction center is from City of Los Angeles street centerlines. "
+            "Street-name crash matches may be ambiguous. Traffic volumes, signal timing and surveyed widths are unavailable.")
     return {"site": {k: site[k] for k in ("name", "lat", "lon")}, "period": "2023–2024",
             "records": records, "sources": sources, "near_ft": data["near_ft"],
             "source_version": fingerprint(data), "retrieved_at": data.get("retrieved_at", "Legacy import; retrieval time unavailable"),

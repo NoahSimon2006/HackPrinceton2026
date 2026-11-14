@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
+FEATURED_INTERSECTION = "OLYMPIC BL & WALL ST"
 DATA = ROOT / "public/data"
 API = "https://publish.data.ca.gov/api/3/action/datastore_search_sql"
 RESOURCES = {
@@ -88,6 +89,8 @@ def fetch_year(item):
 
 def main():
     sites = json.loads((DATA / "la.json").read_text())["sites"]
+    # The street design showcase is independent of the historical LAPD ranking.
+    sites = [*sites, {"name": FEATURED_INTERSECTION}]
     street_pairs = {}
     for site in sites:
         streets = site["name"].split(" & ")

@@ -3,9 +3,12 @@ const format = new Intl.NumberFormat("en-US");
 const rows = new Map();
 let map;
 let selectedPin;
+let propertyMarkers;
 let sites = [];
 let selected = null;
 let dataset;
+let featuredSite;
+let selectedByUser = false;
 let siteRequest;
 let aerialUrl;
 let crashData;
@@ -118,6 +121,7 @@ function select(site, zoom = false) {
   const changed = selected !== site;
   selected = site;
   get("map-selected").disabled = !map || !site;
+  get("map-title").textContent = site?.featured ? "Olympic Boulevard & Wall Street" : (site?.name || "Central Los Angeles");
   get("map-selection").textContent = site ? site.name : "No intersection selected";
   if (changed) showSponsorContext(site);
   resetBrief();
@@ -141,11 +145,15 @@ function select(site, zoom = false) {
   }
   const year = get("year").value;
   const reports = count(site, year);
-  get("evidence").textContent = `${site.name} recorded ${format.format(reports)} collision ${reports === 1 ? "report" : "reports"} in ${year === "all" ? "2022–2023" : year}.`;
+  get("evidence").textContent = site.featured
+    ? "Featured design site · located from City of Los Angeles street centerlines. It is outside the ranked LAPD summary."
+    : `${site.name} recorded ${format.format(reports)} collision ${reports === 1 ? "report" : "reports"} in ${year === "all" ? "2022–2023" : year}.`;
   link.href = `https://www.openstreetmap.org/#map=18/${site.lat}/${site.lon}`;
   if (zoom && map) {
+    if (window.streetView?.isOpen()) get("view-aerial").click();
     map.stop();
-    map.flyTo([site.lat, site.lon], Math.max(map.getZoom(), 16), { duration: .65, animate: !reducedMotion.matches });
+    if (site.featured) map.setView([site.lat, site.lon], Math.max(map.getZoom(), 19), { animate: false });
+    else map.flyTo([site.lat, site.lon], Math.max(map.getZoom(), 16), { duration: .65, animate: !reducedMotion.matches });
   }
 }
 
@@ -167,7 +175,7 @@ function render() {
     number.textContent = format.format(total);
     button.type = "button";
     button.append(name, number);
-    button.addEventListener("click", () => select(site, true));
+    button.addEventListener("click", () => { selectedByUser = true; select(site, true); });
     row.append(button);
     get("ranking").append(row);
     rows.set(site, button);
@@ -175,7 +183,7 @@ function render() {
   get("status").textContent = ranked.length
     ? `${format.format(ranked.length)} matches · ${format.format(dataset.excluded)} reports excluded from the full extract`
     : "No intersections match these filters.";
-  const next = rows.has(selected) ? selected : ranked[0]?.site ?? null;
+  const next = selected?.featured && !terms.some(Boolean) ? selected : (rows.has(selected) ? selected : ranked[0]?.site ?? null);
   updateMapLayers(ranked);
   select(next);
 }
@@ -196,9 +204,22 @@ fetch("data/la.json").then((response) => {
   dataset = data;
   sites = data.sites;
   render();
-  showOverview();
 }).catch(() => {
   get("status").textContent = "Collision totals are unavailable. Run python3 scripts/import_la.py from the project folder, then reload.";
+});
+fetch("/api/featured-site").then(async (response) => {
+  if (!response.ok) throw new Error("Featured site unavailable");
+  featuredSite = await response.json();
+  get("featured-site").hidden = false;
+  if (!selectedByUser && !get("search").value.trim() && get("city").value === "la") select(featuredSite, true);
+}).catch((error) => { get("map-selection").textContent = error.message; });
+get("featured-site").addEventListener("click", () => {
+  selectedByUser = true;
+  get("city").value = "la";
+  get("city").dispatchEvent(new Event("change"));
+  get("search").value = "";
+  select(featuredSite, true);
+  render();
 });
 
 async function requestContext(feature, site, options = {}) {
@@ -227,25 +248,75 @@ async function showSponsorContext(site) {
   aerialUrl = undefined;
   get("aerial-status").textContent = "";
   get("load-aerial").disabled = false;
-  get("costar-types").replaceChildren();
+  get("costar-properties").replaceChildren();
+  propertyMarkers?.remove();
+  propertyMarkers = map ? L.layerGroup().addTo(map) : null;
   if (!site) return;
 
-  get("costar-status").textContent = "Loading property counts…";
+  get("costar-status").textContent = "Reading nearby CoStar records…";
   try {
-    const { total, types } = await requestContext("costar", site, { signal });
+    const { total, properties } = await requestContext("costar", site, { signal });
     if (signal.aborted) return;
     get("costar-status").textContent = total
       ? `${format.format(total)} ${total === 1 ? "property" : "properties"} in the kit near this intersection.`
       : "The CoStar kit has no geocoded commercial properties within this radius.";
-    for (const [type, count] of Object.entries(types)) {
-      const item = document.createElement("li");
-      item.textContent = `${type} · ${format.format(count)}`;
-      get("costar-types").append(item);
+    for (const property of properties) {
+      const item = document.createElement("article");
+      const title = document.createElement("h4");
+      title.textContent = property.address;
+      const facts = document.createElement("p");
+      facts.className = "note";
+      const fields = [["surface parking spaces", property.surface_spaces], ["external docks", property.loading_docks], ["drive-in bays", property.drive_in_bays]];
+      facts.textContent = [property.use, `${property.distance_m} m from junction`, ...fields.filter(([, value]) => value !== null).map(([label, value]) => `${value} recorded ${label}`)].join(" · ");
+      item.append(title, facts);
+      for (const scan of property.scans.slice(0, 2)) {
+        const view = document.createElement("button");
+        view.type = "button";
+        view.className = "property-scan";
+        view.textContent = `Open Matterport · ${scan.label}`;
+        view.addEventListener("click", () => openScan(site, scan));
+        item.append(view);
+      }
+      get("costar-properties").append(item);
+      if (property.scans.length && propertyMarkers) {
+        const label = document.createElement("span");
+        label.textContent = `${property.address} · Matterport`;
+        L.marker([property.lat, property.lon], {
+          icon: L.divIcon({ className: "property-pin", html: '<span aria-hidden="true">↗</span>', iconSize: [25, 25] }),
+          title: `Open property scan at ${property.address}`,
+        }).bindTooltip(label).on("click", () => openScan(site, property.scans[0])).addTo(propertyMarkers);
+      }
     }
   } catch (error) {
     if (!signal.aborted) get("costar-status").textContent = error.message;
   }
 }
+
+let scanRequest;
+async function openScan(site, scan) {
+  scanRequest?.abort();
+  const signal = (scanRequest = new AbortController()).signal;
+  const dialog = get("scan-dialog"), frame = get("scan-frame"), status = get("scan-status");
+  get("scan-title").textContent = scan.label;
+  status.textContent = "Verifying Matterport access…";
+  if (!dialog.open) dialog.showModal();
+  try {
+    const result = await requestContext("matterport", site, { signal, model_id: scan.id });
+    if (signal.aborted) return;
+    frame.src = result.url;
+    frame.hidden = false;
+    status.textContent = "Existing conditions · Matterport capture";
+  } catch (error) {
+    if (!signal.aborted) status.textContent = error.message;
+  }
+}
+get("scan-close").addEventListener("click", () => get("scan-dialog").close());
+get("scan-dialog").addEventListener("close", () => {
+  scanRequest?.abort();
+  const frame = get("scan-frame");
+  frame.removeAttribute("src");
+  frame.hidden = true;
+});
 
 get("load-aerial").addEventListener("click", async () => {
   if (!selected) return;
@@ -269,6 +340,7 @@ get("load-aerial").addEventListener("click", async () => {
 
 function resetBrief() {
   window.investigationSelect?.(get("city").value === "la" ? selected : null);
+  window.streetView?.select(get("city").value === "la" ? selected : null);
   window.designSelect?.(get("city").value === "la" ? selected : null);
 }
 
