@@ -4,8 +4,9 @@ const HOME_ZOOM = 13;
 const MIN_ZOOM = 10;
 const ZOOM_STEP = .125;
 const MIN_PROPERTY_ZOOM = 15;
-const map = L.map("map", { minZoom: MIN_ZOOM, maxZoom: 20, zoomSnap: ZOOM_STEP, zoomDelta: .5,
-  zoomControl: false, scrollWheelZoom: true, wheelPxPerZoomLevel: 120, inertia: false }).setView(HOME, HOME_ZOOM);
+const map = L.map("map", { minZoom: MIN_ZOOM, maxZoom: 20, zoomSnap: 0, zoomDelta: .5,
+  preferCanvas: true,
+  zoomControl: false, scrollWheelZoom: false, inertia: false }).setView(HOME, HOME_ZOOM);
 const mapDrag = map.dragging._draggable;
 map.dragging.disable();
 L.control.zoom({ position: "topright" }).addTo(map);
@@ -21,6 +22,22 @@ const labels = L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/servic
   attribution: 'Labels © Esri, HERE, Garmin, © OpenStreetMap contributors'
 });
 const propertyLayer = L.layerGroup().addTo(map);
+map.createPane("emissions");
+map.getPane("emissions").style.zIndex = 430;
+const emissionRenderer = L.canvas({ pane: "emissions", padding: .5 });
+const emissionsLayer = L.layerGroup();
+let emissionsData = null;
+let emissionsRequest = null;
+let emissionsError = null;
+let emissionLines = new Map();
+let selectedRoad = null;
+let selectedLine = null;
+let plannerActive = false;
+let planningMode = "emissions";
+function emissionsActive() { return plannerActive && planningMode === "emissions"; }
+let activePeriod = "midday";
+let activeMetric = "co2";
+let colorThresholds = [];
 let coverage = null;
 let footprints = [];
 let lastAllowed = map.getCenter();
@@ -115,6 +132,89 @@ function moveInsideCoverage(center, delta, allowed) {
   }
   return center.add(delta);
 }
+
+function installSmoothWheelZoom() {
+  // Leaflet 1.9.4's wheel handler batches input into discrete zoom operations.
+  // Use its continuous pinch movement path so tiles and the emissions canvas
+  // share the same transform; commit zoomend/moveend once the gesture settles.
+  const container = map.getContainer();
+  let frame = null;
+  let active = false;
+  let internalMove = false;
+  let targetZoom, anchor, pointer, previousTime, lastInput;
+  const clamp = (zoom) => Math.min(map.getMaxZoom(), Math.max(map.getMinZoom(), zoom));
+
+  function finish() {
+    if (frame !== null) cancelAnimationFrame(frame);
+    frame = null;
+    if (!active) return;
+    active = false;
+    map._moveEnd(true);
+  }
+
+  function animate(now) {
+    frame = null;
+    if (!active) return;
+    const elapsed = Math.min(64, Math.max(1, now - previousTime));
+    previousTime = now;
+    targetZoom = clamp(targetZoom);
+    const current = map.getZoom();
+    const remaining = targetZoom - current;
+    const zoom = Math.abs(remaining) < .0001 ? targetZoom :
+      current + remaining * (1 - Math.exp(-elapsed / 65));
+    const offset = pointer.subtract(map.getSize().divideBy(2));
+    let center = map.project(anchor, zoom).subtract(offset);
+    if (coverage) {
+      const samples = viewportSamples();
+      const allowed = (position) => coversView(position, zoom, samples);
+      if (!allowed(center)) {
+        const previous = map.project(map.getCenter(), zoom);
+        if (!allowed(previous)) {
+          // Stop at the imagery boundary without snapping back across the city.
+          targetZoom = current;
+          finish();
+          return;
+        }
+        center = moveInsideCoverage(previous, center.subtract(previous), allowed);
+      }
+    }
+    internalMove = true;
+    map._move(map.unproject(center, zoom), zoom, { pinch: true, round: false });
+    internalMove = false;
+    if (zoom === targetZoom && now - lastInput > 100) finish();
+    else frame = requestAnimationFrame(animate);
+  }
+
+  container.addEventListener("wheel", (event) => {
+    if (event.target.closest(".leaflet-control, .leaflet-popup")) return;
+    event.preventDefault();
+    if (!event.deltaY || map._animatingZoom) return;
+    const now = performance.now();
+    if (!active) {
+      map.stop();
+      targetZoom = map.getZoom();
+      previousTime = now;
+      active = true;
+      internalMove = true;
+      map._moveStart(true, false);
+      internalMove = false;
+    }
+    pointer = map.mouseEventToContainerPoint(event);
+    anchor = map.containerPointToLatLng(pointer);
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? map.getSize().y : 1;
+    // Preserve small trackpad deltas; cap large mouse-wheel ticks to avoid jumps.
+    const pixels = Math.max(-120, Math.min(120, event.deltaY * unit * (event.ctrlKey ? 3 : 1)));
+    targetZoom = clamp(targetZoom - pixels / 300);
+    lastInput = now;
+    if (frame === null) frame = requestAnimationFrame(animate);
+  }, { passive: false });
+  container.addEventListener("pointerdown", finish);
+  container.addEventListener("keydown", finish);
+  window.addEventListener("blur", finish);
+  map.on("movestart zoomstart", () => { if (!internalMove) finish(); });
+}
+
+installSmoothWheelZoom();
 
 let previousDragPosition;
 map.on("dragstart", () => {
@@ -333,9 +433,197 @@ imagery.on("tileerror", () => {
 imagery.on("tileload", () => { if (tileFailures) tileFailures = 0; });
 $("labels").addEventListener("change", (event) => event.target.checked ? labels.addTo(map) : labels.remove());
 $("properties").addEventListener("change", updateProperties);
+$("emissions-layer").addEventListener("change", () => {
+  if (emissionsActive() && $("emissions-layer").checked) loadEmissions();
+  syncEmissionsVisibility();
+});
+$("retry-emissions").addEventListener("click", loadEmissions);
 $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(search, 220); });
-$("reset").addEventListener("click", () => map.setView(HOME, HOME_ZOOM));
+$("reset").addEventListener("click", () => emissionsActive() && emissionsData ?
+  map.fitBounds([[emissionsData.bbox[1], emissionsData.bbox[0]], [emissionsData.bbox[3], emissionsData.bbox[2]]],
+    { padding: [35, 35], maxZoom: 14 }) : map.setView(HOME, HOME_ZOOM));
+
+const ROAD_COLORS = ["#7bdec0", "#b8d878", "#f5bb5d", "#ed7757", "#bd354e"];
+const integer = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+function roadValue(road) { return road.periods[activePeriod][activeMetric === "co2" ? "co2_kg_h" : "nox_g_h"]; }
+function quantile(values, fraction) {
+  return values[Math.min(values.length - 1, Math.floor((values.length - 1) * fraction))] || 0;
+}
+function roadColor(value) {
+  for (let index = 0; index < colorThresholds.length; index++) {
+    if (value <= colorThresholds[index]) return ROAD_COLORS[index];
+  }
+  return ROAD_COLORS.at(-1);
+}
+function updateInspector() {
+  if (!selectedRoad || !emissionsActive()) { $("road-inspector").hidden = true; return; }
+  const road = selectedRoad, values = road.periods[activePeriod];
+  $("road-inspector").hidden = false;
+  $("road-name").textContent = road.name;
+  $("road-basis").textContent = `${road.class.replaceAll("_", " ")} · ${integer.format(road.length_m)} m segment · ${road.basis === "historical_count" ? "historical count anchor" : "assumed traffic volume"}`;
+  $("road-co2").textContent = values.co2_kg_h.toFixed(1);
+  $("road-nox").textContent = values.nox_g_h.toFixed(1);
+  $("road-vehicles").textContent = integer.format(values.vehicles_h);
+  $("road-speed").textContent = values.speed_kmh.toFixed(1);
+  $("road-count-detail").textContent = road.count ?
+    `LADOT count at ${road.count.street} / ${road.count.cross}, ${road.count.date}. ${integer.format(road.count.daily)} directional vehicles per day; hourly share is assumed. Approx. ±35% sensitivity.` :
+    `Daily traffic is assumed from road class, then adjusted by simulated route pressure. Approx. ±60% sensitivity.`;
+}
+function selectRoad(road) {
+  if (selectedLine) selectedLine.setStyle({ color: roadColor(roadValue(selectedRoad)), weight: 3.4, opacity: .9 });
+  selectedRoad = road;
+  selectedLine = emissionLines.get(road.id);
+  selectedLine?.setStyle({ color: "#fff7d7", weight: 7, opacity: 1 });
+  selectedLine?.bringToFront();
+  updateInspector();
+}
+function renderEmissions() {
+  if (!emissionsData) return;
+  const values = emissionsData.roads.map(roadValue).sort((a, b) => a - b);
+  colorThresholds = [.2, .4, .6, .8].map(q => quantile(values, q));
+  for (const road of emissionsData.roads) {
+    const line = emissionLines.get(road.id);
+    line.setStyle({ color: road === selectedRoad ? "#fff7d7" : roadColor(roadValue(road)),
+      weight: road === selectedRoad ? 7 : 3.4, opacity: road === selectedRoad ? 1 : .9 });
+  }
+  const sum = emissionsData.summary[activePeriod];
+  $("pilot-total").textContent = integer.format(activeMetric === "co2" ? sum.co2_kg_h : sum.nox_g_h);
+  $("pilot-unit").textContent = activeMetric === "co2" ? "kg CO₂ / hour" : "g NOₓ / hour";
+  $("pilot-secondary").textContent = activeMetric === "co2" ? `${integer.format(sum.nox_g_h)} g NOₓ / h` : `${integer.format(sum.co2_kg_h)} kg CO₂ / h`;
+  $("pilot-count").textContent = `${integer.format(emissionsData.quality.historical_anchor_edges)} anchored edges`;
+  $("legend-unit").textContent = activeMetric === "co2" ? "CO₂ · kg / h" : "NOₓ · g / h";
+  $("legend-low").textContent = `${quantile(values, .1).toFixed(1)}`;
+  $("legend-high").textContent = `${quantile(values, .9).toFixed(1)}+`;
+  updateInspector();
+}
+function syncEmissionsVisibility() {
+  const enabled = emissionsActive() && $("emissions-layer").checked;
+  const ready = enabled && Boolean(emissionsData);
+  if (ready) emissionsLayer.addTo(map);
+  else emissionsLayer.remove();
+  $("emissions-legend").hidden = !ready;
+  $("emissions-notice").hidden = !enabled || Boolean(emissionsData);
+  $("emissions-message").textContent = emissionsError || "Loading road emissions…";
+  $("retry-emissions").hidden = !emissionsError;
+  if (!ready) $("road-inspector").hidden = true;
+}
+function loadEmissions() {
+  if (emissionsData) {
+    renderEmissions();
+    syncEmissionsVisibility();
+    return;
+  }
+  if (emissionsRequest) return emissionsRequest;
+  emissionsError = null;
+  syncEmissionsVisibility();
+  emissionsRequest = (async () => {
+  try {
+    const response = await fetch("/api/emissions", { cache: "no-store" });
+    if (response.status === 404) {
+      throw new Error("This map server needs a restart to load road emissions. Restart server.py, then select Retry.");
+    }
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Road emissions could not be loaded. Please retry.");
+    emissionsData = data;
+    for (const road of emissionsData.roads) {
+      const line = L.polyline(road.coordinates.map(([lon, lat]) => [lat, lon]), {
+        pane: "emissions", renderer: emissionRenderer, color: ROAD_COLORS[0], weight: 3.4,
+        opacity: .9, lineCap: "round", lineJoin: "round", interactive: true
+      });
+      line.on("click", () => selectRoad(road));
+      line.bindTooltip(road.name, { sticky: true, direction: "top", opacity: .9 });
+      line.addTo(emissionsLayer);
+      emissionLines.set(road.id, line);
+    }
+    $("method-text").textContent = [emissionsData.method.headline, emissionsData.method.traffic,
+      emissionsData.method.volume, emissionsData.method.emissions, emissionsData.method.signal,
+      emissionsData.method.uncertainty].join(" ");
+    for (const source of emissionsData.sources) {
+      const link = document.createElement("a");
+      link.href = source.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+      link.textContent = `↗ ${source.label}`;
+      $("source-links").append(link);
+    }
+    renderEmissions();
+    if (emissionsActive()) setStatus("Emissions pilot ready", `${integer.format(emissionsData.quality.road_edges)} modeled road edges · ${integer.format(emissionsData.quality.historical_anchor_edges)} historical count anchors.`);
+  } catch (error) {
+    emissionsData = null;
+    emissionsLayer.clearLayers();
+    emissionLines.clear();
+    $("source-links").replaceChildren();
+    emissionsError = error.message;
+    if (emissionsActive()) setStatus("Emissions pilot unavailable", emissionsError, true);
+  } finally {
+    emissionsRequest = null;
+    syncEmissionsVisibility();
+  }
+  })();
+  return emissionsRequest;
+}
+function setPeriod(period) {
+  activePeriod = period;
+  for (const key of ["midday", "pm_peak"]) {
+    const button = $(`period-${key}`);
+    button.classList.toggle("selected", key === period);
+    button.setAttribute("aria-pressed", String(key === period));
+  }
+  renderEmissions();
+}
+function setMetric(metric) {
+  activeMetric = metric;
+  for (const key of ["co2", "nox"]) {
+    const button = $(`metric-${key}`);
+    button.classList.toggle("selected", key === metric);
+    button.setAttribute("aria-pressed", String(key === metric));
+  }
+  renderEmissions();
+}
+for (const period of ["midday", "pm_peak"]) $(`period-${period}`).addEventListener("click", () => setPeriod(period));
+for (const metric of ["co2", "nox"]) $(`metric-${metric}`).addEventListener("click", () => setMetric(metric));
+$("close-inspector").addEventListener("click", () => { selectedRoad = null; selectedLine = null; $("road-inspector").hidden = true; renderEmissions(); });
+
 const audienceTabs = [...document.querySelectorAll("#audience-tabs [role=tab]")];
+function selectPlanningWorkspace(mode, zoom = false) {
+  planningMode = mode;
+  const emissions = emissionsActive();
+  const siteVisible = plannerActive && !emissions;
+  const water = mode === "water";
+  $("planning-workspaces").hidden = !plannerActive;
+  for (const name of ["emissions", "street", "water"]) {
+    $(`workspace-${name}`).setAttribute("aria-pressed", String(name === mode));
+  }
+  $("planner").hidden = !siteVisible;
+  $("planner-title").hidden = !siteVisible;
+  $("site-intro").hidden = !siteVisible;
+  $("planner-title").textContent = water ? "Understand the watershed." : "Plan a safer intersection.";
+  $("site-intro").textContent = water
+    ? "Select a site to see its county subbasin and rainfall estimate. Then explore runoff sources and treatment opportunities."
+    : "Select a site to review crossings, driveways and opportunities for a safer street.";
+  $("planner-controls").hidden = !emissions;
+  $("emissions-layer-row").hidden = !emissions;
+  $("map-workspace").classList.toggle("water-mode", siteVisible && water);
+  $("brand-caption").textContent = plannerActive ? "Urban analytics · Los Angeles" : "Los Angeles · map workspace";
+  $("footer-caption").textContent = emissions ? "SUMO × CARB EMFAC · scenario model" : siteVisible ? "Vexcel × CoStar × LA County" : "V2 map foundation";
+  $("map-title").textContent = emissions ? "Urban emissions atlas" : siteVisible ? (water ? "Watershed & stormwater" : "Intersection redesign") : "Aerial explorer";
+  $("map-eyebrow").textContent = emissions ? "DOWNTOWN LOS ANGELES · PILOT AREA" : "LOS ANGELES, CALIFORNIA";
+  $("map-badge").textContent = emissions ? "SIMULATED / TAILPIPE" : siteVisible ? (water ? "COUNTY HYDROLOGY" : "SITE EVIDENCE") : "VEXCEL IMAGERY";
+  $("reset").innerHTML = emissions ? "↗ &nbsp; Back to pilot" : "↗ &nbsp; Back to Los Angeles";
+  syncEmissionsVisibility();
+  document.querySelector(".sidebar-body").scrollTop = 0;
+  map.fire("plannerworkspace", { mode, visible: siteVisible });
+  if (emissions) {
+    loadEmissions();
+    if (zoom) {
+      const bbox = [-118.268, 34.034, -118.219, 34.070];
+      map.fitBounds([[bbox[1], bbox[0]], [bbox[3], bbox[2]]], { padding: [35, 35], maxZoom: 14 });
+    }
+  } else if (siteVisible) {
+    setStatus(water ? "Stormwater workspace" : "Intersection workspace", "Search for a property or pick a covered map location.");
+  }
+}
+for (const mode of ["emissions", "street", "water"]) {
+  $(`workspace-${mode}`).addEventListener("click", () => selectPlanningWorkspace(mode, true));
+}
 function selectAudience(tab, focus = false) {
   for (const option of audienceTabs) {
     const active = option === tab;
@@ -343,10 +631,12 @@ function selectAudience(tab, focus = false) {
     option.tabIndex = active ? 0 : -1;
   }
   $("map-workspace").setAttribute("aria-labelledby", tab.id);
-  $("planner").hidden = tab.id !== "urban-planners";
-  $("planner-title").hidden = $("planner").hidden;
-  $("explore-intro").hidden = !$("planner").hidden;
-  map.fire("plannervisibility", { visible: !$("planner").hidden });
+  plannerActive = tab.id === "urban-planners";
+  $("map-workspace").classList.toggle("planner-mode", plannerActive);
+  $("buyer-intro").hidden = plannerActive;
+  selectPlanningWorkspace(planningMode, true);
+  if (!plannerActive) map.setView(HOME, HOME_ZOOM);
+  setTimeout(() => map.invalidateSize(), 0);
   if (focus) tab.focus();
 }
 
@@ -372,3 +662,8 @@ new ResizeObserver(() => {
 }).observe($("map"));
 updateMapInfo();
 loadCoverage();
+// A direct overlay link also restores the planner workspace on page reload.
+if (["#urban-planners", "#stormwater", "#intersections"].includes(window.location.hash)) {
+  planningMode = window.location.hash === "#stormwater" ? "water" : window.location.hash === "#intersections" ? "street" : "emissions";
+  selectAudience($("urban-planners"));
+}

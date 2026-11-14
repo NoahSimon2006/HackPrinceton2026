@@ -60,8 +60,7 @@ body {
   display: none;
 }
 
-.planner-card,
-.workflow-picker {
+.planner-card {
   min-width: 0;
   margin: 0 0 10px;
   padding: 12px;
@@ -135,28 +134,8 @@ body {
 .planner :focus-visible,
 .planner-map-panel :focus-visible { outline: 2px solid #a7e5a3; outline-offset: 2px; }
 .planner .planner-action { width: 100%; font-weight: 700; }
+#planner-title { margin-top: 28px; }
 .planner .planner-action[aria-pressed="true"] { background: #304a36; border-color: #a7e5a3; }
-
-.workflow-picker > div {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 7px;
-}
-
-.workflow-picker label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px;
-  border-radius: 7px;
-  background: #223229;
-  cursor: pointer;
-}
-
-.workflow-picker input {
-  margin: 0;
-  accent-color: #a7e5a3;
-}
 
 .planner-row {
   display: flex;
@@ -225,6 +204,7 @@ body {
 
 #map.planner-capture { cursor: crosshair; }
 #map.planner-capture .property-marker { pointer-events: none; }
+#map.planner-capture .leaflet-emissions-pane { pointer-events: none; }
 .planner-vertex { border: 2px solid #19372a; border-radius: 50%; background: #f1fbf1; }
 
 @media (max-width: 760px) {
@@ -236,3 +216,104 @@ body {
   .sidebar h1#planner-title[hidden] { display: none; }
   .planner-map-panel { top: 84px; left: 12px; max-width: calc(100% - 75px); }
 }
+
+/* Planner workspace */
+[hidden]{display:none!important}
+.emissions-notice{position:absolute;z-index:520;left:22px;bottom:75px;max-width:min(420px,calc(100% - 44px));padding:14px 17px;display:flex;gap:14px;align-items:center;background:#13251cf5;border:1px solid #709679;border-radius:11px;color:#dce8db;font-size:12px;line-height:1.5;box-shadow:0 15px 35px #07140f88}
+.emissions-notice button{background:#a9e7ad;color:#13251c;border:0;border-radius:6px;padding:8px 12px;cursor:pointer;font-weight:700}
+.shell.planner-mode{grid-template-columns:370px minmax(0,1fr)}
+.planner-mode .sidebar{background:linear-gradient(160deg,#111b19 0%,#101716 65%,#141c18 100%)}
+.planner-controls h1{font-size:29px;max-width:none;margin:17px 0 10px;line-height:1.11}
+.planner-controls h1 em{color:#a9e7ad;font-style:normal}
+.planner-kicker{display:flex;align-items:center;gap:8px;color:#a4e2a9;font-size:10px;letter-spacing:.12em;font-weight:800}
+.planner-kicker>span:last-child{margin-left:auto;color:#7e9486;font-size:9px;letter-spacing:.06em}
+.live-pip{width:7px;height:7px;display:inline-block;background:#b5e8a8;border-radius:50%;box-shadow:0 0 12px #b5e8a8}
+.planner-intro{font-size:12px;color:#a9bcae;line-height:1.55;margin:0 0 22px}
+.control-label{font-size:10px;color:#8ea79a;font-weight:800;letter-spacing:.13em;margin-bottom:9px}
+.segmented{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.segmented button,.metric-select button{cursor:pointer;text-align:left;border-radius:10px;border:1px solid #35483d;color:#bed0c3;background:#1b2923;padding:10px 12px;transition:background .18s,border-color .18s,transform .18s}
+.segmented button:hover,.metric-select button:hover{transform:translateY(-1px);background:#243b2e}
+.segmented button.selected,.metric-select button.selected{background:#2a4432;border-color:#8ed59b;box-shadow:inset 0 0 0 1px #8ed59b30;color:#fff}
+.segmented button{font-size:12px;font-weight:800}
+.segmented small,.metric-select small{display:block;color:#9aae9e;font-size:10px;margin-top:5px;font-weight:500}
+.metric-label{margin-top:20px}
+.metric-select{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.metric-select button span{font-size:17px;font-weight:800;letter-spacing:-.03em}
+.metric-card{margin-top:22px;padding:17px 17px 15px;border-radius:13px;border:1px solid #46684a;background:radial-gradient(circle at 90% 0,#355a3d88 0,transparent 50%),linear-gradient(135deg,#253c2a,#182a20);box-shadow:0 14px 30px #09160e50}
+.metric-card-top{display:flex;justify-content:space-between;align-items:center;color:#b8d3b9;font-size:9px;letter-spacing:.12em;font-weight:800}
+.model-tag{padding:4px 6px;border:1px solid #8bd19a80;border-radius:4px;color:#b5e8b7;font-size:8px}
+.metric-main{display:flex;align-items:baseline;gap:8px;margin-top:17px}
+.metric-main strong{font-size:39px;line-height:1;letter-spacing:-.055em;font-variant-numeric:tabular-nums}
+.metric-main span{font-size:11px;color:#b2ccb5}
+.metric-sub{display:flex;justify-content:space-between;gap:8px;border-top:1px solid #72937438;margin-top:17px;padding-top:12px;color:#a9c2ad;font-size:10px}
+.planner-disclosure{margin-top:18px;border:1px solid #314438;border-radius:10px;background:#1a2820}
+.planner-disclosure summary{cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:12px 13px;font-size:11px;font-weight:800;color:#d3ead7;list-style:none}
+.planner-disclosure summary::-webkit-details-marker{display:none}
+.planner-disclosure summary span{color:#9de4a7}
+.planner-disclosure p{padding:0 13px;color:#aabdaf;font-size:10px;line-height:1.55;margin:0 0 12px}
+.source-links{padding:0 13px 13px;display:grid;gap:6px}
+.source-links a{color:#afe0b6;font-size:10px;text-decoration:none}
+.source-links a:hover{text-decoration:underline}
+.planner-mode .search-block{margin-top:27px}
+.planner-mode .sidebar-body{padding-top:24px}
+.planner-mode .map-heading>div{background:#102019e8;border-color:#69ac7a}
+.planner-mode .map-badge{color:#e8f5df;border-color:#8bc88c;background:#193425e8}
+.emissions-legend{position:absolute;z-index:510;left:22px;bottom:75px;width:265px;padding:15px 17px 14px;border-radius:11px;border:1px solid #709679;background:#13251ce8;box-shadow:0 15px 35px #07140f88;backdrop-filter:blur(16px)}
+.legend-top{display:flex;justify-content:space-between;gap:8px;color:#bad8be;font-size:9px;font-weight:800;letter-spacing:.11em}
+.legend-top strong{color:#edf7ec;font-size:10px;letter-spacing:0}
+.legend-bar{height:9px;border-radius:8px;background:linear-gradient(90deg,#7bdec0,#b8d878,#f5bb5d,#ed7757,#bd354e);margin:17px 0 7px;box-shadow:0 2px 12px #94d89f30}
+.legend-values{display:flex;justify-content:space-between;color:#dce8db;font-size:10px;font-variant-numeric:tabular-nums}
+.emissions-legend small{display:block;color:#a7bcaa;font-size:9px;margin-top:13px}
+.road-inspector{position:absolute;z-index:520;right:22px;bottom:75px;width:288px;border-radius:13px;background:#15231eea;border:1px solid #76ab82;box-shadow:0 20px 50px #07140fc0;backdrop-filter:blur(16px);padding:17px}
+.road-inspector h3{font-size:17px;line-height:1.18;letter-spacing:-.025em;margin:8px 24px 5px 0}
+.road-inspector>p{font-size:10px;line-height:1.4;color:#aebfaf;margin:0 0 14px}
+.close-inspector{position:absolute;top:12px;right:12px;background:#2a3d30;color:#d9efdc;border:1px solid #48634f;border-radius:6px;width:26px;height:26px;cursor:pointer;font-size:19px;line-height:19px}
+.inspector-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.inspector-grid>div{background:#22342a;border:1px solid #3c5744;border-radius:8px;padding:10px}
+.inspector-grid span,.inspector-grid small{display:block;color:#a7bdad;font-size:9px}
+.inspector-grid span{letter-spacing:.11em;font-weight:800}
+.inspector-grid strong{display:block;font-size:20px;margin:5px 0 2px;font-variant-numeric:tabular-nums}
+.road-inspector .road-count-detail{margin:12px 0 0;color:#c5d4c7;font-size:10px;line-height:1.4}
+.leaflet-interactive:focus{outline:2px solid #a8eeaa}
+@media(max-width:900px){.shell.planner-mode{grid-template-columns:315px minmax(0,1fr)}.planner-controls h1{font-size:24px}.metric-main strong{font-size:33px}.road-inspector{bottom:260px}}
+@media(max-width:760px){.shell.planner-mode{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.planner-mode .sidebar{max-height:395px}.planner-mode .sidebar-body{padding:12px 16px}.planner-controls h1{display:block;font-size:20px;margin:8px 0}.planner-intro,.planner-disclosure,.planner-mode .search-block,.planner-mode .sidebar .divider,.planner-mode .sidebar .section-label:not(.planner-controls .section-label),.planner-mode .sidebar .layer,.planner-mode .sidebar .status-card{display:none}.planner-kicker{font-size:8px}.control-label{margin-bottom:5px}.metric-label{margin-top:8px}.segmented button,.metric-select button{padding:7px;font-size:10px}.metric-select button span{font-size:13px}.segmented small,.metric-select small{font-size:8px;margin-top:1px}.metric-card{display:block;margin-top:10px;padding:10px 12px}.metric-main{margin-top:6px}.metric-main strong{font-size:26px}.metric-sub{margin-top:7px;padding-top:6px}.emissions-legend{left:12px;bottom:55px;width:190px;padding:10px}.road-inspector{right:12px;left:12px;bottom:124px;width:auto;max-width:320px;margin-left:auto}.road-inspector .inspector-grid{grid-template-columns:repeat(4,1fr)}.inspector-grid>div{padding:6px}.inspector-grid strong{font-size:14px}.inspector-grid small{font-size:8px}.map-bottom{bottom:8px}}
+@media(max-width:760px){.planner-mode .sidebar{max-height:350px}.planner-mode .brand{height:48px}.planner-mode .sidebar-body{padding:8px 16px}.planner-controls h1{font-size:17px;line-height:1.12;margin:5px 0}.planner-mode .map-heading{display:none}.planner-mode .emissions-legend{bottom:48px}}
+@media(max-width:760px){.planner-mode .search-block{display:block}.planner-mode .sidebar .layer{display:flex}}
+
+/* Keep the three planning workflows discoverable before a site is selected. */
+.planning-workspaces{position:sticky;top:0;z-index:1200;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;margin:0 0 24px;border:1px solid #34473e;background:#101a16;border-radius:11px;box-shadow:0 -24px 0 #111b19,0 8px 14px #10171680}
+#site-card{scroll-margin-top:64px}
+.planning-workspaces button{cursor:pointer;border:1px solid transparent;border-radius:7px;background:transparent;color:#9eb5a8;font-size:11px;font-weight:700;padding:10px 2px}
+.planning-workspaces button:hover{color:#edf7ef;background:#26382e}
+.planning-workspaces button[aria-pressed="true"]{color:#e7f7e6;background:#2b4435;border-color:#628b69;box-shadow:0 2px 6px #0003}
+.planning-workspaces button:focus-visible{outline:2px solid #9adbc0;outline-offset:2px}
+.sidebar #planner-title{margin-top:0;max-width:none;font-size:28px}
+.site-intro{font-size:12px;line-height:1.6;color:#a9bcae;margin:0 0 18px}
+.water-mode .planning-workspaces button[aria-pressed="true"]{color:#d8f4ff;background:#203e48;border-color:#548f9f}
+.water-mode .map-heading>div,.water-mode .map-badge{border-color:#6097a9;background:#142a30ed}
+.water-mode .map-badge,.water-mode .eyebrow{color:#b4e6f5}
+.planner .water-card{padding:15px;border-color:#385f6c;background:linear-gradient(145deg,#1b3034,#172527)}
+.water-card-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:18px}
+.water-card-heading h2{margin:0}
+.water-card-heading>span{color:#91bece;font-size:8px;font-weight:800;letter-spacing:.12em;border:1px solid #486873;border-radius:4px;padding:4px 5px}
+.water-summary>.control-label{display:block;color:#94becb;font-size:9px;margin-bottom:6px}
+#watershed-name{display:block;font-size:23px;line-height:1.2;letter-spacing:-.03em;color:#e3f5fb;margin-bottom:6px}
+.planner .water-summary p{color:#a2bcc4;font-size:11px;line-height:1.5}
+.rain-stat{display:flex;gap:10px;align-items:center;padding-top:16px;margin-top:15px;border-top:1px solid #40616a70}
+.rain-stat>strong{font-size:41px;letter-spacing:-.05em;line-height:1.1;color:#b7e9fc;font-variant-numeric:tabular-nums}
+.rain-stat>span{font-size:12px;color:#cee5ed}
+.rain-stat small{font-size:9px;color:#91b3bf}
+.planner .water-actions{margin:15px 0 12px}
+.planner .water-actions button{border-color:#46717e;background:#23404a;color:#d9f1fa;font-size:11px}
+.planner .water-actions button:hover:enabled{background:#2d5663}
+.planner .hydrology-note{font-size:10px;color:#96b1b9;line-height:1.5;margin:10px 0 16px}
+.rain-scenario{border-top:1px solid #40616a70;padding-top:12px}
+.planner .rain-scenario summary{font-size:11px;color:#bbd6e0}
+.planner .rain-scenario p{font-size:10px}
+.watershed-legend{position:absolute;z-index:510;left:22px;bottom:75px;width:300px;max-width:calc(100% - 44px);padding:16px 18px;border:1px solid #6097a9;border-radius:11px;background:#142a30ed;backdrop-filter:blur(16px);box-shadow:0 15px 35px #07140f88;pointer-events:none}
+.watershed-legend .legend-top{color:#a4d0df;font-size:8px}
+.watershed-legend>strong{display:block;font-size:18px;letter-spacing:-.02em;margin-top:13px;color:#e0f4fc}
+.watershed-legend p{display:flex;align-items:center;gap:8px;color:#bedce6;font-size:11px;margin:10px 0}
+.watershed-swatch{width:20px;height:12px;background:#46afd42e;border:2px dashed #80d7ff;display:inline-block;flex:none}
+.watershed-legend small{color:#95b3bf;font-size:9px}
+@media(max-width:760px){.planning-workspaces{margin-bottom:12px}.planning-workspaces button{padding:8px 2px}.site-intro{font-size:11px;margin-bottom:10px}.sidebar h1#planner-title{font-size:20px}.watershed-legend{left:12px;bottom:48px;width:250px;padding:11px 13px}.watershed-legend>strong{font-size:16px;margin-top:7px}.water-mode .sidebar{max-height:45vh}}
