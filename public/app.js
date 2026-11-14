@@ -4,9 +4,9 @@ const HOME_ZOOM = 13;
 const MIN_ZOOM = 10;
 const ZOOM_STEP = .125;
 const MIN_PROPERTY_ZOOM = 15;
-const map = L.map("map", { minZoom: MIN_ZOOM, maxZoom: 20, zoomSnap: ZOOM_STEP, zoomDelta: .5,
+const map = L.map("map", { minZoom: MIN_ZOOM, maxZoom: 20, zoomSnap: 0, zoomDelta: .5,
   preferCanvas: true,
-  zoomControl: false, scrollWheelZoom: true, wheelPxPerZoomLevel: 120, inertia: false }).setView(HOME, HOME_ZOOM);
+  zoomControl: false, scrollWheelZoom: false, inertia: false }).setView(HOME, HOME_ZOOM);
 const mapDrag = map.dragging._draggable;
 map.dragging.disable();
 L.control.zoom({ position: "topright" }).addTo(map);
@@ -130,6 +130,89 @@ function moveInsideCoverage(center, delta, allowed) {
   }
   return center.add(delta);
 }
+
+function installSmoothWheelZoom() {
+  // Leaflet 1.9.4's wheel handler batches input into discrete zoom operations.
+  // Use its continuous pinch movement path so tiles and the emissions canvas
+  // share the same transform; commit zoomend/moveend once the gesture settles.
+  const container = map.getContainer();
+  let frame = null;
+  let active = false;
+  let internalMove = false;
+  let targetZoom, anchor, pointer, previousTime, lastInput;
+  const clamp = (zoom) => Math.min(map.getMaxZoom(), Math.max(map.getMinZoom(), zoom));
+
+  function finish() {
+    if (frame !== null) cancelAnimationFrame(frame);
+    frame = null;
+    if (!active) return;
+    active = false;
+    map._moveEnd(true);
+  }
+
+  function animate(now) {
+    frame = null;
+    if (!active) return;
+    const elapsed = Math.min(64, Math.max(1, now - previousTime));
+    previousTime = now;
+    targetZoom = clamp(targetZoom);
+    const current = map.getZoom();
+    const remaining = targetZoom - current;
+    const zoom = Math.abs(remaining) < .0001 ? targetZoom :
+      current + remaining * (1 - Math.exp(-elapsed / 65));
+    const offset = pointer.subtract(map.getSize().divideBy(2));
+    let center = map.project(anchor, zoom).subtract(offset);
+    if (coverage) {
+      const samples = viewportSamples();
+      const allowed = (position) => coversView(position, zoom, samples);
+      if (!allowed(center)) {
+        const previous = map.project(map.getCenter(), zoom);
+        if (!allowed(previous)) {
+          // Stop at the imagery boundary without snapping back across the city.
+          targetZoom = current;
+          finish();
+          return;
+        }
+        center = moveInsideCoverage(previous, center.subtract(previous), allowed);
+      }
+    }
+    internalMove = true;
+    map._move(map.unproject(center, zoom), zoom, { pinch: true, round: false });
+    internalMove = false;
+    if (zoom === targetZoom && now - lastInput > 100) finish();
+    else frame = requestAnimationFrame(animate);
+  }
+
+  container.addEventListener("wheel", (event) => {
+    if (event.target.closest(".leaflet-control, .leaflet-popup")) return;
+    event.preventDefault();
+    if (!event.deltaY || map._animatingZoom) return;
+    const now = performance.now();
+    if (!active) {
+      map.stop();
+      targetZoom = map.getZoom();
+      previousTime = now;
+      active = true;
+      internalMove = true;
+      map._moveStart(true, false);
+      internalMove = false;
+    }
+    pointer = map.mouseEventToContainerPoint(event);
+    anchor = map.containerPointToLatLng(pointer);
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? map.getSize().y : 1;
+    // Preserve small trackpad deltas; cap large mouse-wheel ticks to avoid jumps.
+    const pixels = Math.max(-120, Math.min(120, event.deltaY * unit * (event.ctrlKey ? 3 : 1)));
+    targetZoom = clamp(targetZoom - pixels / 300);
+    lastInput = now;
+    if (frame === null) frame = requestAnimationFrame(animate);
+  }, { passive: false });
+  container.addEventListener("pointerdown", finish);
+  container.addEventListener("keydown", finish);
+  window.addEventListener("blur", finish);
+  map.on("movestart zoomstart", () => { if (!internalMove) finish(); });
+}
+
+installSmoothWheelZoom();
 
 let previousDragPosition;
 map.on("dragstart", () => {
