@@ -5,12 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=4">
   <script defer src="/vendor/leaflet.js"></script>
-  <script defer src="/app.js"></script>
+  <script defer src="/app.js?v=7"></script>
 </head>
 <body>
-  <div class="shell">
+  <div id="audience-tabs" class="audience-tabs" role="tablist" aria-label="Map workspace">
+    <button id="home-buyers" type="button" role="tab" aria-selected="true" aria-controls="map-workspace">Home Buyers</button>
+    <button id="urban-planners" type="button" role="tab" aria-selected="false" aria-controls="map-workspace" tabindex="-1">Urban Planners</button>
+  </div>
+  <div id="map-workspace" class="shell" role="tabpanel" aria-labelledby="home-buyers">
     <aside class="sidebar">
       <div class="brand"><span class="brand-mark">◈</span><div><strong>Sustainability Map</strong><small>Los Angeles · map workspace</small></div></div>
       <div class="sidebar-body">
