@@ -1,18 +1,29 @@
 # Sustainability Map
 
-A local Vexcel aerial map for Los Angeles with a precomputed downtown road-emissions pilot in **Urban Planners**. The pilot compares weekday midday and PM peak modeled tailpipe CO₂ and NOₓ. CoStar property points and Esri labels remain optional layers.
+A local Vexcel aerial map for Los Angeles with a precomputed downtown road-emissions pilot in **Urban Planners**. The pilot compares weekday midday and PM peak modeled tailpipe CO₂ and NOₓ. CoStar property points and Esri labels remain optional layers. Urban Planners also includes a site workspace with Intersection Redesign and Stormwater evidence workflows powered by one Deep Agent.
 
 ## Run locally
 
-Put `VEXCEL_API_KEY` and `COSTAR_KIT_DIR` in the ignored local `.env`. The existing `.env` can be reused. The CoStar kit needs `data/commercial-property.jsonl` and `schemas/enums.json`.
+Put `VEXCEL_API_KEY`, `GROK_API_KEY`, and the absolute `COSTAR_KIT_DIR` in the ignored local `.env`. The existing `.env` can be reused. The CoStar kit needs `data/commercial-property.jsonl` and `schemas/enums.json`.
 
 ```sh
-python3 server.py
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python server.py
 ```
 
-Open <http://127.0.0.1:8000>. Set `PORT=8023` if that port is taken. The server binds to localhost. Vexcel and Esri need network access; the emissions artifact and Leaflet are bundled locally. The Vexcel key stays on the server. CoStar endpoints return only property name, address, type, ID, and location.
+Open <http://127.0.0.1:8000>. Set `PORT=8023` if that port is taken. The server binds to localhost. Vexcel and Esri need network access; the emissions artifact and Leaflet are bundled locally. The Vexcel key stays on the server. The map and site card receive selected CoStar property fields. The agent defaults to `GROK_MODEL=grok-4.7`; its dependencies are separate from the optional simulation rebuild dependencies.
 
 Append `/#urban-planners` to open directly on the emissions overlay. After pulling changes to `server.py`, stop and restart the Python server on the same port, then reload the page. An older process can serve the updated HTML while still lacking `/api/emissions`, which produces a 404 and an empty overlay. The map now shows a restart message and Retry button in that case, and displays the legend only after data loads.
+
+## Plan a site
+
+1. Open **Urban Planners**. Search for a CoStar property or select **Pick a site on the map**.
+2. Choose **Intersection Redesign** or **Stormwater**, then select **Analyze site** or edit the suggested question. One Deep Agent chooses which local tools to call. **Site evidence** draws the actual tool results, such as parcel and building outlines, detection candidates, and nearby CoStar frontage. Toggle **Show imagery search areas** to see the ranked scenes when the agent ran a search.
+3. In **Stormwater**, review the county subbasin and rainfall estimate. The 85th-percentile, 24-hour depth is estimated between adjacent LA County contours that bracket the site. Enter a scenario depth and source manually when the service or estimate is unavailable.
+4. Use **Adjust or add map markings** if a crossing, driveway, runoff source, or treatment area needs clarification. The next analysis sees which types of features you marked. Map markings, rainfall inputs, and assessments stay available during the current page session.
+
+The configured xAI model receives the typed question, the workflow, and short summaries such as detection counts and source availability. The app keeps coordinates, geometry, rainfall depths, and CoStar fields on the local server and displays them in the browser.
 
 ## What the pilot means
 

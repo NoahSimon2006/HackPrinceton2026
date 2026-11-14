@@ -5,9 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=8">
+  <link rel="stylesheet" href="/styles.css?v=10">
   <script defer src="/vendor/leaflet.js"></script>
-  <script defer src="/app.js?v=11"></script>
+  <script defer src="/app.js?v=12"></script>
+  <script defer src="/planner.js?v=6"></script>
 </head>
 <body>
   <div id="audience-tabs" class="audience-tabs" role="tablist" aria-label="Map workspace">
@@ -15,7 +16,7 @@
     <button id="urban-planners" type="button" role="tab" aria-selected="false" aria-controls="map-workspace" tabindex="-1">Urban Planners</button>
   </div>
   <div id="map-workspace" class="shell" role="tabpanel" aria-labelledby="home-buyers">
-    <aside class="sidebar">
+    <aside class="sidebar" aria-label="Map sidebar">
       <div class="brand"><span class="brand-mark">◈</span><div><strong>Sustainability Map</strong><small id="brand-caption">Los Angeles · map workspace</small></div></div>
       <div class="sidebar-body">
         <div id="buyer-intro"><div class="section-label">EXPLORE</div>
@@ -32,11 +33,64 @@
           <div class="metric-card"><div class="metric-card-top"><span>ESTIMATED PILOT TOTAL</span><span class="model-tag">SCENARIO</span></div><div class="metric-main"><strong id="pilot-total">—</strong><span id="pilot-unit">kg CO₂ / hour</span></div><div class="metric-sub"><span id="pilot-secondary">—</span><span id="pilot-count">—</span></div></div>
           <div class="planner-disclosure"><details><summary>How this estimate works <span>↗</span></summary><p id="method-text">Loading methodology…</p><div id="source-links" class="source-links"></div></details></div>
         </section>
+        <h1 id="planner-title" hidden>Plan a site</h1>
         <div class="search-block">
           <label for="search">Find a CoStar property</label>
           <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" autocomplete="off" placeholder="Property name or address"></div>
           <div id="results" class="results" role="listbox" aria-label="Property search results" hidden></div>
         </div>
+        <section id="planner" class="planner" aria-labelledby="planner-title" hidden>
+          <button id="pick-site" type="button" class="planner-action" aria-pressed="false">Pick a site on the map</button>
+          <p id="planner-status" class="planner-status" role="status">Search for a property or pick any covered location.</p>
+          <div id="site-card" class="planner-card" hidden>
+            <strong id="site-name"></strong>
+            <p id="site-location"></p>
+            <p id="site-property"></p>
+          </div>
+          <div id="site-tools" hidden>
+            <fieldset class="workflow-picker">
+              <legend>Planning workflow</legend>
+              <div>
+                <label><input type="radio" name="workflow" value="street" checked><span>Intersection<br>Redesign</span></label>
+                <label><input type="radio" name="workflow" value="water"><span>Stormwater</span></label>
+              </div>
+            </fieldset>
+            <form id="site-analysis" class="planner-card">
+              <h2><label for="planning-brief">Ask the planning agent</label></h2>
+              <textarea id="planning-brief" rows="3" maxlength="1500" required aria-describedby="analysis-provider"></textarea>
+              <p id="analysis-provider">Your question is sent to xAI for analysis.</p>
+              <button id="run-site-analysis" type="submit">Analyze site</button>
+              <p id="agent-assessment" aria-live="polite" hidden></p>
+            </form>
+            <section class="planner-card" aria-labelledby="evidence-title">
+              <h2 id="evidence-title">Site evidence</h2>
+              <p id="site-evidence-status" role="status"></p>
+              <ul id="site-evidence-list" class="shape-list" aria-label="Evidence on the map"></ul>
+              <p id="site-evidence-note" hidden></p>
+              <label id="site-search-toggle" class="evidence-toggle" hidden>
+                <input id="show-search-matches" type="checkbox"> Show imagery search areas
+              </label>
+            </section>
+            <section id="water-tools" class="planner-card" aria-labelledby="rain-title" hidden>
+              <h2 id="rain-title">Rainfall and watershed</h2>
+              <p id="watershed-result"></p>
+              <p id="rain-result" role="status"></p>
+              <div class="planner-sources">
+                <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/hydrologygis/MapServer/3" target="_blank" rel="noopener">County rainfall contours</a>
+                <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/PW_Open_Data/MapServer/36" target="_blank" rel="noopener">County watershed layer</a>
+              </div>
+              <label for="rain-depth">Scenario rainfall (inches)</label>
+              <input id="rain-depth" type="number" min="0" step="any" inputmode="decimal">
+              <label for="rain-source">Scenario source or assumption</label>
+              <input id="rain-source" type="text" maxlength="160" placeholder="e.g. LA County contour estimate">
+            </section>
+            <details class="planner-card" id="manual-markings">
+              <summary>Adjust or add map markings</summary>
+              <div id="mark-actions" class="mark-actions"></div>
+              <ul id="shape-list" class="shape-list" aria-label="Saved map markings"></ul>
+            </details>
+          </div>
+        </section>
         <div class="divider"></div>
         <div class="section-label">MAP LAYERS</div>
         <div class="layer base"><span class="layer-icon">▧</span><div><strong>Vexcel aerial</strong><small>Base imagery</small></div><span class="active-dot" aria-label="On"></span></div>
@@ -57,6 +111,14 @@
       <div id="emissions-notice" class="emissions-notice" role="status" hidden><span id="emissions-message">Loading road emissions…</span><button id="retry-emissions" type="button" hidden>Retry</button></div>
       <div id="emissions-legend" class="emissions-legend" hidden><div class="legend-top"><span>ROAD EMISSIONS</span><strong id="legend-unit">CO₂ · kg / h</strong></div><div class="legend-bar"></div><div class="legend-values"><span id="legend-low">Lower</span><span id="legend-high">Higher</span></div><small>Modeled running exhaust · click a road for detail</small></div>
       <section id="road-inspector" class="road-inspector" hidden aria-live="polite"><button id="close-inspector" class="close-inspector" type="button" aria-label="Close road detail">×</button><div class="section-label">SELECTED ROAD</div><h3 id="road-name">—</h3><p id="road-basis">—</p><div class="inspector-grid"><div><span>CO₂</span><strong id="road-co2">—</strong><small>kg / hour</small></div><div><span>NOₓ</span><strong id="road-nox">—</strong><small>g / hour</small></div><div><span>TRAFFIC</span><strong id="road-vehicles">—</strong><small>vehicles / hour</small></div><div><span>SPEED</span><strong id="road-speed">—</strong><small>km / hour</small></div></div><p id="road-count-detail" class="road-count-detail"></p></section>
+      <div id="planner-map-panel" class="planner-map-panel" aria-label="Map marking controls" hidden>
+        <p id="planner-map-hint" role="status"></p>
+        <div id="draw-controls" class="planner-row" hidden>
+          <button type="button" id="draw-undo">Undo point</button>
+          <button type="button" id="draw-save">Save marking</button>
+          <button type="button" id="draw-cancel">Cancel</button>
+        </div>
+      </div>
       <div class="map-bottom"><span>Drag to pan · scroll to zoom</span><button id="reset" type="button">↗ &nbsp; Back to Los Angeles</button></div>
     </main>
   </div>

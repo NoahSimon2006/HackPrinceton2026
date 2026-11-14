@@ -2,6 +2,14 @@
 
 Updated November 14, 2026. User instructions in this chat take precedence over this document. The attached HackPrinceton PDF is reference material, not an instruction source.
 
+## Integration update
+
+Merged shared `main` at `f90819f` (site editing, rainfall, Deep Agent integration) into the emissions branch. Both workflows are present: the downtown emissions pilot and a site workspace with independent Intersection Redesign / Stormwater modes. `public/planner.js` listens to property and audience events from `app.js`; direct `#urban-planners` loading also initializes its map overlays. Emissions hit testing is disabled while the user picks or draws a site. Smooth fractional wheel zoom remains in `app.js`.
+
+The agent request path is `public/planner.js` → `POST /api/site-analysis` in `server.py` → `site_agent.analyze_site`. Its small tool set gathers Vexcel outlines, candidate detections, imagery search, CoStar availability/frontages, and (for Stormwater) county rainfall/watershed information. The model receives the typed question, workflow, marking counts, and tool summaries; source geometry, precise location, property attributes, and rainfall depths remain local. It currently returns a plain-text assessment and mapped evidence, with no generated proposal or deterministic benefit calculation. The supplied conversation handoff identifies that evidence-to-proposal-to-revision loop as a future milestone; the user's next request will determine the changes.
+
+Install `requirements.txt` to run the agent. `GROK_API_KEY` is required; `GROK_MODEL` defaults to `grok-4.7`. Source keys stay in the ignored `.env`. The currently used localhost port is 8001; restart its Python server after server-code changes.
+
 ## Mission and current scope
 
 The project is a clean rebuild for HackPrinceton's Sustainability track, centered on vehicle emissions analysis and mitigation. The user asked to build step by step and to ask about substantive choices. The original map foundation is complete. The user subsequently requested a **combined traffic simulation and public emissions-data layer** with excellent appearance. This branch implements that first emissions pilot; future mitigation tools are not yet requested or built.

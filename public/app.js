@@ -324,6 +324,7 @@ function addMarker(property) {
     iconSize: [13, 13], iconAnchor: [6, 6] });
   const marker = L.marker([property.lat, property.lon], { icon, title: property.name });
   marker.bindPopup(popupContent(property));
+  marker.on("click", () => map.fire("plannerproperty", { property }));
   marker.addTo(propertyLayer);
   markerById.set(property.id, marker);
   return marker;
@@ -369,6 +370,7 @@ function selectProperty(property) {
   $("results").hidden = true;
   $("search").value = property.name;
   map.setView(location, zoom);
+  map.fire("plannerproperty", { property, searched: true });
   updateProperties();
 }
 
@@ -589,6 +591,9 @@ function selectAudience(tab, focus = false) {
   plannerActive = tab.id === "urban-planners";
   $("map-workspace").classList.toggle("planner-mode", plannerActive);
   $("buyer-intro").hidden = plannerActive;
+  $("planner").hidden = !plannerActive;
+  $("planner-title").hidden = !plannerActive;
+  map.fire("plannervisibility", { visible: plannerActive });
   $("planner-controls").hidden = !plannerActive;
   $("emissions-layer-row").hidden = !plannerActive;
   syncEmissionsVisibility();

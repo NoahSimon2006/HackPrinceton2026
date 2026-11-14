@@ -13,12 +13,16 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
+from hydrology import RAINFALL, WATERSHEDS, rainfall_at, rainfall_contours, watershed_at
+from site_evidence import imagery_evidence
+
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
 LA_BOUNDS = (-118.67, 33.70, -118.10, 34.35)  # west, south, east, north
 LAYERS = "urban,urban-r,wide-area,urban-g"
 VEXCEL = "https://api.vexcelgroup.com/v2"
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
+          "/planner.js": "planner.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
           "/vendor/leaflet.css": "vendor/leaflet.css"}
 
@@ -35,14 +39,18 @@ def load_env():
 load_env()
 
 
-def vexcel_request(path, params, accept, limit):
+def vexcel_request(path, params, accept, limit, *, post=False, timeout=18):
     key = os.getenv("VEXCEL_API_KEY", "").strip()
     if not key:
         raise ValueError("Vexcel key is missing from the local .env file.")
-    request = Request(f"{VEXCEL}{path}?{urlencode(params)}",
-                      headers={"X-API-KEY": key, "Accept": accept})
+    headers = {"X-API-KEY": key, "Accept": accept}
+    if post:
+        headers["Content-Type"] = "application/json"
+        request = Request(f"{VEXCEL}{path}", data=json.dumps(params).encode(), headers=headers)
+    else:
+        request = Request(f"{VEXCEL}{path}?{urlencode(params)}", headers=headers)
     try:
-        with urlopen(request, timeout=18) as response:
+        with urlopen(request, timeout=timeout) as response:
             data = response.read(limit + 1)
             if len(data) > limit:
                 raise ValueError("Vexcel response exceeded the size limit.")
@@ -97,13 +105,14 @@ def tile(z, x, y):
 
 
 @lru_cache(maxsize=1)
-def properties():
+def property_catalog():
     directory = os.getenv("COSTAR_KIT_DIR", "").strip()
     if not directory:
         raise ValueError("CoStar kit directory is not configured.")
     root = Path(directory).expanduser()
     types = json.loads((root / "schemas/enums.json").read_text())["PropertyType"]
     items = []
+    details, frontages = {}, {}
     with (root / "data/commercial-property.jsonl").open(encoding="utf-8") as file:
         for line in file:
             record = json.loads(line)
@@ -115,14 +124,58 @@ def properties():
             if not (LA_BOUNDS[0] <= lon <= LA_BOUNDS[2]
                     and LA_BOUNDS[1] <= lat <= LA_BOUNDS[3]):
                 continue
-            address_text = " ".join(str(address.get(key) or "").strip() for key in
-                                    ("streetNumber", "streetName", "streetType"))
-            address_text = " ".join(address_text.split())
-            items.append({"id": str(record.get("id", "")), "lat": lat, "lon": lon,
-                          "name": str(record.get("buildingName") or address_text or "Unnamed property"),
-                          "address": address_text,
-                          "type": types.get(str(record.get("propertyType")), "Unknown")})
-    return items
+            address_text = " ".join(" ".join(str(address.get(key) or "") for key in
+                                    ("streetNumber", "streetDirection", "streetName", "streetType")).split())
+            item = {
+                "id": str(record.get("id", "")), "lat": lat, "lon": lon,
+                "name": str(record.get("buildingName") or address_text or "Unnamed property").strip(),
+                "address": address_text,
+                "type": types.get(str(record.get("propertyType")), "Unknown"),
+            }
+            items.append(item)
+            apartment = record.get("propertyApartment") or {}
+            vacancy = apartment.get("vacancyPercent")
+            parking = [entry["totalSpaces"] for entry in (record.get("parking") or [])
+                       if entry.get("totalSpaces") is not None]
+            subtype = record.get("propertyIndustrial") or record.get("propertyRetail") or record.get("propertyFlex") or {}
+            docks = [subtype[key] for key in ("numExternalLoadingDocks", "numInternalLoadingDocks")
+                     if subtype.get(key) is not None]
+            details[item["id"]] = {
+                "units": apartment.get("totalNumUnits"),
+                "vacancyPercent": vacancy if isinstance(vacancy, (int, float)) and 0 <= vacancy <= 100 else None,
+                "reportedParkingSpaces": sum(parking) if parking else None,
+                "buildingAreaSqFt": record.get("grossBuildingAreaSquareFeet"),
+                "reportedLoadingDocks": sum(docks) if docks else None,
+            }
+            lines = []
+            for block in (record.get("propertyRetail"), record.get("land")):
+                for entry in (block or {}).get("frontage") or []:
+                    shape = (entry.get("footprint") or {}).get("shape")
+                    if shape and shape.get("type") == "LineString":
+                        lines.append({"geometry": shape, "street": entry.get("streetName"),
+                                      "curbCuts": entry.get("numCurbCuts")})
+            if lines:
+                frontages[item["id"]] = lines
+    return items, details, frontages
+
+
+def nearby_frontages(lon, lat):
+    items, _, frontages = property_catalog()
+    scale = math.cos(math.radians(lat))
+    matches = []
+    for prop in items:
+        if math.hypot((prop["lon"] - lon) * scale, prop["lat"] - lat) * 111_320 <= 110:
+            matches.extend(frontages.get(prop["id"], ()))
+    return matches[:12]
+
+
+def site_coordinates(query):
+    lat = float(query.get("lat", [""])[0])
+    lon = float(query.get("lon", [""])[0])
+    west, south, east, north = LA_BOUNDS
+    if not (west <= lon <= east and south <= lat <= north):
+        raise ValueError("Select a site within the Los Angeles map.")
+    return lon, lat
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -137,6 +190,67 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_json(self, status, data):
         self.send(status, json.dumps(data, separators=(",", ":")).encode(), "application/json")
+
+    def do_POST(self):
+        if urlsplit(self.path).path != "/api/site-analysis":
+            self.send_json(404, {"error": "Not found."})
+            return
+        if self.headers.get_content_type() != "application/json" or self.headers.get("Sec-Fetch-Site") == "cross-site":
+            self.send_json(400, {"error": "Send a JSON request from the map."})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 32_000:
+                raise ValueError("The site request is too large or empty.")
+            data = json.loads(self.rfile.read(length))
+            lon, lat = site_coordinates({"lat": [data["lat"]], "lon": [data["lon"]]})
+            workflow = data["workflow"]
+            question = data["question"].strip()
+            if workflow not in ("street", "water") or not 0 < len(question) <= 1500:
+                raise ValueError("Choose a workflow and enter a question up to 1,500 characters.")
+            markings = data.get("markings", [])
+            if not isinstance(markings, list) or any(
+                kind not in ("crossing", "access", "drainage", "treatment") for kind in markings
+            ):
+                raise ValueError("Invalid map markings.")
+            property_id = data.get("propertyId")
+        except (AttributeError, KeyError, TypeError, ValueError):
+            self.send_json(400, {"error": "Select a site and enter a planning question up to 1,500 characters."})
+            return
+
+        key = os.getenv("GROK_API_KEY", "").strip()
+        if not key:
+            self.send_json(503, {"error": "Set GROK_API_KEY to use the planning agent."})
+            return
+
+        def property_context():
+            items, details, _ = property_catalog()
+            selected = next((item for item in items if item["id"] == property_id and
+                             abs(item["lat"] - lat) < .00001 and abs(item["lon"] - lon) < .00001), None)
+            return (details[property_id] if selected else None), nearby_frontages(lon, lat)
+
+        def hydrology_context():
+            return {
+                "estimate": rainfall_at(lon, lat, rainfall_contours(LA_BOUNDS)),
+                "watershed": {"type": "FeatureCollection", "features": watershed_at(lon, lat)},
+            }
+
+        try:
+            from site_agent import analyze_site
+        except ImportError:
+            self.send_json(503, {"error": "Install requirements.txt in the Python environment that runs the map."})
+            return
+        try:
+            result = analyze_site(
+                key, os.getenv("GROK_MODEL", "grok-4.7"), question, workflow, markings,
+                lambda group: imagery_evidence(vexcel_request, LAYERS, lon, lat, workflow, group),
+                property_context, hydrology_context,
+            )
+        except Exception as error:
+            self.log_error("Planner agent failed (%s)", type(error).__name__)
+            self.send_json(503, {"error": "The planning agent could not finish this request."})
+            return
+        self.send_json(200, result)
 
     def do_GET(self):
         path = urlsplit(self.path)
@@ -162,15 +276,39 @@ class Handler(BaseHTTPRequestHandler):
                 west, south, east, north = map(float, raw)
                 if not all(math.isfinite(v) for v in (west, south, east, north)) or west >= east or south >= north:
                     raise ValueError("Invalid bounding box.")
-                visible = [p for p in properties() if west <= p["lon"] <= east and south <= p["lat"] <= north]
+                visible = [p for p in property_catalog()[0] if west <= p["lon"] <= east and south <= p["lat"] <= north]
                 self.send_json(200, {"properties": visible, "total": len(visible)})
             elif path.path == "/api/search":
                 q = parse_qs(path.query).get("q", [""])[0].strip().casefold()[:100]
                 if len(q) < 2:
                     self.send_json(200, {"results": []})
                 else:
-                    results = [p for p in properties() if q in (p["name"] + " " + p["address"]).casefold()]
+                    words = q.split()
+                    results = [p for p in property_catalog()[0]
+                               if all(word in (p["name"] + " " + p["address"]).casefold() for word in words)]
                     self.send_json(200, {"results": results[:8]})
+            elif path.path == "/api/property-detail":
+                property_id = parse_qs(path.query).get("id", [""])[0]
+                detail = property_catalog()[1].get(property_id)
+                if detail is None:
+                    self.send_json(404, {"error": "Property not found."})
+                else:
+                    self.send_json(200, detail)
+            elif path.path in ("/api/rainfall", "/api/watershed"):
+                try:
+                    lon, lat = site_coordinates(parse_qs(path.query))
+                except ValueError:
+                    self.send_json(400, {"error": "Select a valid location within the Los Angeles map."})
+                    return
+                try:
+                    if path.path == "/api/rainfall":
+                        self.send_json(200, {"estimate": rainfall_at(lon, lat, rainfall_contours(LA_BOUNDS)),
+                                             "source": RAINFALL})
+                    else:
+                        self.send_json(200, {"type": "FeatureCollection", "features": watershed_at(lon, lat),
+                                             "source": WATERSHEDS})
+                except (OSError, ValueError, KeyError, TypeError):
+                    self.send_json(503, {"error": "LA County hydrology data is temporarily unavailable."})
             elif re.fullmatch(r"/api/tiles/\d{1,2}/\d{1,7}/\d{1,7}\.jpg", path.path):
                 _, _, _, z, x, filename = path.path.split("/")
                 z, x, y = int(z), int(x), int(filename[:-4])
