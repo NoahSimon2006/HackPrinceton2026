@@ -18,10 +18,13 @@ Append `/#urban-planners` to open directly on the emissions overlay. After pulli
 
 ## Plan a site
 
-1. Open **Urban Planners**. Search for a CoStar property or select **Pick a site on the map**.
-2. Choose **Intersection Redesign** or **Stormwater**, then select **Analyze site** or edit the suggested question. One Deep Agent chooses which local tools to call. **Site evidence** draws the actual tool results, such as parcel and building outlines, detection candidates, and nearby CoStar frontage. Toggle **Show imagery search areas** to see the ranked scenes when the agent ran a search.
-3. In **Stormwater**, review the county subbasin and rainfall estimate. The 85th-percentile, 24-hour depth is estimated between adjacent LA County contours that bracket the site. Enter a scenario depth and source manually when the service or estimate is unavailable.
-4. Use **Adjust or add map markings** if a crossing, driveway, runoff source, or treatment area needs clarification. The next analysis sees which types of features you marked. Map markings, rainfall inputs, and assessments stay available during the current page session.
+1. Open **Urban Planners**, then select **Intersections** or **Stormwater** using the workspace buttons at the top of the sidebar. Emissions remains the default workspace. Direct links `/#stormwater` and `/#intersections` open site planning immediately.
+2. Search for a CoStar property or select **Pick a site on the map**. In **Stormwater**, the selected site's county subbasin and rainfall estimate load automatically, without an AI request or `GROK_API_KEY`. The cyan overlay shows the county subbasin containing the site. **View subbasin** zooms out around the covered site; **Back to site** returns to site scale. Each county source loads independently, with a retry for failed requests. Boundaries may extend beyond available imagery.
+3. Review the 85th-percentile, 24-hour rainfall depth, estimated only between adjacent LA County contours that bracket the site. **Scenario rainfall & sources** contains editable depth and source inputs; automatic results never overwrite manual scenario edits. These inputs do not yet drive runoff or capture calculations. Watershed membership does not establish site drainage, flood risk, or treatment suitability.
+4. Select **Analyze site** or edit the suggested question to ask the Deep Agent for additional evidence. **Site evidence** draws the actual tool results, such as parcel and building outlines, detection candidates, and nearby CoStar frontage. Toggle **Show imagery search areas** to see the ranked scenes when the agent ran a search.
+5. Use **Adjust or add map markings** if a crossing, driveway, runoff source, or treatment area needs clarification. The next analysis sees which types of features you marked. Map markings, rainfall inputs, and assessments stay available during the current page session, including when switching workspaces.
+
+Run `node tests/planner-hydrology.mjs` to check automatic county loading, independent source failures/retries, manual scenario preservation, workspace visibility, and rapid site switching without network calls.
 
 The configured xAI model receives the typed question, the workflow, and short summaries such as detection counts and source availability. The app keeps coordinates, geometry, rainfall depths, and CoStar fields on the local server and displays them in the browser.
 

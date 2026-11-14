@@ -18,8 +18,11 @@
     water: { kinds: ["drainage", "treatment"], brief: "Find possible sources of runoff and check the local rainfall. What could we evaluate for a rain garden or cistern?" },
   };
   const siteLayer = L.layerGroup();
-  const watershedLayer = L.geoJSON(null, { interactive: false, style: {
-    color: "#7cbdff", weight: 2, dashArray: "6 5", fillOpacity: .08,
+  map.createPane("watershed");
+  map.getPane("watershed").style.zIndex = 390;
+  map.getPane("watershed").style.pointerEvents = "none";
+  const watershedLayer = L.geoJSON(null, { pane: "watershed", interactive: false, style: {
+    color: "#80d7ff", weight: 3, dashArray: "8 5", fillColor: "#46afd4", fillOpacity: .18,
   } });
   const featuresLayer = L.layerGroup();
   const draftLayer = L.layerGroup();
@@ -267,42 +270,92 @@
   }
 
   function showRainfall() {
+    if (!site) { $("watershed-legend").hidden = true; return; }
     const record = site.water;
-    $("rain-result").textContent = record.rainMessage ?? "Analyze the site for a county estimate, or enter a depth.";
-    $("watershed-result").textContent = record.watershedMessage ?? "";
+    $("rain-result").textContent = record.rainState === "loading" ? "Loading county rainfall contours…"
+      : record.rainError || record.rainMessage || "County rainfall loads automatically for the selected site.";
+    $("watershed-result").textContent = record.watershedState === "loading" ? "Finding the county subbasin…"
+      : record.watershedError || record.watershedMessage || "County subbasin loads automatically for the selected site.";
+    $("watershed-name").textContent = record.watershedName || "—";
+    $("rain-value").textContent = record.estimate?.inches.toFixed(2) ?? "—";
     $("rain-depth").value = record.depth;
     $("rain-source").value = record.source;
+    const hasBoundary = Boolean(record.watershed?.features.length);
+    $("show-watershed").disabled = !hasBoundary;
+    $("view-watershed").disabled = !hasBoundary;
+    $("retry-hydrology").hidden = !record.rainError && !record.watershedError;
+    $("retry-hydrology").disabled = record.rainState === "loading" || record.watershedState === "loading";
+    const visible = workflow === "water" && !$("planner").hidden && $("show-watershed").checked && hasBoundary;
     watershedLayer.clearLayers();
-    if (workflow === "water" && record.watershed) watershedLayer.addData(record.watershed);
+    if (visible) watershedLayer.addData(record.watershed);
+    $("watershed-legend").hidden = !visible;
+    $("watershed-map-name").textContent = record.watershedName || "County subbasin";
   }
 
   function applyHydrology(record, { estimate, watershed }) {
-    if (!estimate) {
-      record.rainMessage = "No reliable contour estimate here. Enter a sourced depth.";
-    } else {
-      const { inches, depth_range: range, method } = estimate;
-      record.rainMessage = method === "on_contour"
-        ? `${inches.toFixed(2)} in · county 85th-percentile, 24-hour contour.`
-        : `About ${inches.toFixed(2)} in · estimated between the ${range[0]} and ${range[1]} in county contours (85th-percentile, 24-hour).`;
-      if (!record.rainEdited) {
-        record.depth = inches;
-        record.source = method === "on_contour" ? "LA County 24-hour rainfall contour" : "LA County 24-hour rainfall contour estimate";
+    // Each source can succeed independently. A missing estimate (null) is a
+    // valid result; an omitted estimate must not erase previously loaded data.
+    if (estimate !== undefined) {
+      record.estimate = estimate;
+      record.rainState = "ready";
+      record.rainError = "";
+      if (!estimate) {
+        record.rainMessage = "No reliable contour estimate here. Enter a sourced scenario depth below.";
+      } else {
+        const { inches, depth_range: range, method } = estimate;
+        record.rainMessage = method === "on_contour"
+          ? "Site lies on the county rainfall contour."
+          : `Estimated between the ${range[0]} and ${range[1]} in county contours that bracket this site.`;
+        if (!record.rainEdited) {
+          record.depth = inches;
+          record.source = method === "on_contour" ? "LA County 24-hour rainfall contour" : "LA County 24-hour rainfall contour estimate";
+        }
       }
     }
+    if (!watershed) return;
+    record.watershedState = "ready";
+    record.watershedError = "";
     record.watershed = watershed;
-    const names = [...new Set(watershed.features.map(({ properties }) => properties.WATERSHED?.trim()).filter(Boolean))];
-    record.watershedMessage = names.length
-      ? `Watershed: ${names.map((name) => name.replace(/\b\w/g, (letter) => letter.toUpperCase())).join(", ")}`
-      : watershed.features.length ? "County subbasin shown on the map." : "No county subbasin found for this point.";
+    const title = (name) => name.toLowerCase() === "lariver" ? "Los Angeles River"
+      : name.toLowerCase().replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+    const names = [...new Set(watershed.features.map(({ properties }) => properties?.WATERSHED?.trim()).filter(Boolean))];
+    const subbasins = [...new Set(watershed.features.map(({ properties }) => properties?.NAME?.trim()).filter(Boolean))];
+    record.watershedName = names.map(title).join(" / ") || (watershed.features.length ? "County subbasin" : "Outside mapped subbasins");
+    record.watershedMessage = subbasins.length ? `Subbasin: ${subbasins.map(title).join(", ")}.`
+      : watershed.features.length ? "Containing subbasin mapped by LA County Public Works."
+      : "No county subbasin found for this point.";
+  }
+
+  function loadHydrology(selected, retry = false) {
+    const record = selected.water;
+    const query = new URLSearchParams({ lat: selected.center.lat, lon: selected.center.lng });
+    for (const [field, endpoint] of [["rain", "rainfall"], ["watershed", "watershed"]]) {
+      if (record[`${field}State`] === "ready" || record[`${field}State`] === "loading") continue;
+      if (record[`${field}State`] === "error" && !retry) continue;
+      record[`${field}State`] = "loading";
+      record[`${field}Error`] = "";
+      json(`/api/${endpoint}?${query}`).then((result) => {
+        applyHydrology(record, field === "rain" ? { estimate: result.estimate } : { watershed: result });
+      }).catch((error) => {
+        record[`${field}State`] = "error";
+        record[`${field}Error`] = `${field === "rain" ? "Rainfall" : "Watershed"} unavailable. ${error.message}`;
+      }).finally(() => {
+        // Keep results cached for their site without painting over a newer selection.
+        if (site === selected) showRainfall();
+      });
+    }
+    if (site === selected) showRainfall();
   }
 
   function showWorkflow() {
     $("water-tools").hidden = workflow !== "water";
+    if (!site) return;
     $("planning-brief").value = site[workflow].brief;
     showMarkActions();
     showFeatures();
     showEvidence();
     showRainfall();
+    if (workflow === "water") loadHydrology(site);
   }
 
   function selectSite(center, property = null) {
@@ -329,6 +382,7 @@
       fillOpacity: 1, interactive: false }).addTo(siteLayer);
     showWorkflow();
     setStatus("");
+    $("site-card").scrollIntoView({ block: "start" });
 
     if (!property) return;
     const selectedSite = site;
@@ -374,26 +428,39 @@
       selectSite(L.latLng(property.lat, property.lon), property);
     }
   });
-  map.on("plannervisibility", ({ visible }) => {
-    if (visible) overlays.addTo(map);
-    else {
-      finishDrawing();
-      setPicking(false);
-      overlays.remove();
-    }
-  });
-  // app.js may already have opened the workspace through #urban-planners
-  // before this deferred script registered its visibility listener.
-  if (!$("planner").hidden) overlays.addTo(map);
-  for (const input of document.querySelectorAll('input[name="workflow"]')) {
-    input.addEventListener("change", () => {
-      finishDrawing();
-      setPicking(false);
-      workflow = input.value;
+  function showWorkspace({ mode, visible }) {
+    finishDrawing();
+    setPicking(false);
+    if (visible) {
+      workflow = mode;
+      overlays.addTo(map);
       showWorkflow();
-      setStatus("");
-    });
+      setStatus(site ? "" : "Search for a property or pick any covered location.");
+      if (site) $("site-card").scrollIntoView({ block: "start" });
+    } else {
+      overlays.remove();
+      $("watershed-legend").hidden = true;
+    }
   }
+  map.on("plannerworkspace", showWorkspace);
+  // app.js may have selected a workspace from a direct link before we subscribed.
+  showWorkspace({ mode: planningMode, visible: !$("planner").hidden });
+  $("retry-hydrology").addEventListener("click", () => loadHydrology(site, true));
+  $("show-watershed").addEventListener("change", showRainfall);
+  $("return-to-site").addEventListener("click", () => map.setView(site.center, 17));
+  $("view-watershed").addEventListener("click", () => {
+    $("show-watershed").checked = true;
+    showRainfall();
+    const bounds = watershedLayer.getBounds();
+    if (!bounds.isValid()) return;
+    // Keep the selected, covered site at the center even for a county polygon
+    // extending beyond our Vexcel area; the imagery coverage guard still applies.
+    const latRadius = Math.max(Math.abs(bounds.getNorth() - site.center.lat), Math.abs(bounds.getSouth() - site.center.lat));
+    const lngRadius = Math.max(Math.abs(bounds.getEast() - site.center.lng), Math.abs(bounds.getWest() - site.center.lng));
+    const extent = L.latLngBounds([site.center.lat - latRadius, site.center.lng - lngRadius],
+      [site.center.lat + latRadius, site.center.lng + lngRadius]);
+    map.setView(site.center, Math.min(14, map.getBoundsZoom(extent, false, L.point(48, 48))));
+  });
   $("draw-cancel").addEventListener("click", () => {
     finishDrawing();
     setStatus("Edits canceled.");

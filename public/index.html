@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=10">
+  <link rel="stylesheet" href="/styles.css?v=11">
   <script defer src="/vendor/leaflet.js"></script>
-  <script defer src="/app.js?v=12"></script>
-  <script defer src="/planner.js?v=6"></script>
+  <script defer src="/app.js?v=13"></script>
+  <script defer src="/planner.js?v=7"></script>
 </head>
 <body>
   <div id="audience-tabs" class="audience-tabs" role="tablist" aria-label="Map workspace">
@@ -22,6 +22,11 @@
         <div id="buyer-intro"><div class="section-label">EXPLORE</div>
         <h1>See the city from above.</h1>
         <p class="intro">Explore Vexcel aerial imagery and properties across Los Angeles.</p></div>
+        <nav id="planning-workspaces" class="planning-workspaces" aria-label="Planning workspace" hidden>
+          <button id="workspace-emissions" type="button" aria-pressed="true">Emissions</button>
+          <button id="workspace-street" type="button" aria-pressed="false">Intersections</button>
+          <button id="workspace-water" type="button" aria-pressed="false">Stormwater</button>
+        </nav>
         <section id="planner-controls" class="planner-controls" hidden aria-label="Emissions analysis controls">
           <div class="planner-kicker"><span class="live-pip"></span> DOWNTOWN LA PILOT <span>MODEL / 2026</span></div>
           <h1>See the emissions<br><em>behind the traffic.</em></h1>
@@ -34,6 +39,7 @@
           <div class="planner-disclosure"><details><summary>How this estimate works <span>↗</span></summary><p id="method-text">Loading methodology…</p><div id="source-links" class="source-links"></div></details></div>
         </section>
         <h1 id="planner-title" hidden>Plan a site</h1>
+        <p id="site-intro" class="site-intro" hidden></p>
         <div class="search-block">
           <label for="search">Find a CoStar property</label>
           <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" autocomplete="off" placeholder="Property name or address"></div>
@@ -48,13 +54,34 @@
             <p id="site-property"></p>
           </div>
           <div id="site-tools" hidden>
-            <fieldset class="workflow-picker">
-              <legend>Planning workflow</legend>
-              <div>
-                <label><input type="radio" name="workflow" value="street" checked><span>Intersection<br>Redesign</span></label>
-                <label><input type="radio" name="workflow" value="water"><span>Stormwater</span></label>
+            <section id="water-tools" class="planner-card water-card" aria-labelledby="rain-title" hidden>
+              <div class="water-card-heading"><h2 id="rain-title">Watershed &amp; rainfall</h2><span>LA COUNTY</span></div>
+              <div class="water-summary" aria-live="polite">
+                <span class="control-label">COUNTY WATERSHED</span>
+                <strong id="watershed-name">—</strong>
+                <p id="watershed-result"></p>
+                <div class="rain-stat"><strong id="rain-value">—</strong><span>inches<br><small>85th-percentile · 24-hour</small></span></div>
+                <p id="rain-result"></p>
               </div>
-            </fieldset>
+              <div class="planner-row water-actions">
+                <button id="view-watershed" type="button" disabled>View subbasin</button>
+                <button id="return-to-site" type="button">Back to site</button>
+                <button id="retry-hydrology" type="button" hidden>Retry county data</button>
+              </div>
+              <label class="evidence-toggle"><input id="show-watershed" type="checkbox" checked> Show county subbasin</label>
+              <p class="hydrology-note">The boundary identifies the county subbasin containing this site. It does not establish site drainage direction or flood risk.</p>
+              <details class="rain-scenario"><summary>Scenario rainfall &amp; sources</summary>
+                <label for="rain-depth">Scenario rainfall (inches)</label>
+                <input id="rain-depth" type="number" min="0" step="any" inputmode="decimal">
+                <label for="rain-source">Scenario source or assumption</label>
+                <input id="rain-source" type="text" maxlength="160" placeholder="e.g. LA County contour estimate">
+                <p>Scenario inputs are saved for this page session. Runoff and capture volumes are not calculated yet.</p>
+                <div class="planner-sources">
+                  <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/hydrologygis/MapServer/3" target="_blank" rel="noopener">County rainfall contours ↗</a>
+                  <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/PW_Open_Data/MapServer/36" target="_blank" rel="noopener">County watershed subbasins ↗</a>
+                </div>
+              </details>
+            </section>
             <form id="site-analysis" class="planner-card">
               <h2><label for="planning-brief">Ask the planning agent</label></h2>
               <textarea id="planning-brief" rows="3" maxlength="1500" required aria-describedby="analysis-provider"></textarea>
@@ -70,19 +97,6 @@
               <label id="site-search-toggle" class="evidence-toggle" hidden>
                 <input id="show-search-matches" type="checkbox"> Show imagery search areas
               </label>
-            </section>
-            <section id="water-tools" class="planner-card" aria-labelledby="rain-title" hidden>
-              <h2 id="rain-title">Rainfall and watershed</h2>
-              <p id="watershed-result"></p>
-              <p id="rain-result" role="status"></p>
-              <div class="planner-sources">
-                <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/hydrologygis/MapServer/3" target="_blank" rel="noopener">County rainfall contours</a>
-                <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/PW_Open_Data/MapServer/36" target="_blank" rel="noopener">County watershed layer</a>
-              </div>
-              <label for="rain-depth">Scenario rainfall (inches)</label>
-              <input id="rain-depth" type="number" min="0" step="any" inputmode="decimal">
-              <label for="rain-source">Scenario source or assumption</label>
-              <input id="rain-source" type="text" maxlength="160" placeholder="e.g. LA County contour estimate">
             </section>
             <details class="planner-card" id="manual-markings">
               <summary>Adjust or add map markings</summary>
@@ -110,6 +124,7 @@
       <div id="map" role="application" aria-label="Pan and zoom aerial map"></div>
       <div id="emissions-notice" class="emissions-notice" role="status" hidden><span id="emissions-message">Loading road emissions…</span><button id="retry-emissions" type="button" hidden>Retry</button></div>
       <div id="emissions-legend" class="emissions-legend" hidden><div class="legend-top"><span>ROAD EMISSIONS</span><strong id="legend-unit">CO₂ · kg / h</strong></div><div class="legend-bar"></div><div class="legend-values"><span id="legend-low">Lower</span><span id="legend-high">Higher</span></div><small>Modeled running exhaust · click a road for detail</small></div>
+      <section id="watershed-legend" class="watershed-legend" aria-label="Watershed map key" hidden><div class="legend-top"><span>WATERSHED CONTEXT</span><span>LA COUNTY</span></div><strong id="watershed-map-name">Select a site</strong><p><span class="watershed-swatch"></span> County subbasin containing your site</p><small>Regional context · not a flood or flow simulation</small></section>
       <section id="road-inspector" class="road-inspector" hidden aria-live="polite"><button id="close-inspector" class="close-inspector" type="button" aria-label="Close road detail">×</button><div class="section-label">SELECTED ROAD</div><h3 id="road-name">—</h3><p id="road-basis">—</p><div class="inspector-grid"><div><span>CO₂</span><strong id="road-co2">—</strong><small>kg / hour</small></div><div><span>NOₓ</span><strong id="road-nox">—</strong><small>g / hour</small></div><div><span>TRAFFIC</span><strong id="road-vehicles">—</strong><small>vehicles / hour</small></div><div><span>SPEED</span><strong id="road-speed">—</strong><small>km / hour</small></div></div><p id="road-count-detail" class="road-count-detail"></p></section>
       <div id="planner-map-panel" class="planner-map-panel" aria-label="Map marking controls" hidden>
         <p id="planner-map-hint" role="status"></p>
