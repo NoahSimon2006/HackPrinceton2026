@@ -27,7 +27,7 @@ function harness(mode = 'water') {
     on(name, handler) { this.handlers[name] = handler; },
     fire(name, event) { this.handlers[name]?.(event); }, setView() {}, closePopup() {}, getZoom: () => 17 };
   const requests = [];
-  const json = (url) => new Promise((resolve, reject) => requests.push({ url, resolve, reject }));
+  const json = (url, options = {}) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }));
   vm.runInNewContext(source, { $, map, json, planningMode: mode, coverage: null,
     URLSearchParams, AbortController, document: { createElement: element },
     L: { layerGroup: layer, geoJSON: layer, circleMarker: layer } });
@@ -107,4 +107,25 @@ const flush = () => new Promise(setImmediate);
   assert.equal(h.$('rain-depth').value, .99);
   assert.equal(h.requests.length, 4);
 }
-console.log('PASS: automatic hydrology, partial failures/retry, manual inputs, workspace visibility, site races and caching');
+// Analysis sends the edited rainfall separately from the county estimate and
+// marks an in-flight result stale when the user changes its inputs.
+{
+  const h = harness();
+  h.select(34.05, -118.25);
+  h.requests[0].resolve(rainfall);
+  h.requests[1].resolve(watershed('ballona'));
+  await flush();
+  h.$('rain-depth').events.input({ target: { value: '1.5' } });
+  h.$('rain-source').events.input({ target: { value: 'Sensitivity scenario' } });
+  const pending = h.$('site-analysis').events.submit({ preventDefault() {} });
+  const body = JSON.parse(h.requests[2].options.body);
+  assert.deepEqual(body.rainfallScenario, { inches: 1.5, source: 'Sensitivity scenario' });
+  assert.deepEqual(body.markings, []);
+  h.$('rain-depth').events.input({ target: { value: '2' } });
+  h.requests[2].resolve({ report: { findings: [], recommendations: [], questions: ['Confirm drainage?'] },
+    evidence: { outlines: [], detections: [], frontages: [], search: [], unavailable: [] }, facts: [], sourceStatus: {} });
+  await pending;
+  assert.equal(h.$('analysis-stale').hidden, false);
+  assert.equal(h.$('run-site-analysis').disabled, false);
+}
+console.log('PASS: hydrology, source failures/retry, manual inputs, workspace visibility, site races, caching, scenario submission and stale analysis');

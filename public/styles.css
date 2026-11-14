@@ -317,3 +317,25 @@ body {
 .watershed-swatch{width:20px;height:12px;background:#46afd42e;border:2px dashed #80d7ff;display:inline-block;flex:none}
 .watershed-legend small{color:#95b3bf;font-size:9px}
 @media(max-width:760px){.planning-workspaces{margin-bottom:12px}.planning-workspaces button{padding:8px 2px}.site-intro{font-size:11px;margin-bottom:10px}.sidebar h1#planner-title{font-size:20px}.watershed-legend{left:12px;bottom:48px;width:250px;padding:11px 13px}.watershed-legend>strong{font-size:16px;margin-top:7px}.water-mode .sidebar{max-height:45vh}}
+
+.site-review{border-top:1px solid #3b5144;padding-top:4px}
+.site-review h3{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#afe1b9;margin:16px 0 8px}
+.planner .site-review p{font-size:12px;color:#d2e1d7;line-height:1.65;margin:0 0 12px;white-space:normal}
+.planner .fact-reference{border:0;background:#314f3d;color:#bcecc4;font-size:10px;font-weight:800;padding:1px 5px;margin-left:4px;border-radius:4px}
+.planner .analysis-stale{border-left:2px solid #e1c584;padding:7px 9px;background:#443a2633;color:#e3d3ad;font-size:11px}
+#analysis-message{margin-top:10px;color:#c8dbc9}
+.site-facts-list{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:8px}
+.site-facts-list details{background:#101c17;border:1px solid #344f3f;border-radius:9px;padding:11px;scroll-margin-top:65px}
+.site-facts-list summary{list-style:none;display:grid;gap:7px}
+.site-facts-list summary::-webkit-details-marker{display:none}
+.site-facts-list summary>span{font-size:11px;line-height:1.5;color:#b7cdbf}
+.site-facts-list summary>strong{font-size:17px;line-height:1.25;color:#e5f3e9;letter-spacing:-.025em;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.fact-basis{justify-self:start;font-size:9px;padding:3px 6px;background:#244334;color:#b3dec4;border-radius:4px}
+.fact-basis.candidate,.fact-basis.assumption{background:#403820;color:#e3d092}
+.fact-basis.reported{background:#253447;color:#b8d2ed}
+.planner .site-facts-list p{font-size:10px;line-height:1.6;color:#a8c2b0;margin-top:9px}
+.site-facts-list a,.site-facts-list details>span{font-size:10px;color:#a7d9b1}
+.planner .site-facts-list .fact-metadata{font-size:9px;color:#8ca795;overflow-wrap:anywhere}
+.source-status{font-size:10px;color:#91b39a;line-height:1.6;margin-top:10px}
+.source-warnings{font-size:10px;line-height:1.5;color:#d8c6a1;padding-left:15px;margin:10px 0 0}
+.source-warnings:empty{display:none}

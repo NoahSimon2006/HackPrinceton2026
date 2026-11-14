@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from hydrology import RAINFALL, WATERSHEDS, rainfall_at, rainfall_contours, watershed_at
 from site_evidence import imagery_evidence
+from site_measurements import validate_inputs
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
@@ -141,6 +142,7 @@ def property_catalog():
             docks = [subtype[key] for key in ("numExternalLoadingDocks", "numInternalLoadingDocks")
                      if subtype.get(key) is not None]
             details[item["id"]] = {
+                "propertyType": item["type"],
                 "units": apartment.get("totalNumUnits"),
                 "vacancyPercent": vacancy if isinstance(vacancy, (int, float)) and 0 <= vacancy <= 100 else None,
                 "reportedParkingSpaces": sum(parking) if parking else None,
@@ -159,13 +161,14 @@ def property_catalog():
     return items, details, frontages
 
 
-def nearby_frontages(lon, lat):
+def nearby_frontages(lon, lat, property_id=None):
     items, _, frontages = property_catalog()
     scale = math.cos(math.radians(lat))
     matches = []
     for prop in items:
         if math.hypot((prop["lon"] - lon) * scale, prop["lat"] - lat) * 111_320 <= 110:
-            matches.extend(frontages.get(prop["id"], ()))
+            matches.extend({**line, "selectedProperty": prop["id"] == property_id}
+                           for line in frontages.get(prop["id"], ()))
     return matches[:12]
 
 
@@ -208,13 +211,14 @@ class Handler(BaseHTTPRequestHandler):
             question = data["question"].strip()
             if workflow not in ("street", "water") or not 0 < len(question) <= 1500:
                 raise ValueError("Choose a workflow and enter a question up to 1,500 characters.")
-            markings = data.get("markings", [])
-            if not isinstance(markings, list) or any(
-                kind not in ("crossing", "access", "drainage", "treatment") for kind in markings
-            ):
-                raise ValueError("Invalid map markings.")
+            markings, scenario = validate_inputs(data.get("markings", []), data.get("rainfallScenario"), workflow, lon, lat)
             property_id = data.get("propertyId")
-        except (AttributeError, KeyError, TypeError, ValueError):
+            if property_id is not None and (not isinstance(property_id, str) or len(property_id) > 80):
+                raise ValueError("Invalid property reference.")
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+            return
+        except (AttributeError, KeyError, TypeError):
             self.send_json(400, {"error": "Select a site and enter a planning question up to 1,500 characters."})
             return
 
@@ -227,13 +231,19 @@ class Handler(BaseHTTPRequestHandler):
             items, details, _ = property_catalog()
             selected = next((item for item in items if item["id"] == property_id and
                              abs(item["lat"] - lat) < .00001 and abs(item["lon"] - lon) < .00001), None)
-            return (details[property_id] if selected else None), nearby_frontages(lon, lat)
+            return (details[property_id] if selected else None), nearby_frontages(lon, lat, property_id if selected else None)
 
         def hydrology_context():
-            return {
-                "estimate": rainfall_at(lon, lat, rainfall_contours(LA_BOUNDS)),
-                "watershed": {"type": "FeatureCollection", "features": watershed_at(lon, lat)},
-            }
+            result = {"unavailable": []}
+            for name, fetch in (
+                ("estimate", lambda: rainfall_at(lon, lat, rainfall_contours(LA_BOUNDS))),
+                ("watershed", lambda: {"type": "FeatureCollection", "features": watershed_at(lon, lat)}),
+            ):
+                try:
+                    result[name] = fetch()
+                except (OSError, ValueError, KeyError, TypeError):
+                    result["unavailable"].append("rainfall" if name == "estimate" else name)
+            return result
 
         try:
             from site_agent import analyze_site
@@ -245,6 +255,7 @@ class Handler(BaseHTTPRequestHandler):
                 key, os.getenv("GROK_MODEL", "grok-4.7"), question, workflow, markings,
                 lambda group: imagery_evidence(vexcel_request, LAYERS, lon, lat, workflow, group),
                 property_context, hydrology_context,
+                lon=lon, lat=lat, scenario=scenario,
             )
         except Exception as error:
             self.log_error("Planner agent failed (%s)", type(error).__name__)

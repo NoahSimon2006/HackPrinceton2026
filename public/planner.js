@@ -38,9 +38,102 @@
   function addEvidence(item, color, style = {}) {
     const layer = L.geoJSON(item, { style: { color, weight: 2, fillOpacity: .1, ...style } });
     const label = document.createElement("span");
-    const { label: name, date, score } = item.properties;
-    label.textContent = [name, date, score == null ? null : `detector score ${score.toFixed(2)}`].filter(Boolean).join(" · ");
+    const { label: name, date, score, evidenceId } = item.properties;
+    label.textContent = [name, evidenceId, date, score == null ? null : `detector score ${score.toFixed(2)}`].filter(Boolean).join(" · ");
     layer.bindTooltip(label).addTo(evidenceLayer);
+  }
+
+  function showReview(record) {
+    const facts = record.facts ?? [];
+    const output = $("agent-assessment");
+    output.replaceChildren();
+    output.hidden = !record.report;
+    $("analysis-message").hidden = !record.evidencePending && !record.evidenceError;
+    $("analysis-message").textContent = record.evidencePending ? "Measuring site evidence and checking source-backed recommendations…" : record.evidenceError || "";
+    $("analysis-stale").hidden = !record.stale;
+    if (record.report) {
+      for (const [key, heading] of [["findings", "What the evidence shows"], ["recommendations", "Options to evaluate"], ["questions", "Confirm next"]]) {
+        const entries = record.report[key] ?? [];
+        if (!entries.length) continue;
+        const title = document.createElement("h3");
+        title.textContent = heading;
+        output.append(title);
+        for (const entry of entries) {
+          const paragraph = document.createElement("p");
+          paragraph.textContent = typeof entry === "string" ? entry : entry.text;
+          for (const id of entry.fact_ids ?? []) {
+            const index = facts.findIndex((fact) => fact.id === id);
+            if (index < 0) continue;
+            const link = document.createElement("button");
+            link.type = "button";
+            link.className = "fact-reference";
+            link.textContent = `[${index + 1}]`;
+            link.setAttribute("aria-label", `Source ${index + 1}: ${facts[index].label}`);
+            link.addEventListener("click", () => {
+              const row = $(`fact-${id}`);
+              row.open = true;
+              row.scrollIntoView({ block: "center" });
+              row.focus({ preventScroll: true });
+            });
+            paragraph.append(link);
+          }
+          output.append(paragraph);
+        }
+      }
+    }
+    $("site-facts").hidden = !facts.length && !record.sourceStatus;
+    const list = $("site-facts-list");
+    list.replaceChildren();
+    const labels = { measured: "Measured", reported: "Reported", estimated: "Estimated", candidate: "Candidate", user_marked: "User marked", assumption: "Assumption", availability: "Source status" };
+    facts.forEach((fact, index) => {
+      const row = document.createElement("li");
+      const detail = document.createElement("details");
+      detail.id = `fact-${fact.id}`;
+      detail.tabIndex = -1;
+      const summary = document.createElement("summary");
+      const name = document.createElement("span");
+      name.textContent = `${index + 1}. ${fact.label}`;
+      const value = document.createElement("strong");
+      value.textContent = fact.display;
+      const badge = document.createElement("small");
+      badge.className = `fact-basis ${fact.basis}`;
+      badge.textContent = labels[fact.basis] || fact.basis;
+      summary.append(name, value, badge);
+      detail.append(summary);
+      for (const text of [fact.method, fact.note]) {
+        if (!text) continue;
+        const paragraph = document.createElement("p");
+        paragraph.textContent = text;
+        detail.append(paragraph);
+      }
+      const origin = document.createElement(fact.source.url ? "a" : "span");
+      origin.textContent = fact.source.provider;
+      if (fact.source.url) { origin.href = fact.source.url; origin.target = "_blank"; origin.rel = "noopener"; }
+      detail.append(origin);
+      const metadata = document.createElement("p");
+      metadata.className = "fact-metadata";
+      metadata.textContent = [fact.source.observed_at ? `Observed ${fact.source.observed_at}` : "Observation date unavailable",
+        `Retrieved ${fact.source.retrieved_at.slice(0, 10)}`, fact.source.collection ? `Collection ${fact.source.collection}` : null,
+        fact.feature_ids.length ? `Map references: ${fact.feature_ids.join(", ")}` : null].filter(Boolean).join(" · ");
+      detail.append(metadata);
+      row.append(detail);
+      list.append(row);
+    });
+    const statuses = { outlines: "Parcel & buildings", detections: "Feature detection", property: "CoStar", hydrology: "County hydrology", search: "Imagery search" };
+    $("site-source-status").textContent = Object.entries(record.sourceStatus ?? {})
+      .map(([name, status]) => `${statuses[name] ?? name}: ${status === "empty" ? "no usable facts" : status}`).join(" · ");
+    $("site-source-warnings").replaceChildren();
+    for (const warning of record.sourceWarnings ?? []) {
+      const item = document.createElement("li");
+      item.textContent = warning;
+      $("site-source-warnings").append(item);
+    }
+  }
+
+  function inputsChanged(record) {
+    record.revision = (record.revision ?? 0) + 1;
+    if (record.report || record.evidencePending || record.facts?.length) record.stale = true;
+    showReview(record);
   }
 
   function showEvidence() {
@@ -50,9 +143,7 @@
     const list = $("site-evidence-list");
     list.replaceChildren();
     $("run-site-analysis").disabled = Boolean(record.evidencePending);
-    const assessment = $("agent-assessment");
-    assessment.hidden = !record.assessment;
-    assessment.textContent = record.assessment ?? "";
+    showReview(record);
     $("site-search-toggle").hidden = !evidence?.search?.length;
     $("site-evidence-note").hidden = !evidence;
     if (!evidence) {
@@ -77,7 +168,7 @@
     }
     for (const frontage of frontages) {
       const label = [frontage.street, "CoStar frontage", frontage.curbCuts == null ? null : `${frontage.curbCuts} reported curb cuts`].filter(Boolean).join(" · ");
-      addEvidence({ type: "Feature", geometry: frontage.geometry, properties: { label } }, "#eb9eff", { weight: 4 });
+      addEvidence({ type: "Feature", geometry: frontage.geometry, properties: { label, evidenceId: frontage.evidenceId } }, "#eb9eff", { weight: 4 });
       legend.set("Street frontage · CoStar", "#eb9eff");
     }
     if ($("show-search-matches").checked) {
@@ -97,9 +188,9 @@
     const notes = workflow === "street"
       ? [!found.has("Driveway entrance") && "Driveway location unverified.", !found.has("Zebra crosswalk") && "Crossing location unverified."]
       : ["Building and parking outlines show potential runoff surfaces. Drainage direction and treatment suitability are unverified."];
-    if (unavailable.some((group) => group !== "hydrology")) notes.push("Some Vexcel data could not be loaded.");
+    if (unavailable.some((group) => ["outlines", "detections", "search"].includes(group))) notes.push("Some Vexcel data could not be loaded.");
     if (unavailable.includes("hydrology")) notes.push("County rainfall or watershed data could not be loaded.");
-    if (evidence.costarUnavailable) notes.push("CoStar frontage unavailable.");
+    if (unavailable.includes("property")) notes.push("CoStar context unavailable.");
     $("site-evidence-note").textContent = notes.filter(Boolean).join(" ");
   }
 
@@ -111,10 +202,30 @@
     if (record.evidencePending) return;
     const question = record.brief.trim();
     if (!question) return;
+    const revision = record.revision ?? 0;
+    const markings = record.features.map(({ kind, points }) => {
+      const coordinates = points.map(({ lat, lng }) => [lng, lat]);
+      return { kind, geometry: kind === "crossing" ? { type: "LineString", coordinates }
+        : { type: "Polygon", coordinates: [[...coordinates, coordinates[0]]] } };
+    });
+    let rainfallScenario = null;
+    if (mode === "water" && record.rainEdited) {
+      const inches = Number(record.depth);
+      if (String(record.depth).trim() === "" || !Number.isFinite(inches) || inches < 0 || inches > 100 || !record.source.trim()) {
+        record.evidenceError = "Enter a scenario rainfall depth from 0 to 100 inches and its source, or assumption, before analysis.";
+        showReview(record);
+        return;
+      }
+      rainfallScenario = { inches, source: record.source.trim() };
+    }
     record.evidencePending = true;
     record.evidenceError = "";
     record.evidence = null;
-    record.assessment = "";
+    record.report = null;
+    record.facts = [];
+    record.sourceWarnings = [];
+    record.sourceStatus = null;
+    record.stale = false;
     showEvidence();
     try {
       const result = await json("/api/site-analysis", {
@@ -122,15 +233,20 @@
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({ lat: selected.center.lat, lon: selected.center.lng,
           propertyId: selected.propertyId, workflow: mode, question,
-          markings: record.features.map(({ kind }) => kind) }),
+          markings, rainfallScenario }),
       });
       record.evidence = result.evidence;
-      record.assessment = result.assessment;
+      record.report = result.report;
+      record.facts = result.facts ?? [];
+      record.sourceWarnings = result.sourceWarnings ?? [];
+      record.sourceStatus = result.sourceStatus;
+      record.evidenceError = result.analysisError ?? "";
       if (result.hydrology) applyHydrology(selected.water, result.hydrology);
     } catch (error) {
       record.evidenceError = error.message;
     } finally {
       record.evidencePending = false;
+      record.stale = (record.revision ?? 0) !== revision;
       if (site?.[workflow] === record) {
         showEvidence();
         showRainfall();
@@ -187,6 +303,7 @@
       remove.disabled = Boolean(draft);
       remove.addEventListener("click", () => {
         site[workflow].features = site[workflow].features.filter((entry) => entry !== feature);
+        inputsChanged(site[workflow]);
         showFeatures();
         setStatus(`${label.textContent} removed.`);
       });
@@ -483,6 +600,7 @@
     }
     if (draft.feature) draft.feature.points = draft.points;
     else site[workflow].features.push({ kind: draft.kind, points: draft.points });
+    inputsChanged(site[workflow]);
     const label = featureTypes[draft.kind].label;
     finishDrawing();
     setStatus(`${label} saved.`);
@@ -491,6 +609,7 @@
     $(id).addEventListener("input", ({ target }) => {
       site.water[field] = target.value;
       site.water.rainEdited = true;
+      inputsChanged(site.water);
     });
   }
   $("planning-brief").addEventListener("input", ({ target }) => { site[workflow].brief = target.value; });
