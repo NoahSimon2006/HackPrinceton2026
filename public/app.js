@@ -269,6 +269,7 @@ get("load-aerial").addEventListener("click", async () => {
 
 function resetBrief() {
   window.investigationSelect?.(get("city").value === "la" ? selected : null);
+  window.designSelect?.(get("city").value === "la" ? selected : null);
 }
 
 function showCrashHistory() {

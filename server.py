@@ -14,7 +14,9 @@ from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from dotenv import load_dotenv
+from designer import ChatError, Chats
 from investigations import Investigations, JobError
+from scenario import ScenarioError, Scenarios
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -22,7 +24,8 @@ PUBLIC = ROOT / "public"
 STATIC = {
     "/": "index.html", "/index.html": "index.html", "/styles.css": "styles.css",
     "/app.js": "app.js", "/data/la.json": "data/la.json", "/data/ccrs.json": "data/ccrs.json",
-    "/investigator.js": "investigator.js",
+    "/investigator.js": "investigator.js", "/designer.js": "designer.js",
+    "/emissions.js": "emissions.js", "/data/sim.json": "data/sim.json",
     "/vendor/leaflet.css": "vendor/leaflet.css",
     "/vendor/leaflet.js": "vendor/leaflet.js",
     "/vendor/leaflet-heat.js": "vendor/leaflet-heat.js",
@@ -162,6 +165,8 @@ def aerial_image(site):
 
 
 INVESTIGATIONS = Investigations(aerial_image)
+SCENARIOS = Scenarios()
+CHATS = Chats(aerial_image, lambda: list(collision_sites().values()), INVESTIGATIONS.latest_report)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -254,6 +259,34 @@ class Handler(BaseHTTPRequestHandler):
                     result = INVESTIGATIONS.followup(id_, site["name"], payload.get("question"))
                 self.send_json(200, result)
                 return
+            if self.path in {"/api/chat", "/api/chat-state", "/api/chat-cancel"}:
+                id_ = payload.get("chat_id")
+                if id_ is not None and (not isinstance(id_, str) or not re.fullmatch(r"[a-f0-9]{32}", id_)):
+                    raise RequestError(400, "Select a valid conversation.")
+                if self.path == "/api/chat":
+                    result = CHATS.send(site, id_, payload.get("message"))
+                elif id_ is None:
+                    raise RequestError(400, "Select a valid conversation.")
+                elif self.path == "/api/chat-state":
+                    result = CHATS.snapshot(id_, site["name"])
+                else:
+                    result = CHATS.cancel(id_, site["name"])
+                self.send_json(200, result)
+                return
+            if self.path == "/api/simulate":
+                id_, version = payload.get("chat_id"), payload.get("version")
+                if not isinstance(id_, str) or not re.fullmatch(r"[a-f0-9]{32}", id_) or type(version) is not int:
+                    raise RequestError(400, "Select a design to simulate.")
+                design = CHATS.design(id_, site["name"], version)
+                self.send_json(200, SCENARIOS.start(site, design, lambda result: CHATS.attach_simulation(id_, site["name"], version, result)))
+                return
+            if self.path in {"/api/simulate-state", "/api/simulate-cancel"}:
+                id_ = payload.get("run_id")
+                if not isinstance(id_, str) or not re.fullmatch(r"[a-f0-9]{32}", id_):
+                    raise RequestError(400, "Select a valid simulation run.")
+                run = SCENARIOS.snapshot if self.path == "/api/simulate-state" else SCENARIOS.cancel
+                self.send_json(200, run(id_, site["name"]))
+                return
             if self.path == "/api/costar":
                 self.send_json(200, nearby_properties(site))
                 return
@@ -265,7 +298,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_data(200, "image/jpeg", aerial_image(site))
             finally:
                 EXPENSIVE_RUNS.release()
-        except (RequestError, JobError) as error:
+        except (RequestError, JobError, ChatError, ScenarioError) as error:
             self.send_json(error.status, {"error": str(error)})
         except FileNotFoundError:
             self.send_json(503, {"error": "Run python3 scripts/import_la.py to load LA collision totals."})

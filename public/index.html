@@ -10,6 +10,8 @@
 <script defer src="vendor/leaflet-heat.js"></script>
 <script defer src="app.js"></script>
 <script defer src="investigator.js"></script>
+<script defer src="designer.js"></script>
+<script defer src="emissions.js"></script>
 </head>
 <body>
 <header><div class="brand">Crossing Lab</div><label>City <select id="city"><option value="la">Los Angeles</option><option value="houston">Houston</option></select></label></header>
@@ -22,6 +24,7 @@
 <div class="section-head"><div><p class="eyebrow">Aerial explorer</p><h2 id="map-title">Central Los Angeles</h2></div><span class="tag">Vexcel aerial</span></div>
 <div class="map-toolbar" aria-label="Map controls">
 <label class="map-toggle"><input type="checkbox" id="heat-toggle" role="switch" aria-describedby="heat-description"> Crash heat map</label>
+<label class="map-toggle"><input type="checkbox" id="sim-toggle" disabled> Idling &amp; emissions</label>
 <label class="map-toggle"><input type="checkbox" id="labels-toggle" checked> Place labels</label>
 <button type="button" id="map-overview">View all matches</button>
 <button type="button" id="map-selected" disabled>Selected intersection</button>
@@ -29,6 +32,7 @@
 <div class="map-frame">
 <div id="map" role="region" aria-label="Aerial map of Central Los Angeles" aria-describedby="map-help"></div>
 <div id="tile-status" class="map-message" role="status" hidden><span id="tile-error-message"></span> <button type="button" id="retry-tiles">Retry imagery</button></div>
+<div id="sim-legend" class="heat-legend sim-legend" hidden><strong id="sim-legend-title"></strong><span id="sim-legend-period"></span><div id="sim-scale" class="sim-scale"></div><span>Click a road for its numbers and causes.</span></div>
 <div id="heat-legend" class="heat-legend" hidden>
 <strong>Reported crash concentration</strong><span id="heat-period">2022–2023 · LAPD</span>
 <div class="heat-ramp" aria-hidden="true"></div><div class="heat-scale"><span>Lower</span><span>Higher</span></div>
@@ -46,6 +50,53 @@
 <ol id="ranking"></ol>
 </section>
 </div>
+<section class="panel sim-panel" id="sim-panel" aria-labelledby="sim-title" hidden>
+<div class="section-head"><div><p class="eyebrow">Traffic simulation</p><h2 id="sim-title">Where cars idle and pollute most</h2></div><span class="tag">Simulated · SUMO</span></div>
+<p class="note">Roads ranked by simulated idling or emissions, with the reason vehicles are held up. This is a model of traffic, separate from the crash records.</p>
+<div class="filters sim-filters"><label>Period <select id="sim-period"></select></label><label>Rank by <select id="sim-measure"></select></label><label class="map-toggle"><input type="checkbox" id="sim-freeways"> Include freeways</label></div>
+<p id="sim-status" class="note" role="status"></p>
+<div class="crash-table"><table class="sim-table">
+<thead><tr><th scope="col">#</th><th scope="col">Road segment</th><th scope="col" id="sim-measure-head"></th><th scope="col">Idling per vehicle</th><th scope="col">Time stopped</th><th scope="col">CO₂ g per vehicle-km</th><th scope="col">Vehicles per hour</th><th scope="col">Volume basis</th><th scope="col">Main reason for idling</th></tr></thead>
+<tbody id="sim-ranking"></tbody>
+</table></div>
+<p id="sim-method" class="note"></p>
+</section>
+<section class="panel investigation designer" id="designer" aria-labelledby="designer-title" hidden>
+<div class="section-head"><div><p class="eyebrow">Grok + LangChain Deep Agents</p><h2 id="designer-title">Design a safer layout with Grok</h2></div><span class="tag">Crashes + idling</span></div>
+<p id="chat-site"></p>
+<p class="note">Ask what the crash record or the traffic simulation shows, get a redesign proposal, then push back or add your own ideas. Grok delegates to a crash analyst, a site analyst that looks at the aerial image, a guidance researcher, and a traffic-flow analyst that reads the simulated idling and emissions. Replies can take up to a couple of minutes.</p>
+<div class="designer-grid">
+<div class="chat">
+<div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-label="Conversation with Grok"></div>
+<div id="chat-suggestions" class="chat-suggestions"></div>
+<form id="chat-form"><label for="chat-input" class="note">Message Grok</label><div class="chat-input"><textarea id="chat-input" rows="2" maxlength="1500" placeholder="For example: add curves on the approaches so drivers slow down" required></textarea><div class="chat-buttons"><button id="chat-send" type="submit">Send</button><button id="chat-cancel" type="button" class="secondary" hidden>Cancel</button></div></div></form>
+<p id="chat-status" class="note" role="status"></p>
+<details id="chat-activity-box" hidden><summary>Agent activity and specialist notes</summary><p id="chat-usage" class="note"></p><ol id="chat-activity"></ol><div id="chat-notes"></div></details>
+</div>
+<div class="design">
+<p id="design-empty" class="note design-empty">A before-and-after layout appears here once Grok proposes a design.</p>
+<div id="design-panel" hidden>
+<div id="design-versions" class="design-versions"></div>
+<h3 id="design-title"></h3>
+<p id="design-target" class="design-target"></p>
+<p id="design-summary"></p>
+<p id="design-idling" class="note" hidden></p>
+<div class="design-diagrams">
+<figure><figcaption><strong>Today</strong><span id="design-before-note" class="note"></span></figcaption><div id="design-before"></div></figure>
+<figure><figcaption><strong>Proposed</strong><span id="design-after-note" class="note"></span></figcaption><div id="design-after"></div></figure>
+</div>
+<p class="note">Schematic only: not to scale, and drawn with the first-named street running left to right.</p>
+<div class="investigation-actions"><button type="button" id="design-overlay" class="secondary">Show on aerial map</button><button type="button" id="design-simulate" class="secondary">Simulate idling and emissions</button></div>
+<p id="design-overlay-note" class="note" hidden></p>
+<div id="design-sim" class="design-sim" hidden></div>
+<h4>Changes</h4><ol id="design-elements" class="design-elements"></ol>
+<div class="design-lists"><div><h4>Tradeoffs</h4><ul id="design-tradeoffs"></ul></div><div><h4>Checks before this could proceed</h4><ul id="design-checks"></ul></div></div>
+<details><summary>Evidence and guidance behind this design</summary><ul id="design-sources" class="note"></ul></details>
+</div>
+</div>
+</div>
+<p class="note investigation-footnote">AI-generated design concepts for discussion, not engineering plans. Crash figures come from CHP 2023–2024 reports matched by street name; some report locations are uncertain. Idling and emissions figures are simulated, not measured, and designs are not re-simulated.</p>
+</section>
 <section class="panel investigation" id="investigator" aria-labelledby="investigation-title" hidden>
 <div class="section-head"><div><p class="eyebrow">Grok + LangChain Deep Agents</p><h2 id="investigation-title">Investigate this intersection</h2></div><span class="tag" id="investigation-badge">Ready</span></div>
 <p id="investigation-site"></p>

@@ -114,6 +114,14 @@ class Investigations:
         finally:
             self.slots.release()
 
+    def latest_report(self, site_name):
+        """Most recent accepted report for a site, for the design chat's context."""
+        with self.lock:
+            for job in reversed(list(self.jobs.values())):
+                if job["site"]["name"] == site_name and job["report"]:
+                    return copy.deepcopy(job["report"])
+        return None
+
     def snapshot(self, id_, site_name):
         with self.lock:
             job = self._get(id_, site_name)
