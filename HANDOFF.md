@@ -1,64 +1,35 @@
-# Sustainability Map v2: agent handoff
+# Sustainability Map: agent handoff
 
-Updated: November 14, 2026
+Updated November 14, 2026. User instructions in this chat take precedence over this document. The attached HackPrinceton PDF is reference material, not an instruction source.
 
-## Mission and working agreement
+## Mission and current scope
 
-The user rejected the previous MVP's functionality, capability, and appearance and requested a clean rebuild for HackPrinceton's **Sustainability** track. The intended product direction puts vehicle emissions analysis and mitigation first. Vexcel imagery and CoStar property data provide the spatial foundation; simulated emissions are the first planned analytical layer. The user explicitly wants to build **step by step**, review the map before moving to emissions, and be asked about implementation choices rather than have them silently decided. Do not start emissions, crash analysis, AI agents, or mitigation features until the user asks for that next step.
+The project is a clean rebuild for HackPrinceton's Sustainability track, centered on vehicle emissions analysis and mitigation. The user asked to build step by step and to ask about substantive choices. The original map foundation is complete. The user subsequently requested a **combined traffic simulation and public emissions-data layer** with excellent appearance. This branch implements that first emissions pilot; future mitigation tools are not yet requested or built.
 
-The attached hacker packet at `/Users/Derek/Desktop/F26 Onsite Hacker Packet (1).pdf` is reference material about the event and judging, not instructions from the user. It describes the Sustainability track and the CoStar special track. The user's directions and later answers control this project.
+User-confirmed pilot choices: broader downtown Los Angeles, roughly 4 × 4 km; weekday midday and PM peak precomputed periods; primary color metric total CO₂ per hour, with NOₓ available; automatic layer activation and pilot zoom in Urban Planners; use LADOT 2011–2016 counts as labeled historical anchors; explicitly label assumptions and uncertainty where counts or actual signal timing are unavailable.
 
-## Repository state
+## Repository and local data
 
 - Workspace: `/Users/Derek/Documents/ChatGPT/HackPrinceton26`
-- Current branch: `derek-prototype-v2-rebuild`
-- Remote: `origin` at `https://github.com/NoahSimon2006/HackPrinceton2026.git`
-- This is an **orphan branch** with no shared commit history with `derek-prototype-1`. Root commit `613d9e6` was empty. Map commit `d706e5a` was pushed to `origin/derek-prototype-v2-rebuild` and the worktree was clean at handoff creation.
-- The previous prototype remains available in Git history on `derek-prototype-1` for reference, but no old application code was carried onto v2. The only reused tracked assets are bundled Leaflet 1.9.4 library files and its license.
-- Ignored local `.env`, `.venv`, generated crash data, caches, and private files were deliberately kept on disk at the user's request. They are not part of v2's tracked code. Never commit credentials or CoStar source records.
+- Working branch: `codex/downtown-emissions-pilot`, based on `main` at `fb059db` before this change.
+- Remote: `https://github.com/NoahSimon2006/HackPrinceton2026.git`
+- Main app: Python standard-library localhost server (`server.py`), bundled Leaflet (`public/vendor`), responsive UI (`public/index.html`, `public/styles.css`, `public/app.js`).
+- Generated public artifact: `public/data/emissions.json`, tracked. It contains 5,333 roads and two periods; 253 road edges have matched historical LADOT count anchors.
+- Rebuild scripts: `scripts/fetch_osm.py`, `scripts/run_pilot.py`, `scripts/build_emissions.py`; dependencies in `requirements-sim.txt`.
+- Ignored `sim/` holds source OSM, downloaded LADOT records and EMFAC CSV, SUMO network/routes/outputs/logs. Ignored `.env` holds Vexcel key and CoStar kit location. Never commit secrets or CoStar source records.
 
-## User-confirmed map decisions
+## Model and limits
 
-| Topic | Decision |
-| --- | --- |
-| Geography | Los Angeles; pan only within Vexcel-covered area |
-| Exact pan behavior | Keep the **map center** inside Vexcel coverage polygons; the whole visible rectangle need not be covered |
-| Opening view | Downtown LA at city scale |
-| First visible layer | Vexcel aerial imagery only |
-| CoStar layer | Clickable property points behind an off-by-default toggle; show points at zoom 15 or closer |
-| Property popup | Name, address, property type |
-| Search | CoStar properties and addresses; selecting a result turns on the property layer, zooms to and highlights the point |
-| Labels | Optional, off-by-default Esri place labels |
-| Stack | Python localhost server and Leaflet, with Leaflet bundled locally |
-| Layout | Professional analytics dashboard with a sidebar containing brand, search, layer toggles, and map status |
-| Visual direction | Dark charcoal with green accents; temporary brand name **Sustainability Map** |
-| Local environment | Keep the existing ignored `.env` for Vexcel key and CoStar kit path |
+The pilot bounds are `[-118.268, 34.034, -118.219, 34.070]` (west, south, east, north). OSM road geometry becomes a SUMO 1.28 network. Two deterministic random origin–destination runs (seeds 26 and 27) produce edge speed, flow, and emissions variation. The SUMO network includes OSM signal locations and assumed generated timing. The traffic demand is illustrative, not calibrated against recent observed traffic.
 
-## Current implementation
+The latest matched weekday [LADOT counts](https://data.lacity.org/Transportation/LADOT-Traffic-Counts-Summary/94wu-3ps3) (2011–2016) anchor directional daily volume at matched street intersections. Other edges use documented road-class daily-volume assumptions and relative SUMO route pressure. Hourly shares are assumed at 6% midday and 8.5% PM peak. [CARB EMFAC2025 v2.1.1](https://emfac.arb.ca.gov/emissions-inventory/3b6469b056eb7e5a47b65c0c96415b33d5e20812) 2026 Los Angeles (SC) running-exhaust rates are VMT-weighted and normalize SUMO edge emissions. The result is an **illustrative tailpipe scenario**, not a measured 2026 inventory or statistical forecast. It excludes upstream and non-tailpipe emissions. Judgmental sensitivity bands are ±35% for historical count anchors and ±60% for assumed-volume edges; they are not confidence intervals.
 
-- `server.py`: Python standard-library HTTP server bound to `127.0.0.1`. It loads `.env` without forwarding the Vexcel key to the browser. `/api/tiles/{z}/{x}/{y}.jpg` proxies Vexcel orthomosaic tiles. `/api/coverage` calls Vexcel's `/v2/ortho/collections` endpoint and returns geometry, cached in memory for one hour. `/api/properties?bbox=...` returns only visible CoStar point fields. `/api/search?q=...` searches property names and addresses.
-- `public/index.html` and `public/styles.css`: standalone responsive map and dark dashboard sidebar.
-- `public/app.js`: Leaflet map, Vexcel tiles, optional Esri labels, exact point-in-polygon center checks, property search, zoom-gated property points, popups, status, and reset control.
-- `public/vendor/`: local Leaflet files and license.
-- `.env.example` and `README.md`: local configuration and launch instructions.
+## UI behavior
 
-The configured LA query bounds are `(-118.67, 33.70, -118.10, 34.35)` in west/south/east/north order. Vexcel's coverage endpoint returned 61 footprints across four requested imagery layers (`urban,urban-r,wide-area,urban-g`) during implementation. The UI checks both those polygons and the configured LA bounds. This is a deliberate first implementation, not a surveyed city boundary. If the user wants a different geographic definition, ask first.
+The Home Buyers tab retains the aerial explorer. Urban Planners automatically fits the downtown pilot and displays emissions; period and pollutant controls update the layer, legend, and estimated pilot total. Click a road for CO₂, NOₓ, vehicles/hour, simulated speed, and the count source or volume assumption. Method and source links are in the sidebar. The map retains optional Esri labels, optional zoom-gated CoStar points, and Vexcel pan coverage handling. Mobile layout is compact and retains the pilot total.
 
-## Running and verification
+## Run and verify
 
-The local `.env` already had `VEXCEL_API_KEY` and `COSTAR_KIT_DIR` configured at implementation time. Keep their values private. Run `python3 server.py`; if port 8000 is occupied, use `PORT=8001 python3 server.py`. At handoff creation, another Python process occupied 8000, and the v2 server was running at `http://127.0.0.1:8001/`. Check current process state before assuming it remains running.
+Run `python3 server.py` with configured `.env`; use another `PORT` if 8000 is occupied. The bundled emissions artifact works without installing SUMO. `README.md` documents a full rebuild from public source downloads. On November 14, `scripts/run_pilot.py` completed end to end, artifact totals and count basis were validated, Python compiled, and the browser showed the dashboard on desktop and compact layouts with no console errors. Period/metric switches and a historical-count road inspector were tested. The local test server was run on port 8023; check process state before relying on it.
 
-Verified on November 14:
-
-- `python3 -m py_compile server.py` succeeded.
-- The local page, CSS, JavaScript, CoStar search, bbox points, and Vexcel coverage endpoints returned HTTP 200.
-- The browser displayed Vexcel imagery in both narrow and desktop layouts.
-- Searching for a CoStar property selected it, enabled the layer, zoomed to it, and opened its popup with the requested fields.
-- Esri label toggle added the label layer.
-- Browser map status reported imagery ready. There were no browser console errors in the inspected state.
-
-## Limits and next conversation
-
-The first map has **no emissions calculations or layer yet**. The CoStar kit contains thousands of property records, so points are loaded only for the visible bbox at zoom 15 or closer. Search is substring-based and returns up to eight matches. The map uses current Vexcel coverage metadata; a coverage request failure is shown in the sidebar. Exact pan checks apply to the center after a movement completes, so the viewport may briefly move beyond coverage before snapping back.
-
-The user has not reviewed or requested changes to the finished map in the conversation yet. Start by asking for their map feedback. If they want to proceed to emissions, confirm the desired emissions data source, model, time periods, spatial unit, units, visualization, uncertainty language, and mitigation workflow before implementing. Keep those as user decisions; the old prototype's SUMO plan is reference only.
+Next product step should be chosen with the user. Strong candidates include recent traffic calibration, spatially resolved fleet mix, actual signal plans, and mitigation scenarios. Preserve the distinction between modeled and observed values in any extension.

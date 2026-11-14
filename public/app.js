@@ -5,6 +5,7 @@ const MIN_ZOOM = 10;
 const ZOOM_STEP = .125;
 const MIN_PROPERTY_ZOOM = 15;
 const map = L.map("map", { minZoom: MIN_ZOOM, maxZoom: 20, zoomSnap: ZOOM_STEP, zoomDelta: .5,
+  preferCanvas: true,
   zoomControl: false, scrollWheelZoom: true, wheelPxPerZoomLevel: 120, inertia: false }).setView(HOME, HOME_ZOOM);
 const mapDrag = map.dragging._draggable;
 map.dragging.disable();
@@ -21,6 +22,18 @@ const labels = L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/servic
   attribution: 'Labels © Esri, HERE, Garmin, © OpenStreetMap contributors'
 });
 const propertyLayer = L.layerGroup().addTo(map);
+map.createPane("emissions");
+map.getPane("emissions").style.zIndex = 430;
+const emissionRenderer = L.canvas({ pane: "emissions", padding: .5 });
+const emissionsLayer = L.layerGroup();
+let emissionsData = null;
+let emissionLines = new Map();
+let selectedRoad = null;
+let selectedLine = null;
+let plannerActive = false;
+let activePeriod = "midday";
+let activeMetric = "co2";
+let colorThresholds = [];
 let coverage = null;
 let footprints = [];
 let lastAllowed = map.getCenter();
@@ -331,8 +344,123 @@ imagery.on("tileerror", () => {
 imagery.on("tileload", () => { if (tileFailures) tileFailures = 0; });
 $("labels").addEventListener("change", (event) => event.target.checked ? labels.addTo(map) : labels.remove());
 $("properties").addEventListener("change", updateProperties);
+$("emissions-layer").addEventListener("change", () => {
+  if (plannerActive && $("emissions-layer").checked) emissionsLayer.addTo(map);
+  else emissionsLayer.remove();
+  $("emissions-legend").hidden = !plannerActive || !$("emissions-layer").checked;
+});
 $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(search, 220); });
-$("reset").addEventListener("click", () => map.setView(HOME, HOME_ZOOM));
+$("reset").addEventListener("click", () => plannerActive && emissionsData ?
+  map.fitBounds([[emissionsData.bbox[1], emissionsData.bbox[0]], [emissionsData.bbox[3], emissionsData.bbox[2]]],
+    { padding: [35, 35], maxZoom: 14 }) : map.setView(HOME, HOME_ZOOM));
+
+const ROAD_COLORS = ["#7bdec0", "#b8d878", "#f5bb5d", "#ed7757", "#bd354e"];
+const integer = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+function roadValue(road) { return road.periods[activePeriod][activeMetric === "co2" ? "co2_kg_h" : "nox_g_h"]; }
+function quantile(values, fraction) {
+  return values[Math.min(values.length - 1, Math.floor((values.length - 1) * fraction))] || 0;
+}
+function roadColor(value) {
+  for (let index = 0; index < colorThresholds.length; index++) {
+    if (value <= colorThresholds[index]) return ROAD_COLORS[index];
+  }
+  return ROAD_COLORS.at(-1);
+}
+function updateInspector() {
+  if (!selectedRoad || !plannerActive) { $("road-inspector").hidden = true; return; }
+  const road = selectedRoad, values = road.periods[activePeriod];
+  $("road-inspector").hidden = false;
+  $("road-name").textContent = road.name;
+  $("road-basis").textContent = `${road.class.replaceAll("_", " ")} · ${integer.format(road.length_m)} m segment · ${road.basis === "historical_count" ? "historical count anchor" : "assumed traffic volume"}`;
+  $("road-co2").textContent = values.co2_kg_h.toFixed(1);
+  $("road-nox").textContent = values.nox_g_h.toFixed(1);
+  $("road-vehicles").textContent = integer.format(values.vehicles_h);
+  $("road-speed").textContent = values.speed_kmh.toFixed(1);
+  $("road-count-detail").textContent = road.count ?
+    `LADOT count at ${road.count.street} / ${road.count.cross}, ${road.count.date}. ${integer.format(road.count.daily)} directional vehicles per day; hourly share is assumed. Approx. ±35% sensitivity.` :
+    `Daily traffic is assumed from road class, then adjusted by simulated route pressure. Approx. ±60% sensitivity.`;
+}
+function selectRoad(road) {
+  if (selectedLine) selectedLine.setStyle({ color: roadColor(roadValue(selectedRoad)), weight: 3.4, opacity: .9 });
+  selectedRoad = road;
+  selectedLine = emissionLines.get(road.id);
+  selectedLine?.setStyle({ color: "#fff7d7", weight: 7, opacity: 1 });
+  selectedLine?.bringToFront();
+  updateInspector();
+}
+function renderEmissions() {
+  if (!emissionsData) return;
+  const values = emissionsData.roads.map(roadValue).sort((a, b) => a - b);
+  colorThresholds = [.2, .4, .6, .8].map(q => quantile(values, q));
+  for (const road of emissionsData.roads) {
+    const line = emissionLines.get(road.id);
+    line.setStyle({ color: road === selectedRoad ? "#fff7d7" : roadColor(roadValue(road)),
+      weight: road === selectedRoad ? 7 : 3.4, opacity: road === selectedRoad ? 1 : .9 });
+  }
+  const sum = emissionsData.summary[activePeriod];
+  $("pilot-total").textContent = integer.format(activeMetric === "co2" ? sum.co2_kg_h : sum.nox_g_h);
+  $("pilot-unit").textContent = activeMetric === "co2" ? "kg CO₂ / hour" : "g NOₓ / hour";
+  $("pilot-secondary").textContent = activeMetric === "co2" ? `${integer.format(sum.nox_g_h)} g NOₓ / h` : `${integer.format(sum.co2_kg_h)} kg CO₂ / h`;
+  $("pilot-count").textContent = `${integer.format(emissionsData.quality.historical_anchor_edges)} anchored edges`;
+  $("legend-unit").textContent = activeMetric === "co2" ? "CO₂ · kg / h" : "NOₓ · g / h";
+  $("legend-low").textContent = `${quantile(values, .1).toFixed(1)}`;
+  $("legend-high").textContent = `${quantile(values, .9).toFixed(1)}+`;
+  updateInspector();
+}
+async function loadEmissions() {
+  if (emissionsData) {
+    if (plannerActive && $("emissions-layer").checked) emissionsLayer.addTo(map);
+    renderEmissions();
+    return;
+  }
+  try {
+    emissionsData = await json("/api/emissions");
+    for (const road of emissionsData.roads) {
+      const line = L.polyline(road.coordinates.map(([lon, lat]) => [lat, lon]), {
+        pane: "emissions", renderer: emissionRenderer, color: ROAD_COLORS[0], weight: 3.4,
+        opacity: .9, lineCap: "round", lineJoin: "round", interactive: true
+      });
+      line.on("click", () => selectRoad(road));
+      line.bindTooltip(road.name, { sticky: true, direction: "top", opacity: .9 });
+      line.addTo(emissionsLayer);
+      emissionLines.set(road.id, line);
+    }
+    $("method-text").textContent = [emissionsData.method.headline, emissionsData.method.traffic,
+      emissionsData.method.volume, emissionsData.method.emissions, emissionsData.method.signal,
+      emissionsData.method.uncertainty].join(" ");
+    for (const source of emissionsData.sources) {
+      const link = document.createElement("a");
+      link.href = source.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+      link.textContent = `↗ ${source.label}`;
+      $("source-links").append(link);
+    }
+    renderEmissions();
+    if (plannerActive && $("emissions-layer").checked) emissionsLayer.addTo(map);
+    setStatus("Emissions pilot ready", `${integer.format(emissionsData.quality.road_edges)} modeled road edges · ${integer.format(emissionsData.quality.historical_anchor_edges)} historical count anchors.`);
+  } catch (error) { setStatus("Emissions pilot unavailable", error.message, true); }
+}
+function setPeriod(period) {
+  activePeriod = period;
+  for (const key of ["midday", "pm_peak"]) {
+    const button = $(`period-${key}`);
+    button.classList.toggle("selected", key === period);
+    button.setAttribute("aria-pressed", String(key === period));
+  }
+  renderEmissions();
+}
+function setMetric(metric) {
+  activeMetric = metric;
+  for (const key of ["co2", "nox"]) {
+    const button = $(`metric-${key}`);
+    button.classList.toggle("selected", key === metric);
+    button.setAttribute("aria-pressed", String(key === metric));
+  }
+  renderEmissions();
+}
+for (const period of ["midday", "pm_peak"]) $(`period-${period}`).addEventListener("click", () => setPeriod(period));
+for (const metric of ["co2", "nox"]) $(`metric-${metric}`).addEventListener("click", () => setMetric(metric));
+$("close-inspector").addEventListener("click", () => { selectedRoad = null; selectedLine = null; $("road-inspector").hidden = true; renderEmissions(); });
+
 const audienceTabs = [...document.querySelectorAll("#audience-tabs [role=tab]")];
 function selectAudience(tab, focus = false) {
   for (const option of audienceTabs) {
@@ -341,6 +469,28 @@ function selectAudience(tab, focus = false) {
     option.tabIndex = active ? 0 : -1;
   }
   $("map-workspace").setAttribute("aria-labelledby", tab.id);
+  plannerActive = tab.id === "urban-planners";
+  $("map-workspace").classList.toggle("planner-mode", plannerActive);
+  $("buyer-intro").hidden = plannerActive;
+  $("planner-controls").hidden = !plannerActive;
+  $("emissions-layer-row").hidden = !plannerActive;
+  $("emissions-legend").hidden = !plannerActive || !$("emissions-layer").checked;
+  $("brand-caption").textContent = plannerActive ? "Urban analytics · Los Angeles" : "Los Angeles · map workspace";
+  $("footer-caption").textContent = plannerActive ? "SUMO × CARB EMFAC · scenario model" : "V2 map foundation";
+  $("map-title").textContent = plannerActive ? "Urban emissions atlas" : "Aerial explorer";
+  $("map-eyebrow").textContent = plannerActive ? "DOWNTOWN LOS ANGELES · PILOT AREA" : "LOS ANGELES, CALIFORNIA";
+  $("map-badge").textContent = plannerActive ? "SIMULATED / TAILPIPE" : "VEXCEL IMAGERY";
+  $("reset").innerHTML = plannerActive ? "↗ &nbsp; Back to pilot" : "↗ &nbsp; Back to Los Angeles";
+  if (plannerActive) {
+    loadEmissions();
+    const bbox = [-118.268, 34.034, -118.219, 34.070];
+    map.fitBounds([[bbox[1], bbox[0]], [bbox[3], bbox[2]]], { padding: [35, 35], maxZoom: 14 });
+  } else {
+    emissionsLayer.remove();
+    $("road-inspector").hidden = true;
+    map.setView(HOME, HOME_ZOOM);
+  }
+  setTimeout(() => map.invalidateSize(), 0);
   if (focus) tab.focus();
 }
 

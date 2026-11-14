@@ -148,6 +148,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, file.read_bytes(), mime, "public, max-age=3600")
             elif path.path == "/api/coverage":
                 self.send_json(200, coverage())
+            elif path.path == "/api/emissions":
+                file = PUBLIC / "data" / "emissions.json"
+                self.send(200, file.read_bytes(), "application/json", "public, max-age=300")
             elif path.path == "/api/properties":
                 qs = parse_qs(path.query)
                 raw = qs.get("bbox", [""])[0].split(",")
