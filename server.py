@@ -35,6 +35,8 @@ ANALYSIS_SLOTS = BoundedSemaphore(2)
 ACTIVE_ANALYSES = {}
 ANALYSIS_LOCK = Lock()
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
+          "/demo": "demo.html", "/demo.html": "demo.html", "/demo.css": "demo.css", "/demo.js": "demo.js",
+          "/demo-scene-renderer.js": "demo-scene-renderer.js", "/demo-math.js": "demo-math.js",
           "/discovery.js": "discovery.js", "/analysis-stream.js": "analysis-stream.js", "/planner.js": "planner.js", "/proposal.js": "proposal.js",
           "/site-view.js": "site-view.js", "/projects.js": "projects.js", "/scouting.js": "scouting.js",
           "/concept-scene.js": "concept-scene.js", "/concept-scene-renderer.js": "concept-scene-renderer.js",
@@ -578,6 +580,12 @@ class Handler(BaseHTTPRequestHandler):
             elif path.path == "/api/projects":
                 query = parse_qs(path.query)
                 self.send_json(200, project_store().get(query["id"][0]) if "id" in query else {"projects":project_store().list()})
+            elif path.path == "/api/demo-scene":
+                from demo_scene import build_demo_scene
+                try:
+                    self.send_json(200, build_demo_scene())
+                except ValueError as error:
+                    self.send_json(503, {"error": str(error)})
             elif path.path == "/api/concept-scene":
                 from concept_scene import SceneUnavailable, build_scene, parse_scene_query
                 try:
