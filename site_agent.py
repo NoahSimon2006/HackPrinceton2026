@@ -830,6 +830,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                     continue
                 for field, label, unit in (('approach_count', 'connected approaches', 'approaches'),
                                            ('crossing_count', 'connected crossings', 'crossings'),
+                                           ('one_way_approach_count', 'verified one-way approaches', 'approaches'),
                                            ('roadway_area_m2', 'proposed roadway area', 'm²'),
                                            ('sidewalk_area_m2', 'proposed pedestrian area', 'm²'),
                                            ('effective_curb_extension_min_m', 'smallest compiled curb extension', 'm'),
@@ -840,6 +841,15 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                         items.append(fact(f'road-concept-{identifier}-{field}', label, check[field], unit, origin,
                             basis='modeled', method='Count or area derived from the compiled intersection geometry.',
                             note='Proposed concept geometry; not a measured performance benefit.'))
+                for movement in check.get('approach_movements', []):
+                    if not movement.get('source_one_way_lanes_preserved'):
+                        continue
+                    for direction in ('inbound', 'outbound'):
+                        count = movement[direction + '_lanes']
+                        if count:
+                            items.append(fact(f"road-concept-{identifier}-{movement['approach_id']}-{direction}",
+                                f'Preserved one-way {direction} lanes', count, 'lanes', origin, basis='modeled',
+                                method='Verified source direction and lane count retained in the compiled plan.'))
         payload = {'status': 'concept_ready', 'concept': summary, 'facts': items,
                    'research_fact_ids': sorted(refs), 'performance': 'Unassessed; the overlay does not establish emissions, delay or safety benefits.'}
         # The agent can read the scalar summary. Raw canonical geometry goes only

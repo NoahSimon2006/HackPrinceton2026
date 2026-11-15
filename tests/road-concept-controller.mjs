@@ -40,7 +40,7 @@ const event=(c=concept(),extra={})=>({projectId:'f'.repeat(32),siteId:'site',wor
 const intersection=(revision=2,input_revision=0)=>{
   const c=concept(revision,input_revision);
   c.components=[{id:'junction',kind:'intersection_redesign',label:'Coordinated intersection',approach_length_m:35,curb_extension_m:1.2,crossing_setback_m:4,crossing_width_m:3}];
-  c.geometry=['roadway','sidewalk','curb','planting','centerline','crosswalk','stop_line','lane_arrow'].map((surface,index)=>({
+  c.geometry=['roadway','sidewalk','curb','planting','centerline','crosswalk','stop_line','lane_arrow','lane_separator'].map((surface,index)=>({
     type:'Feature',id:`junction-${surface}`,geometry:c.geometry[0].geometry,
     properties:{component_id:'junction',kind:'intersection_redesign',surface,role:index<4?'proposed':'marking',revision,label:surface},
   }));

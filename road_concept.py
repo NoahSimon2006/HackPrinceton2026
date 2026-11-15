@@ -20,7 +20,8 @@ from site_measurements import PROJECT, projected
 from street_context import TO_GEO, canonical_hash, _geographic
 
 LEGACY_VERSION = "road-concept-v1"
-VERSION = "road-concept-v2"
+JUNCTION_VERSION = "road-concept-v2"
+VERSION = "road-concept-v3"
 KINDS = ("curb_extension", "crossing", "pedestrian_island", "bike_lane", "pedestrian_space", "lane_marking", "intersection_redesign")
 LABELS = {"curb_extension": "Curb extension", "crossing": "Marked crossing", "pedestrian_island": "Pedestrian refuge island",
           "bike_lane": "Protected bicycle space", "pedestrian_space": "Pedestrian space", "lane_marking": "Lane separator", "intersection_redesign": "Intersection redesign"}
@@ -383,11 +384,11 @@ def _compile_legacy(context, components, constraints, revision):
 
 
 
-def _compile(context, components, constraints, revision, *, legacy=False):
+def _compile(context, components, constraints, revision, *, legacy=False, directional=True):
     if not legacy and components[0]["kind"] == "intersection_redesign":
         from junction_design import compile_intersection
         try:
-            features, checks = compile_intersection(context, components[0], constraints, revision)
+            features, checks = compile_intersection(context, components[0], constraints, revision, directional=directional)
         except ValueError as error:
             raise ConceptPlacementError(str(error)) from error
         return features, [checks]
@@ -426,8 +427,8 @@ def build_road_concept(context, components=None, *, changes=None, previous=None,
                               "Proposed dimensions and a minimum clear corridor are screening choices, not adopted engineering standards.",
                               "Road-side placement and source widths require field checks; no turn paths, parking demand, utilities or traffic signals are modeled.",
                               "Bicycle arrows illustrate right-hand traffic along the source alignment; verify permitted travel direction before use.",
-                              *(["The compact intersection proposes one through lane in each direction; any former parking or extra lane space is shown as proposed pedestrian space. Capacity and parking impacts are unassessed.",
-                                 "Curb extension is a requested maximum. Checked effective dimensions may be smaller to preserve the source corridor and two conceptual 3 m through lanes.",
+                              *(["The compact intersection proposes one lane per direction on two-way roads. Verified one-way approaches preserve their modeled lane count and travel direction, with white lane dividers. Capacity, lane-use assignments and parking impacts are unassessed.",
+                                 "Curb extension is a requested maximum. Checked effective dimensions may be smaller to preserve the required traffic lanes, each at least 3 m wide.",
                                  "The conceptual pedestrian path and crossing landing screening minimum is 1.2 m. This design choice is not an accessibility compliance assessment or adopted local standard.",
                                  "Crossings join proposed pedestrian landings within the source street envelope. Mapped walking paths locate the envelope; exact curb positions and accessibility need a field survey."] if any(c["kind"] == "intersection_redesign" for c in normalized) else [])],
               "checks": checks, "evaluation": {"status": "unassessed", "reference": None,
@@ -445,7 +446,7 @@ def validate_road_concept(value, identity=None):
         own = _identity({key: value[key] for key in ("site_id", "revision", "input_revision")})
         if identity is not None and own != _identity(identity):
             raise ConceptPlacementError("The concept does not match this saved project revision.")
-        if value["schema_version"] != 1 or value["compiler_version"] not in (VERSION, LEGACY_VERSION) or value["workflow"] != "street" or value["status"] != "conceptual":
+        if value["schema_version"] != 1 or value["compiler_version"] not in (VERSION, JUNCTION_VERSION, LEGACY_VERSION) or value["workflow"] != "street" or value["status"] != "conceptual":
             raise ValueError("schema")
         digest = canonical_hash({key: item for key, item in value.items() if key != "input_hash"})
         if digest != value["input_hash"] or not re.fullmatch(r"[a-f0-9]{64}", value["input_hash"]):
@@ -457,7 +458,7 @@ def validate_road_concept(value, identity=None):
         normalized = _components(context, value["components"], None, None, own, legacy=legacy)
         if normalized != value["components"]:
             raise ValueError("components")
-        features, checks = _compile(context, normalized, value["constraints"], own["revision"], legacy=legacy)
+        features, checks = _compile(context, normalized, value["constraints"], own["revision"], legacy=legacy, directional=value['compiler_version'] == VERSION)
         if canonical_hash(features) != canonical_hash(value["geometry"]) or checks != value["checks"]:
             raise ValueError("geometry")
         if value["evaluation"] != {"status": "unassessed", "reference": None, "reason": "Spatial concept only; traffic performance, emissions and safety benefits have not been evaluated."}:

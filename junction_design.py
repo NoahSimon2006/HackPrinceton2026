@@ -16,7 +16,7 @@ from shapely.ops import nearest_points, substring
 from site_measurements import PROJECT, projected
 from street_context import _geographic
 
-SURFACES = frozenset({"roadway", "sidewalk", "curb", "planting", "centerline", "crosswalk", "stop_line", "lane_arrow"})
+SURFACES = frozenset({"roadway", "sidewalk", "curb", "planting", "centerline", "lane_separator", "crosswalk", "stop_line", "lane_arrow"})
 PARAMETERS = {
     "approach_length_m": (28., 15., 60.),
     "curb_extension_m": (1.2, .6, 3.),
@@ -137,7 +137,7 @@ def normalize_intersection(context, component):
     return result
 
 
-def compile_intersection(context, component, constraints, revision):
+def compile_intersection(context, component, constraints, revision, *, directional=False):
     """Return exact ordered features and measurable spatial checks for one plan."""
     junction = resolve_junction(context, component)
     center = _point(junction["center"])
@@ -167,24 +167,29 @@ def compile_intersection(context, component, constraints, revision):
             raise ValueError("A sourced approach is too short for connected crossings and stop lines. Reduce the crossing setback or choose another junction.")
         line = substring(line, 0., length)
         traffic_direction = approach.get("traffic_direction", "two_way")
-        if traffic_direction != "two_way":
-            raise ValueError("This junction includes a one-way or unverified traffic direction. A coordinated plan needs verified approach movements before lane arrows or stop lines can be drawn.")
+        one_way = directional and traffic_direction == "one_way"
+        flow = approach.get("traffic_flow") if one_way else "two_way"
+        lanes = approach.get("lane_count") if one_way else 2
+        if traffic_direction != "two_way" and not (one_way and flow in ("inbound", "outbound") and type(lanes) is int and 1 <= lanes <= 8):
+            raise ValueError("An approach has an unverified traffic direction or lane count. Confirm its movements before lane arrows or stop lines can be drawn.")
         modeled_width = float(approach["width_m"])
         envelope_width = float(approach.get("plan_width_m", approach.get("street_width_m", approach.get("crossing_span_m", modeled_width))))
         if not 3 <= modeled_width <= 40 or not 3 <= envelope_width <= 45 or envelope_width < modeled_width-.2:
             raise ValueError("The sourced approach widths cannot support a bounded intersection plan.")
         # Sidewalks and buildouts occupy the sourced street envelope only. A
         # lane-only source never licenses inventing extra pavement to either side.
-        minimum_road = min(modeled_width, 6.)
+        minimum_road = lanes * 3. if one_way else min(modeled_width, 6.)
+        if one_way and modeled_width < minimum_road-.05:
+            raise ValueError("The mapped width cannot preserve the verified one-way lane count with usable lane widths.")
         available_side = max(0., (envelope_width-minimum_road)/2)
         # Compact means one 3–3.6 m through lane in each direction. Any
         # former parking/extra-width allocation is shown explicitly as proposed
         # pedestrian space; lane capacity and turn feasibility are unassessed.
-        base_walk = max(0., (envelope_width-7.2)/2)
+        base_walk = max(0., (envelope_width-(modeled_width if one_way else 7.2))/2)
         base_walk = max(base_walk, min(1.8, available_side * .55))
         extension = min(component["curb_extension_m"], max(0., available_side-base_walk))
         if base_walk < 1.2:
-            raise ValueError("The sourced street envelope is too narrow for two through lanes and a meaningful pedestrian path on each side. A wider verified street or walking envelope is needed; do not draw token-width sidewalks.")
+            raise ValueError("The sourced street envelope is too narrow to preserve the required traffic lanes and a meaningful pedestrian path on each side. A wider verified street or walking envelope is needed; do not draw token-width sidewalks.")
         road_mouth = envelope_width-2*(base_walk+extension)
         road_far = envelope_width-2*base_walk
         taper_start = cross_start + crossing_width + 1.5
@@ -202,6 +207,28 @@ def compile_intersection(context, component, constraints, revision):
             key = opening.get("id") or opened.wkb_hex
             if not opened.is_empty and opened.area > .01:
                 access_shapes[key] = unary_union([access_shapes.get(key, Polygon()), opened])
+        if one_way:
+            # Walking paths may be mapped on only one side. Shift the proposed
+            # lane bundle within that actual envelope, never add land beyond it.
+            at, _, normal = _frame(line, cross_start + crossing_width/2)
+            ray = LineString([(at.x-normal[0]*45, at.y-normal[1]*45), (at.x+normal[0]*45, at.y+normal[1]*45)])
+            section = ray.intersection(corridor)
+            parts = [section] if section.geom_type == "LineString" else [g for g in getattr(section, 'geoms', ()) if g.geom_type == "LineString"]
+            section = next((part for part in parts if part.distance(at) < .05), None)
+            if section is None:
+                raise ValueError("The source does not contain a continuous one-way carriageway at the crossing.")
+            offsets = [(x-at.x)*normal[0]+(y-at.y)*normal[1] for x,y in section.coords]
+            lower, upper = min(offsets)+road_far/2+1.2, max(offsets)-road_far/2-1.2
+            if lower > upper+.02:
+                raise ValueError("The one-way road cannot retain its lanes and connected walking landings within the source envelope.")
+            shift = min(max(0., lower), upper)
+            if abs(shift) > .001:
+                shifted = line.simplify(.001).offset_curve(shift, join_style="round")
+                if shifted.geom_type != "LineString" or not shifted.is_simple:
+                    raise ValueError("The one-way approach cannot fit a continuous lane alignment.")
+                line = shifted
+                length = min(length, line.length)
+                mouth = line.interpolate(0)
         paved = _ribbon(line, stops).intersection(corridor)
         # The connecting segment reaches into the sourced junction, maintaining
         # every approach instead of drawing independent, floating road strips.
@@ -211,7 +238,8 @@ def compile_intersection(context, component, constraints, revision):
         end_openings.append(_rectangle(end, tangent, 2., envelope_width+2, -1., -(envelope_width+2)/2))
         approaches.append({"source": approach, "line": line, "length": length, "road_width": road_mouth,
                            "far_width": road_far, "envelope_width": envelope_width,
-                           "extension": extension, "cross_start": cross_start})
+                           "extension": extension, "cross_start": cross_start,
+                           "one_way": one_way, "flow": flow, "lanes": lanes})
     source_access = list(access_shapes.values())
     original_influence = _polygons(unary_union(influence_parts).intersection(source_plan))
     pedestrian_extensions = Polygon()
@@ -307,26 +335,40 @@ def compile_intersection(context, component, constraints, revision):
         stop, stop_tangent, _ = _frame(line, stop_position)
         # With mouth→outward centreline, the inbound lane is on its left in
         # right-hand traffic. Stop bars never block the outbound lane.
-        emit(_rectangle(stop, stop_tangent, .4, width/2-.3, -.2, .15).intersection(roadway),
-             "stop_line", prefix+"-stop", "marking")
+        if row["flow"] != "outbound":
+            stop_width, lateral = (width-.3, -width/2+.15) if row["one_way"] else (width/2-.3, .15)
+            emit(_rectangle(stop, stop_tangent, .4, stop_width, -.2, lateral).intersection(roadway),
+                 "stop_line", prefix+"-stop", "marking")
         center_start = stop_position+.8
         for mark_index, position in enumerate(_steps(center_start, row["length"]-.2, 6.)):
             dash = substring(line, position, min(row["length"], position+3.))
-            emit(dash.buffer(.075, cap_style="flat").intersection(roadway), "centerline", f"{prefix}-center-{mark_index+1}", "marking")
+            if row["one_way"]:
+                for lane_index in range(1, row["lanes"]):
+                    divider = dash.offset_curve(-width/2 + width*lane_index/row["lanes"])
+                    emit(divider.buffer(.075, cap_style="flat").intersection(roadway), "lane_separator", f"{prefix}-divider-{lane_index}-{mark_index+1}", "marking")
+            else:
+                emit(dash.buffer(.075, cap_style="flat").intersection(roadway), "centerline", f"{prefix}-center-{mark_index+1}", "marking")
         arrow_position = min(row["length"]-3., stop_position+6.)
         direction = _frame(line, 0.)[1]
-        has_opposite = any(direction[0]*_frame(other["line"], 0.)[1][0] + direction[1]*_frame(other["line"], 0.)[1][1] < -.85
-                           for other in approaches if other is not row)
+        opposite = [other for other in approaches if other is not row and
+                    direction[0]*_frame(other["line"], 0.)[1][0] + direction[1]*_frame(other["line"], 0.)[1][1] < -.85]
+        has_opposite = bool(opposite)
         if arrow_position > stop_position+2 and has_opposite:
             arrow_at, outward, normal = _frame(line, arrow_position)
-            for sign in (-1, 1):
+            arrows = [(sign*width/4, sign == 1, 'in' if sign == 1 else 'out') for sign in (-1, 1)]
+            if row["one_way"]:
+                arrows = [(-width/2+width*(lane_index+.5)/row["lanes"], row["flow"] == "inbound", str(lane_index+1)) for lane_index in range(row["lanes"])]
+            for lateral, inbound, suffix in arrows:
+                if directional and inbound and not any(other["flow"] in ("two_way", "outbound") and
+                        (other["lanes"] if other["one_way"] else 1) >= (row["lanes"] if row["one_way"] else 1) for other in opposite):
+                    continue  # No false straight movement into an opposing one-way arm.
                 # Left half is inbound; right half is outbound.
-                forward = (-outward[0], -outward[1]) if sign == 1 else outward
-                center_arrow = Point(arrow_at.x+normal[0]*sign*width/4, arrow_at.y+normal[1]*sign*width/4)
+                forward = (-outward[0], -outward[1]) if inbound else outward
+                center_arrow = Point(arrow_at.x+normal[0]*lateral, arrow_at.y+normal[1]*lateral)
                 dx, dy = forward; nx, ny = -dy, dx
                 arrow = Polygon([(center_arrow.x+dx*x+nx*y, center_arrow.y+dy*x+ny*y) for x, y in
                                  ((-1.5,-.12),(.3,-.12),(.3,-.55),(1.5,0.),(.3,.55),(.3,.12),(-1.5,.12))])
-                emit(arrow.intersection(roadway), "lane_arrow", f"{prefix}-arrow-{'in' if sign == 1 else 'out'}", "marking")
+                emit(arrow.intersection(roadway), "lane_arrow", f"{prefix}-arrow-{suffix}", "marking")
     walking_connected = None
     if "pedestrian_connections" in junction:
         walking_network = _polygons(unary_union([sidewalks, *[cross for _, _, _, cross in crossing_rows], access]).buffer(.03))
@@ -344,6 +386,14 @@ def compile_intersection(context, component, constraints, revision):
     if walking_connected is not None:
         checks["pedestrian_connected"] = walking_connected
         checks["pedestrian_connection_basis"] = "Source-bounded pedestrian corners and proposed full crossing bands; source service openings preserve pedestrian passage."
+    if directional:
+        checks['one_way_approach_count'] = sum(a['one_way'] for a in approaches)
+        checks['approach_movements'] = [{'approach_id': a['source']['id'], 'traffic_flow': a['flow'],
+            'inbound_lanes': a['lanes'] if a['flow'] == 'inbound' else 0 if a['flow'] == 'outbound' else 1,
+            'outbound_lanes': a['lanes'] if a['flow'] == 'outbound' else 0 if a['flow'] == 'inbound' else 1,
+            'source_one_way_lanes_preserved': a['one_way']} for a in approaches]
+        if checks['one_way_approach_count']:
+            checks.pop('through_lanes_per_direction')
     return features, checks
 
 

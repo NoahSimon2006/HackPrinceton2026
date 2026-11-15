@@ -202,6 +202,9 @@ def _extend(row, connections, nodes, family):
             current_heading = _heading(LineString(list(line.coords)[-2:]))
             forward = [item for item in candidates if item['anchor']['id'] not in source_ids
                        and item['anchor']['label'].casefold() == row['anchor']['label'].casefold()
+                       and item['anchor'].get('traffic_direction') == row['anchor'].get('traffic_direction')
+                       and (row['anchor'].get('traffic_direction') != 'one_way' or
+                            (item['reverse'] == row['reverse'] and item['anchor'].get('lane_count') == row['anchor'].get('lane_count')))
                        and abs((_heading(item['line']) - current_heading + 180) % 360 - 180) < 40]
             if len(forward) != 1:
                 break
@@ -288,7 +291,7 @@ def _approach(row, node_id, node, connections, nodes, walking, family, origin, j
         # sidewalk corridor is extrapolated beyond the sampled paths.
         envelope = unary_union([envelope, modeled])
     heading = _heading(line)
-    identifier = _opaque('road-', 'junction-approach:' + family + ':' + node_id + ':' + '|'.join(chain))
+    identifier = _opaque('road-', 'junction-approach:' + family + ':' + node_id + ':' + '|'.join(chain) + (':' + str(row['reverse']) if family == 'osm' else ''))
     midpoint = line.project(origin)
     basis = ('Street envelope follows separately mapped pedestrian paths where available; exact curb and parking geometry are unverified.'
              if matched else row['anchor']['width_basis'])
@@ -312,10 +315,10 @@ def _approach(row, node_id, node, connections, nodes, walking, family, origin, j
         shapes = [projected(candidate['surface'])]
         shapes += [nodes[identifier]['area'] for identifier in shared if identifier in nodes and nodes[identifier]['area'] is not None]
         service_line = projected(candidate['geometry'], ('LineString',))
-        for identifier in shared:
-            if identifier not in nodes:
+        for shared_node_id in shared:
+            if shared_node_id not in nodes:
                 continue
-            point = nodes[identifier]['point']
+            point = nodes[shared_node_id]['point']
             mouth = nearest_points(service_line, point)[0]
             if point.distance(mouth) > .001:
                 shapes.append(LineString([point, mouth]).buffer(candidate['width_m'] / 2 + .5, cap_style='square'))
@@ -340,6 +343,10 @@ def _approach(row, node_id, node, connections, nodes, walking, family, origin, j
              'crossing_geometry': _geo(crossing), 'crossing_span_m': round(crossing.length, 3),
              'source_anchor_ids': chain,
              'road_geometry_basis': 'Bounded planning envelope from mapped road alignment and nearby pedestrian paths; unverified between-source surface.'}
+    value['traffic_flow'] = ('inbound' if row['reverse'] else 'outbound') if anchor.get('traffic_direction') == 'one_way' else anchor.get('traffic_direction', 'unverified')
+    if 'lane_count' in anchor:
+        value['lane_count'] = anchor['lane_count']
+    value['direction_basis'] = anchor.get('direction_basis', 'Paired opposing local network carriageways.' if value['traffic_flow'] == 'two_way' else 'Unpaired carriageway; whole-road direction unverified.')
     return anchor, value
 
 
@@ -512,11 +519,17 @@ def model_junction_context(junctions, anchors):
         values[-1]['approaches'] = [{key: approach[key] for key in ('id', 'anchor_id', 'direction', 'width_m', 'plan_width_m',
             'width_basis', 'traffic_direction', 'junction_offset_m', 'outward_sign', 'crossing_offset_m', 'available_length_m', 'crossing_span_m', 'walking_connection_status')}
             for approach in junction['approaches']]
+        for summary, approach in zip(values[-1]['approaches'], junction['approaches']):
+            summary.update({key: approach[key] for key in ('traffic_flow', 'lane_count', 'direction_basis') if key in approach})
     selected = values[0] if values else None
-    direction_supported = selected is not None and all(row['traffic_direction'] == 'two_way' for row in selected['approaches'])
-    walking_width_supported = selected is not None and all(row['plan_width_m'] >= 8.4 for row in selected['approaches'])
+    direction_supported = selected is not None and all(row['traffic_direction'] == 'two_way' or
+        (row['traffic_direction'] == 'one_way' and row.get('traffic_flow') in ('inbound', 'outbound')
+         and type(row.get('lane_count')) is int and 1 <= row['lane_count'] <= 8) for row in selected['approaches'])
+    walking_width_supported = selected is not None and all(row['plan_width_m'] >=
+        (max(row['width_m'], row.get('lane_count', 0)*3) + 2.4 if row['traffic_direction'] == 'one_way' else 8.4)
+        for row in selected['approaches'])
     supported = direction_supported and walking_width_supported
-    limitation = ('This junction includes a one-way or incompletely paired approach. Its direction-specific intersection plan is not supported yet; choose another intersection or supply a crossing marking.'
+    limitation = ('An approach lacks verified travel direction or lane count. Refresh its source data or mark a specific crossing; do not invent opposing traffic.'
                   if not direction_supported else
                   'The available source envelope is too narrow to preserve two traffic lanes and connected pedestrian space. Mark a wider street or sidewalk boundary, or choose another intersection.')
     result = {'design_mode': 'junction' if supported else 'marked_crossing' if marked else 'needs_placement',
@@ -529,6 +542,6 @@ def model_junction_context(junctions, anchors):
                 limitation if selected else
                 'No supported connected intersection was found within 120 m. Select an actual intersection or mark the intended crossing.'}
     if selected and not supported and not marked:
-        result['question'] = ('This intersection includes a one-way or unverified roadway direction. Choose a supported intersection or mark the specific crossing to design.' if not direction_supported else
-                              'The mapped street width cannot fit connected pedestrian space and both traffic lanes. Mark the actual street and sidewalk boundary, or choose another intersection.')
+        result['question'] = ('An approach has unverified travel direction or lane count. Refresh its source data or mark the specific crossing to design.' if not direction_supported else
+                              'The mapped street width cannot fit connected pedestrian space while preserving the required traffic lanes. Mark the actual street and sidewalk boundary, or choose another intersection.')
     return result

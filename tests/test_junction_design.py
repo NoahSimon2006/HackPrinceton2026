@@ -57,7 +57,7 @@ class JunctionDesignTests(unittest.TestCase):
     def test_whole_plan_is_source_anchored_connected_and_masks_old_paint(self):
         context = junction_context()
         value = build_road_concept(context, [package(context)], identity=identity())
-        self.assertEqual(value["compiler_version"], "road-concept-v2")
+        self.assertEqual(value["compiler_version"], "road-concept-v3")
         self.assertEqual(validate_road_concept(json.loads(json.dumps(value))), value)
         self.assertEqual(value["checks"][0]["crossing_count"], 4)
         self.assertEqual(value["checks"][0]["approach_count"], 4)
@@ -151,7 +151,7 @@ class JunctionDesignTests(unittest.TestCase):
                 self.assertFalse(any(f["id"].startswith(f"intersection-approach-{index+1}-arrow") for f in value["geometry"]))
         context["junctions"][0]["approaches"][0]["traffic_direction"] = "one_way"
         rehash_context(context)
-        with self.assertRaisesRegex(ConceptPlacementError, "one-way or unverified"):
+        with self.assertRaisesRegex(ConceptPlacementError, "unverified traffic direction"):
             build_road_concept(context, [package(context)], identity=identity())
 
     def test_service_access_opening_remains_drivable_without_a_curb_barrier(self):

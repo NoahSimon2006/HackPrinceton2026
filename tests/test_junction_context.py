@@ -211,7 +211,7 @@ class JunctionContextTests(unittest.TestCase):
         context['junctions'][0]['approaches'][0]['traffic_direction'] = 'outbound'
         summary = model_junction_context(context['junctions'], context['anchors'])
         self.assertEqual(summary['design_mode'], 'needs_placement')
-        self.assertIn('one-way', summary['question'])
+        self.assertIn('unverified', summary['question'])
         self.assertEqual(summary['approach_count'], 4)
 
     def test_explicit_crossing_is_usable_beside_an_unsupported_junction(self):
@@ -229,7 +229,7 @@ class JunctionContextTests(unittest.TestCase):
 
     def test_legacy_context_without_junction_fields_still_replays(self):
         from road_concept import build_road_concept, validate_road_concept
-        from test_road_concept import road_context, identity, component
+        from tests.test_road_concept import road_context, identity, component
         context = copy.deepcopy(road_context())
         context.pop('junctions', None)
         context['compiler_version'] = 'road-context-v1'

@@ -29,7 +29,7 @@ MAX_BYTES = 8_000_000
 MAX_LOCAL_BYTES = 128_000_000
 RADIUS_M = 180
 MAX_ANCHORS = 16
-VERSION = "road-context-v2-junctions"
+VERSION = "road-context-v3-directions"
 ROAD_KINDS = ["curb_extension", "crossing", "pedestrian_island", "bike_lane", "pedestrian_space", "lane_marking"]
 MOTOR_ROADS = {"primary", "secondary", "tertiary", "residential", "unclassified", "living_street", "service",
               "primary_link", "secondary_link", "tertiary_link"}
@@ -134,7 +134,10 @@ def _from_osm(raw, origin, *, local=False):
         anchor = _anchor("osm-way:" + way.get("id", ""), line, width, basis, origin,
                          tags.get("name") or "Mapped " + tags["highway"].replace("_", " ") + " road", digest)
         if anchor:
-            anchor["traffic_direction"] = "source_direction" if tags.get("oneway") in ("yes", "1", "true", "-1") else "two_way"
+            anchor["traffic_direction"] = "one_way" if tags.get("oneway") in ("yes", "1", "true", "-1") else "two_way"
+            if re.fullmatch(r"[1-8]", tags.get("lanes", "")):
+                anchor["lane_count"] = int(tags["lanes"])
+            anchor["direction_basis"] = "Explicit OpenStreetMap one-way tag and source way orientation." if anchor["traffic_direction"] == "one_way" else "OpenStreetMap two-way road."
             anchor["topology"] = {"family": "osm", "way_id": way.get("id"),
                                   "node_refs": refs[::-1] if tags.get("oneway") == "-1" else refs,
                                   "road_class": tags["highway"], "junction_type": tags.get('junction')}
@@ -143,8 +146,17 @@ def _from_osm(raw, origin, *, local=False):
     return anchors, max(timestamps, default=None)
 
 
-def _from_sumo(raw, origin):
+def _from_sumo(raw, origin, *, osm_raw=None):
     root = _xml(raw, limit=MAX_LOCAL_BYTES)
+    # An unpaired simulation edge can also be one half of a divided road.
+    # Confirm a one-way street with its original OSM tag before treating the
+    # modeled carriageway as the whole road.
+    one_way_ids = set()
+    if osm_raw is not None:
+        for way in _xml(osm_raw, limit=MAX_LOCAL_BYTES).findall("way"):
+            tags = {tag.get("k"): tag.get("v") for tag in way.findall("tag")}
+            if tags.get("oneway") in ("yes", "1", "true", "-1"):
+                one_way_ids.add(way.get("id"))
     location = root.find("location")
     if location is None or location.get("projParameter") in (None, "!", "-", "."):
         raise ValueError("The network has no geographic projection.")
@@ -191,7 +203,7 @@ def _from_sumo(raw, origin):
         if center.distance(origin) <= 150:
             records.append({"edge_id": edge.get("id", ""), "from": edge.get("from"), "to": edge.get("to"),
                             "line": center, "width": width, "surface": surface,
-                            "road_class": highway,
+                            "road_class": highway, "lane_count": len(lanes),
                             "label": edge.get("name") or "Mapped road approach"})
     # Opposite directed edges with reversed junction IDs represent the two
     # carriageways of one physical segment. Combine their span for crosswalks;
@@ -236,6 +248,12 @@ def _from_sumo(raw, origin):
             anchor["supported_kinds"] = [kind for kind in ROAD_KINDS if kind != "crossing"]
             anchor["crossing_basis"] = "unpaired_carriageway_use_a_marked_crossing"
             anchor["traffic_direction"] = "source_direction"
+            source_way = re.fullmatch(r"-?(\d+)(?:#.*)?", record["edge_id"])
+            if source_way and source_way.group(1) in one_way_ids:
+                anchor["traffic_direction"] = "one_way"
+                anchor["lane_count"] = record["lane_count"]
+                anchor["direction_basis"] = "Explicit OSM one-way tag; vehicle direction and lane count from the corresponding directed local network edge."
+                anchor["direction_source_hash"] = sha256(osm_raw).hexdigest()
             anchor["topology"] = {"family": "sumo", "from": record["from"], "to": record["to"],
                                   "edge_ids": [record["edge_id"]], "road_class": record["road_class"]}
             anchors.append(anchor)
@@ -301,6 +319,14 @@ def prepare_street_context(lon, lat, markings=None, *, activity=None, network_pa
         sources.append({"provider": "Planner map markings", "source_hash": canonical_hash(markings),
                         "observed_at": None, "retrieved_at": None, "url": None})
     mapped, selected_raw, selected_family = [], None, None
+    direction_raw = None
+    direction_path = Path(osm_path) if osm_path is not None else ROOT / "sim/sources/dtla-roads.osm"
+    if direction_path.is_file() and direction_path.stat().st_size <= MAX_LOCAL_BYTES:
+        try:
+            direction_raw = direction_path.read_bytes()
+            _xml(direction_raw, limit=MAX_LOCAL_BYTES)
+        except (OSError, ValueError, ET.ParseError):
+            direction_raw = None
     for family, path in (("sumo", Path(network_path) if network_path is not None else ROOT / "sim/dtla.net.xml"),
                          ("osm", Path(osm_path) if osm_path is not None else ROOT / "sim/sources/dtla-roads.osm")):
         _check(activity)
@@ -312,12 +338,22 @@ def prepare_street_context(lon, lat, markings=None, *, activity=None, network_pa
             if path.stat().st_size > MAX_LOCAL_BYTES:
                 raise ValueError("The local road source is too large.")
             raw = path.read_bytes()
-            parsed, observed = (_from_sumo(raw, origin), None) if family == "sumo" else _from_osm(raw, origin, local=True)
+            parsed, observed = (_from_sumo(raw, origin, osm_raw=direction_raw), None) if family == "sumo" else _from_osm(raw, origin, local=True)
+            if family == 'sumo' and direction_raw is not None and any(a.get('traffic_direction') == 'one_way' for a in parsed):
+                # Simulation junctions split streets at lane/footway nodes.
+                # Prefer the original whole-street topology for mixed-direction
+                # designs when its explicit one-way tags are available locally.
+                original, original_time = _from_osm(direction_raw, origin, local=True)
+                if any(a.get('traffic_direction') == 'one_way' for a in original):
+                    parsed, raw, family, observed = original, direction_raw, 'osm', original_time
             if parsed:
                 mapped = parsed
                 selected_raw, selected_family = raw, family
                 sources.append(_source("OSM-derived local street network" if family == "sumo" else "OpenStreetMap local extract", raw,
                                        observed_at=observed, url="https://www.openstreetmap.org/copyright"))
+                if family == "sumo" and any(a.get("direction_source_hash") for a in parsed):
+                    sources.append(_source("OpenStreetMap one-way direction verification", direction_raw,
+                                           url="https://www.openstreetmap.org/copyright"))
                 source_status.append({"source": family, "status": "ready"})
                 break
             source_status.append({"source": family, "status": "no_nearby_roads"})

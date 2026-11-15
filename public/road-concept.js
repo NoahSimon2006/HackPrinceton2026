@@ -15,6 +15,7 @@
     curb:{label:'Concrete curb',color:'#f0e9d8',edge:'#aaa38e',weight:.65},
     planting:{label:'Planting',color:'#7c956a',edge:'#506944',weight:.8},
     centerline:{label:'Centerlines',color:'#e9c85b',edge:'#e9c85b',weight:0},
+    lane_separator:{label:'One-way lane dividers',color:'#faf7ed',edge:'#faf7ed',weight:0},
     crosswalk:{label:'Crossings',color:'#faf7ed',edge:'#faf7ed',weight:0},
     stop_line:{label:'Stop lines',color:'#faf7ed',edge:'#faf7ed',weight:0},
     lane_arrow:{label:'Lane arrows',color:'#faf7ed',edge:'#faf7ed',weight:0},
@@ -148,6 +149,7 @@
     if(component?.kind==='intersection_redesign') {
       if(Number.isFinite(check.approach_count))parts.push(`${check.approach_count} approaches.`);
       if(Number.isFinite(check.crossing_count))parts.push(`${check.crossing_count} crossings.`);
+      if(check.one_way_approach_count>0)parts.push(`${check.one_way_approach_count} one-way approaches; source lane counts and directions preserved.`);
       if(check.connected===true)parts.push('Road layout connected.');
       if(Number.isFinite(check.roadway_area_m2))parts.push(`Roadway ${number(check.roadway_area_m2)} m².`);
       if(Number.isFinite(check.sidewalk_area_m2))parts.push(`Sidewalk ${number(check.sidewalk_area_m2)} m².`);
