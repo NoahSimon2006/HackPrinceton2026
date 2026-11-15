@@ -3,6 +3,7 @@
   map.createPane("proposal");
   map.getPane("proposal").style.zIndex = 610;
   map.getPane("proposal").style.pointerEvents = "none";
+  const plantingRenderer = L.svg({pane:"proposal"});
   let selected = null, published = null, comparison = null, layer = null, request = 0, controller;
   let realRevision = 0;
   let currentWater = null, currentTraffic = null;
@@ -77,14 +78,21 @@
     return area;
   }
   function prepareLayer(p) {
+    const collection = {type:"FeatureCollection",features:p.geometry};
+    if (!p.development_fixture && p.workflow === "water" && p.status !== "rejected") {
+      const planted = new Set(p.proposed_geometry_ids);
+      return L.geoJSON(collection, {
+        pane:"proposal", renderer:plantingRenderer, interactive:false,
+        style:feature => planted.has(feature.id)
+          ? {className:"rain-garden-footprint",color:"#b5efaa",weight:3,fillColor:"#38754c",fillOpacity:.82,
+            dashArray:p.status === "draft" ? "5 3" : null}
+          : {color:"#78dbee",weight:2,dashArray:"5 4",fillColor:"#78dbee",fillOpacity:.12},
+      });
+    }
     const fixture = p.development_fixture;
-    return L.geoJSON({type:"FeatureCollection",features:p.geometry}, {
+    return L.geoJSON(collection, {
       pane:"proposal", interactive:false,
       style:fixture ? {color:"#e0c4ff",weight:3,dashArray:"7 4",fillColor:"#b388ff",fillOpacity:.42}
-        : p.status === "draft" ? {color:"#91ebbd",weight:3,dashArray:"5 3",fillColor:"#5bd58f",fillOpacity:.6}
-        : p.status === "conditional" ? feature => feature.properties?.role === "contributing"
-          ? {color:"#78dbee",weight:2,dashArray:"5 4",fillColor:"#78dbee",fillOpacity:.12}
-          : {color:"#ade7a4",weight:3,fillColor:"#80cf91",fillOpacity:.4}
         : p.status === "rejected" ? {color:"#ffaf98",weight:3,dashArray:"6 4",fillColor:"#db7358",fillOpacity:.45}
         : {color:"#ffdc83",weight:3,fillColor:"#e4ad39",fillOpacity:.5},
     });

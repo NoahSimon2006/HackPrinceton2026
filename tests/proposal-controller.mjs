@@ -7,7 +7,7 @@ const element=()=>({events:{},children:[],hidden:false,checked:false,disabled:fa
   append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;}});
 const $=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
 const map={setView(){},getZoom(){return 17;},handlers:{},createPane(){},getPane(){return{style:{}};},on(n,f){this.handlers[n]=f;},fire(n,e){this.handlers[n]?.(e);}};
-const L={geoJSON(data,options){if(data.features.some(f=>f.geometry?.type==='Bad'))throw new Error('Invalid GeoJSON object.');const l={data,options,attached:false,addTo(){this.attached=true;},remove(){this.attached=false;}};layers.push(l);return l;}};
+const L={svg:options=>options,geoJSON(data,options){if(data.features.some(f=>f.geometry?.type==='Bad'))throw new Error('Invalid GeoJSON object.');const l={data,options,attached:false,addTo(){this.attached=true;},remove(){this.attached=false;}};layers.push(l);return l;}};
 vm.runInNewContext(await readFile(new URL('../public/proposal.js',import.meta.url),'utf8'),{$,map,L,document:{createElement:element},URLSearchParams,AbortController,json:(url,opts)=>new Promise((resolve,reject)=>requests.push({url,opts,resolve,reject}))});
 const select=(siteId='a',workflow='street',inputRevision=0)=>map.fire('plannersite',{siteId,workflow,center:{lat:34.03758,lng:-118.25313},inputRevision});
 const response=(revision=1,site_id='a',workflow='street')=>({schema_version:1,site_id,workflow,revision,input_revision:0,input_hash:'hash'+revision,development_fixture:true,status:'fixture',geometry:[{properties:{revision}}],metrics:[{id:'footprint_area',proposed:revision*24,unit:'m²',revision,input_hash:'hash'+revision}],recommendation:'UI test only'});
@@ -154,7 +154,7 @@ console.log('PASS: draft screening metrics, unknown capture and specific placeme
 select('water','water',1);
 const waterProposal=(revision,input_revision=1,area=30)=>({...response(revision,'water','water'),
   development_fixture:false,status:'conditional',input_revision,design:{kind:'bioretention'},
-  geometry:[{properties:{revision},geometry:{type:'Polygon',coordinates:[]}}],
+  proposed_geometry_ids:['bed'],geometry:[{id:'bed',properties:{revision},geometry:{type:'Polygon',coordinates:[]}}],
   metrics:[{id:'footprint_area',proposed:area,unit:'m²',revision,input_hash:'hash'+revision},
     {id:'storage_volume',proposed:area*.15,unit:'m³',revision,input_hash:'hash'+revision},
     {id:'captured_volume',proposed:null,unit:'m³',status:'unassessed',revision,input_hash:'hash'+revision}],
@@ -167,6 +167,9 @@ const study={siteId:'water',workflow:'water',inputRevision:1,revision:2,proposal
     decisions:[{source:'CoStar frontage',decision:'Preserved the mapped curb-cut frontage buffer.',evidence_ids:['frontage-1']}]},
   designHistory:[{revision:1,inputRevision:0,proposal:previous,savedAt:'2026-11-14T14:05:00+00:00'}]};
 map.fire('plannerresult',study);
+assert.equal(activeLayer().options.renderer.pane,'proposal');
+assert.equal(activeLayer().options.style(current.geometry[0]).className,'rain-garden-footprint');
+assert.equal(activeLayer().options.style({id:'roof',properties:{role:'contributing'}}).className,undefined);
 assert.equal($('water-design-review').hidden,false);
 assert.equal($('proposal-title').textContent,'Bioretention concept');
 assert.match(text($('proposal-water-metrics')),/Capture Not assessed/);
@@ -175,6 +178,7 @@ assert.match(text($('water-design-decisions')),/CoStar frontage: Preserved/);
 assert.match(text($('water-design-decisions')),/frontage-1/);
 assert.doesNotMatch($('proposal-revision').textContent,/Saved result/,'new live results are not labeled as replay');
 $('water-design-alternatives').children[1].children.find(c=>c.textContent==='Inspect this footprint').events.click();
+assert.equal(activeLayer().options.style(alternative.geometry[0]).className,'rain-garden-footprint');
 assert.equal($('proposal-area').textContent,'20.0 m²');
 assert.match($('proposal-map-caption').textContent,/Alternative preview/);
 assert.match(text($('water-design-decisions')),/CoStar loading: The linear footprint/);

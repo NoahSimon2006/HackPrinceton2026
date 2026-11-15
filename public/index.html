@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=26">
+  <link rel="stylesheet" href="/styles.css?v=27">
   <script defer src="/vendor/leaflet.js"></script>
   <script defer src="/vector-zoom.js?v=1"></script>
   <script defer src="/app.js?v=20"></script>
-  <script defer src="/proposal.js?v=9"></script>
-  <script defer src="/concept-scene.js?v=1"></script>
+  <script defer src="/proposal.js?v=10"></script>
+  <script defer src="/concept-scene.js?v=2"></script>
   <script defer src="/analysis-stream.js?v=2"></script>
   <script defer src="/site-view.js?v=4"></script>
   <script defer src="/projects.js?v=1"></script>
@@ -20,6 +20,15 @@
   <script defer src="/guide.js?v=2"></script>
 </head>
 <body>
+  <svg class="map-fill-definitions" width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+      <pattern id="rain-garden-fill" width="13" height="13" patternUnits="userSpaceOnUse">
+        <rect width="13" height="13" fill="#38754c"/>
+        <path d="M4 10v-5m0 4-2-2m2 1 2-2m4 5V7m0 3 1.5-1.5"
+              fill="none" stroke="#b5dc8c" stroke-width="1.15" stroke-linecap="round"/>
+      </pattern>
+    </defs>
+  </svg>
   <div id="map-workspace" class="shell planner-mode">
     <aside class="sidebar" aria-label="Planning assistant">
       <!-- One step is shown at a time. guide.js sets data-view and friends; styles.css shows the matching pane. -->
@@ -51,7 +60,6 @@
               <p><strong>Pick up where you left off</strong><span id="guide-resume-name"></span></p>
               <button id="guide-resume-open" type="button">Resume</button>
             </div>
-            <p class="featured-demo"><a href="/demo">Explore a detailed green-street demo ↗</a><br><small>Hancock Terrace · curated design study</small></p>
           </section>
 
           <!-- Step 2 · Place -->
@@ -237,6 +245,7 @@
                 <h3 id="proposal-title"></h3><p id="proposal-summary"></p>
                 <dl class="proposal-metrics"><dt id="proposal-area-label">Footprint</dt><dd id="proposal-area"></dd><dt>Impact</dt><dd id="proposal-impact">Unassessed</dd></dl>
                 <dl id="proposal-water-metrics" class="proposal-metrics" hidden></dl>
+                <p class="fine-print water-planting-note">Planting shown within the treatment footprint is illustrative.</p>
                 <div id="proposal-checks"></div>
                 <ul id="proposal-assumptions" hidden></ul>
                 <div class="proposal-view-actions"><button id="focus-proposal" type="button">Zoom to footprint</button>

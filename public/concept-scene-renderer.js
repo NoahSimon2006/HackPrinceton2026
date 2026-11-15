@@ -5,7 +5,8 @@ import {OrbitControls} from './vendor/OrbitControls.js';
 const PALETTE = {
   background:0x14221e, ground:0x2a4037, grid:0x42594b, gridMajor:0x607464,
   building:0x9cab9c, buildingEdge:0x647c69, parcel:0x91aa90,
-  water:0x2f9e62, bike:0x328fae, pedestrian:0xc9ab57, curb:0x799e4c,
+  soil:0x71533e, bedWall:0x514338, bedRim:0xb5efaa,
+  bike:0x328fae, pedestrian:0xc9ab57, curb:0x799e4c,
   rejected:0xe8a187, contribution:0x6cbace, road:0x52605d,
 };
 const finite = value => typeof value === 'number' && Number.isFinite(value);
@@ -55,9 +56,76 @@ function niceSpacing(value) {
 
 function interventionColor(data) {
   if (data.status === 'rejected') return PALETTE.rejected;
-  if (data.identity.workflow === 'water') return PALETTE.water;
   const use = data.design?.new_use || '';
   return use.includes('bike') ? PALETTE.bike : use.includes('pedestrian') ? PALETTE.pedestrian : PALETTE.curb;
+}
+
+export function groundAroundTreatment(board, treatment) {
+  const parts = polygons(treatment);
+  return {type:'MultiPolygon',coordinates:[
+    [board,...parts.map(([outer]) => outer)],
+    ...parts.flatMap(([, ...holes]) => holes.map(hole => [hole])),
+  ]};
+}
+
+// Return null close to a boundary so the whole tuft, including its leaves,
+// can fit inside the footprint and away from each excluded ring.
+function ringLocation(ring, x, y) {
+  let inside = false;
+  for (let i=1; i<ring.length; i++) {
+    const [ax,ay] = ring[i-1], [bx,by] = ring[i];
+    const dx = bx-ax, dy = by-ay, squaredLength = dx*dx+dy*dy;
+    if (squaredLength) {
+      const t = THREE.MathUtils.clamp(((x-ax)*dx+(y-ay)*dy)/squaredLength,0,1);
+      if ((x-ax-t*dx)**2+(y-ay-t*dy)**2 < .2**2) return null;
+    }
+    if ((ay>y)!==(by>y) && x < ax+(y-ay)*dx/dy) inside = !inside;
+  }
+  return inside;
+}
+
+export function gardenPlantPositions(treatment, areaM2) {
+  const spacing = Math.max(.38,Math.sqrt(areaM2/1000));
+  const result = [];
+  for (const [outer,...holes] of polygons(treatment)) {
+    const box = new THREE.Box2();
+    for (const point of outer) box.expandByPoint(new THREE.Vector2(...point));
+    const size = box.getSize(new THREE.Vector2());
+    const step = Math.max(spacing,Math.sqrt(size.x*size.y/1600));
+    const rows = Math.max(1,Math.floor(size.y/step));
+    const columns = Math.max(1,Math.floor(size.x/step));
+    for (let row=0; row<rows; row++) {
+      for (let column=0; column<columns; column++) {
+        const cell = row*columns+column;
+        const x = box.min.x+size.x*(column+(row%2 ? .68 : .32)+.21*Math.sin(cell*2.4))/columns;
+        const y = box.min.y+size.y*(row+.5+.24*Math.cos(cell*3.93))/rows;
+        if (ringLocation(outer,x,y) === true && holes.every(hole => ringLocation(hole,x,y) === false)) {
+          result.push([x,y]);
+        }
+      }
+    }
+  }
+  return result;
+}
+
+function tuftGeometry() {
+  const vertices = [], indices = [];
+  for (let i=0; i<6; i++) {
+    const angle = i*2.399963, x = Math.cos(angle), z = Math.sin(angle);
+    const tip = .12+(i%3)*.025, height = .29+(i%4)*.069;
+    const start = vertices.length/3;
+    vertices.push(
+      -z*.025,0,x*.025, z*.025,0,-x*.025,
+      x*.07-z*.031,height*.56,z*.07+x*.031, x*.07+z*.031,height*.56,z*.07-x*.031,
+      x*tip,height,z*tip,
+    );
+    indices.push(start,start+1,start+2,start+1,start+3,start+2,start+2,start+3,start+4);
+  }
+  const result = new THREE.BufferGeometry();
+  result.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
+  result.setIndex(indices);
+  result.computeVertexNormals();
+  return result;
 }
 
 export function createConceptScene(container, data, {onError = () => {}} = {}) {
@@ -66,16 +134,19 @@ export function createConceptScene(container, data, {onError = () => {}} = {}) {
     throw new Error('This conceptual scene is not a supported metric model.');
   }
   const focusBounds = bounds(data.focusBounds), extent = bounds(data.bounds);
+  const water = data.identity.workflow === 'water';
+  const rainGarden = water && data.status !== 'rejected';
   const center = new THREE.Vector3((focusBounds[0]+focusBounds[2])/2,0,-(focusBounds[1]+focusBounds[3])/2);
-  const focusSpan = Math.max(12,focusBounds[2]-focusBounds[0],focusBounds[3]-focusBounds[1]);
-  const viewSpan = Math.max(24,focusSpan*1.9);
+  const focusSpan = Math.max(focusBounds[2]-focusBounds[0],focusBounds[3]-focusBounds[1]);
+  const viewSpan = rainGarden ? Math.max(12,focusSpan*1.65) : Math.max(24,focusSpan*1.9);
   const gridStepM = niceSpacing(viewSpan/9);
   const boardSize = Math.ceil(Math.max(viewSpan*2.4,extent[2]-extent[0],extent[3]-extent[1])/gridStepM)*gridStepM;
   const geometries = new Set(), materials = new Set(), textures = new Set();
   const scene = new THREE.Scene(); scene.background = new THREE.Color(PALETTE.background);
   const camera = new THREE.OrthographicCamera(-viewSpan,viewSpan,viewSpan,-viewSpan,.1,Math.max(1500,boardSize*12));
-  const base = new THREE.Group(), proposed = new THREE.Group(), context = new THREE.Group();
-  scene.add(base,context,proposed);
+  const base = new THREE.Group(), existing = new THREE.Group(), proposed = new THREE.Group(), context = new THREE.Group();
+  scene.add(base,context,existing,proposed);
+  existing.visible = false;
   let renderer, controls, observer, scaleLabel, disposed = false, failed = false, pendingFrame = 0, mode = 'proposed';
   const geometry = value => {geometries.add(value); return value;};
   const material = value => {materials.add(value); return value;};
@@ -112,6 +183,66 @@ export function createConceptScene(container, data, {onError = () => {}} = {}) {
       }
     }
   }
+  function addRainGarden() {
+    const treatment = data.treatment;
+    const depth = data.design.storage_depth_m;
+    const half = boardSize/2, east = center.x, north = -center.z;
+    const board = [[east-half,north-half],[east+half,north-half],[east+half,north+half],
+      [east-half,north+half],[east-half,north-half]];
+    const tile = document.createElement('canvas');
+    tile.width = tile.height = 128;
+    const tileContext = tile.getContext('2d');
+    tileContext.fillStyle = new THREE.Color(PALETTE.ground).getStyle();
+    tileContext.fillRect(0,0,128,128);
+    tileContext.fillStyle = new THREE.Color(PALETTE.grid).getStyle();
+    tileContext.fillRect(0,0,2,128);
+    tileContext.fillRect(0,0,128,2);
+    const gridTexture = new THREE.CanvasTexture(tile);
+    textures.add(gridTexture);
+    gridTexture.colorSpace = THREE.SRGBColorSpace;
+    gridTexture.wrapS = gridTexture.wrapT = THREE.RepeatWrapping;
+    const groundMaterial = solidMaterial(0xffffff,{map:gridTexture});
+    const ground = [
+      [existing,{type:'Polygon',coordinates:[board]}],
+      [proposed,groundAroundTreatment(board,treatment)],
+    ];
+    for (const [parent,area] of ground) {
+      for (const shape of buildPolygonGeometries(area)) {
+        geometry(shape);
+        const uv = shape.getAttribute('uv');
+        for (let index=0; index<uv.count; index++) uv.setXY(index,uv.getX(index)/gridStepM,uv.getY(index)/gridStepM);
+        const mesh = new THREE.Mesh(shape,groundMaterial);
+        mesh.receiveShadow = true; parent.add(mesh);
+      }
+    }
+
+    const bed = {kind:'treatment',geometry:treatment};
+    addSurface(bed,proposed,PALETTE.soil,0,-depth);
+    const cap = material(new THREE.MeshBasicMaterial({visible:false}));
+    const wall = solidMaterial(PALETTE.bedWall,{side:THREE.DoubleSide});
+    for (const shape of buildPolygonGeometries(treatment,depth)) {
+      const mesh = new THREE.Mesh(geometry(shape),[cap,wall]);
+      mesh.position.y = -depth; mesh.receiveShadow = true; proposed.add(mesh);
+    }
+    boundaries(bed,existing,.012,PALETTE.bedRim,.42);
+    boundaries(bed,proposed,.012,PALETTE.bedRim);
+
+    const positions = gardenPlantPositions(treatment,data.areaM2);
+    if (!positions.length) return;
+    const clusters = new THREE.InstancedMesh(geometry(tuftGeometry()),solidMaterial(0xffffff,{side:THREE.DoubleSide}),positions.length);
+    const tuft = new THREE.Object3D();
+    const greens = [0x74af53,0x438b47,0xa1c668,0x6da752].map(color => new THREE.Color(color));
+    positions.forEach(([x,y],index) => {
+      tuft.position.set(x,-depth,-y);
+      tuft.rotation.y = index*2.399963;
+      tuft.scale.set(1,.85+(index%7)*.095,1);
+      tuft.updateMatrix();
+      clusters.setMatrixAt(index,tuft.matrix);
+      clusters.setColorAt(index,greens[index%greens.length]);
+    });
+    clusters.castShadow = true;
+    proposed.add(clusters);
+  }
   function cameraState() {
     return {position:camera.position.toArray(),target:controls.target.toArray(),up:camera.up.toArray(),zoom:camera.zoom,
       frustum:[camera.left,camera.right,camera.top,camera.bottom]};
@@ -142,7 +273,8 @@ export function createConceptScene(container, data, {onError = () => {}} = {}) {
     if (disposed || failed) return;
     camera.up.set(0,1,0); camera.zoom=1;
     controls.target.copy(center);
-    camera.position.copy(center).add(new THREE.Vector3(.6,2.75,.8).normalize().multiplyScalar(viewSpan*1.6));
+    const view = rainGarden ? new THREE.Vector3(.9,2.05,1.55) : new THREE.Vector3(.6,2.75,.8);
+    camera.position.copy(center).add(view.normalize().multiplyScalar(viewSpan*1.6));
     camera.updateProjectionMatrix(); controls.update(); render();
   }
   function contextLost(event) {
@@ -160,7 +292,10 @@ export function createConceptScene(container, data, {onError = () => {}} = {}) {
     for (const item of geometries) item.dispose();
     for (const item of materials) item.dispose();
     for (const item of textures) item.dispose();
-    scene.traverse(object => object.shadow?.dispose());
+    scene.traverse(object => {
+      object.shadow?.dispose();
+      if (object.isInstancedMesh) object.dispose();
+    });
     scene.clear();
     renderer?.dispose(); renderer?.forceContextLoss(); renderer?.domElement.remove();
     scaleLabel?.remove();
@@ -195,35 +330,36 @@ export function createConceptScene(container, data, {onError = () => {}} = {}) {
     const shadowSpan=viewSpan*1.1;
     Object.assign(sun.shadow.camera,{left:-shadowSpan,right:shadowSpan,top:shadowSpan,bottom:-shadowSpan,near:.1,far:viewSpan*5});
     scene.add(sun,sun.target);
-    const board = new THREE.Mesh(geometry(new THREE.PlaneGeometry(boardSize,boardSize)),solidMaterial(PALETTE.ground));
-    board.rotation.x=-Math.PI/2; board.position.set(center.x,-.035,center.z); board.receiveShadow=true; base.add(board);
-    const grid = new THREE.GridHelper(boardSize,Math.round(boardSize/gridStepM),PALETTE.gridMajor,PALETTE.grid);
-    geometry(grid.geometry);
-    for (const item of Array.isArray(grid.material)?grid.material:[grid.material]) {item.transparent=true;item.opacity=.5;material(item);}
-    grid.position.set(center.x,-.025,center.z); base.add(grid);
+    if (rainGarden) addRainGarden();
+    else {
+      const board = new THREE.Mesh(geometry(new THREE.PlaneGeometry(boardSize,boardSize)),solidMaterial(PALETTE.ground));
+      board.rotation.x=-Math.PI/2; board.position.set(center.x,-.035,center.z); board.receiveShadow=true; base.add(board);
+      const grid = new THREE.GridHelper(boardSize,Math.round(boardSize/gridStepM),PALETTE.gridMajor,PALETTE.grid);
+      geometry(grid.geometry);
+      for (const item of Array.isArray(grid.material)?grid.material:[grid.material]) {item.transparent=true;item.opacity=.5;material(item);}
+      grid.position.set(center.x,-.025,center.z); base.add(grid);
+    }
 
     for (const feature of data.features) {
       if (feature.kind === 'parcel') boundaries(feature,context,.008,PALETTE.parcel,.65);
-      else if (feature.kind === 'building') addSurface(feature,context,PALETTE.building,feature.heightM,0,{edges:true,opacity:.52});
+      else if (feature.kind === 'building') addSurface(feature,context,PALETTE.building,feature.heightM,0,{edges:true,opacity:rainGarden ? .22 : .52});
       else if (feature.kind === 'road') {
         if (['Polygon','MultiPolygon'].includes(feature.geometry?.type)) addSurface(feature,context,PALETTE.road,0,.005);
         else boundaries(feature,context,.008,PALETTE.road);
       } else if (feature.kind === 'contributing') {
         addSurface(feature,proposed,PALETTE.contribution,0,.012,{opacity:.25});
         boundaries(feature,proposed,.018,PALETTE.contribution,.9);
-      } else if (feature.kind === 'intervention') {
+      } else if (feature.kind === 'intervention' && !rainGarden) {
         const color = interventionColor(data), depth=feature.heightM || 0;
-        // Water depth is the stated effective ponding assumption below a flat
-        // reference grade. It is not a source elevation or excavation survey.
-        const offset=data.identity.workflow==='water'?.035-depth:.025;
+        const offset=water ? .035-depth : .025;
         addSurface(feature,proposed,color,depth,offset);
-        boundaries(feature,proposed,data.identity.workflow==='water'?.04:offset+depth+.008,
-          data.identity.workflow==='water'?0xb5f2a9:color);
+        boundaries(feature,proposed,offset+depth+.008,color);
       }
     }
 
     const marker = new THREE.Group();
-    marker.position.set(center.x-viewSpan*.32,.08,center.z+viewSpan*.32);
+    const markerOffset = viewSpan*(rainGarden ? .42 : .32);
+    marker.position.set(center.x-markerOffset,.08,center.z+markerOffset);
     const arrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,-1),new THREE.Vector3(),gridStepM,0xc8dec8,gridStepM*.24,gridStepM*.13);
     for (const item of [arrow.line,arrow.cone]) {
       geometry(item.geometry);material(item.material);
@@ -249,7 +385,7 @@ export function createConceptScene(container, data, {onError = () => {}} = {}) {
     setMode(value) {
       if (!['existing','proposed'].includes(value)) throw new Error('Unknown conceptual view.');
       if (disposed) return;
-      mode=value; proposed.visible=value==='proposed'; render();
+      mode=value; proposed.visible=value==='proposed'; existing.visible=value==='existing'; render();
     },
     reset,
     top() {

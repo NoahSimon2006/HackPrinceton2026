@@ -53,6 +53,7 @@ class ConceptSceneTest(unittest.TestCase):
         saved = project(proposal(polygon))
         value = scene(saved)
         footprint = shape(value["features"][0]["geometry"])
+        self.assertTrue(shape(value["treatment"]).equals(footprint))
         self.assertEqual(len(footprint.interiors), 1)
         self.assertAlmostEqual(footprint.area, 84, places=6)
         self.assertEqual(value["metrics"], saved["result"]["proposal"]["metrics"])
@@ -128,6 +129,7 @@ class ConceptSceneTest(unittest.TestCase):
         self.assertAlmostEqual(value["focusBounds"][0], 20, places=6)
         self.assertEqual(value["features"][0]["heightM"], .15)
         self.assertEqual(value["identity"]["geometryId"], "east")
+        self.assertNotIn("treatment", value)
 
     def test_water_alternative_preserves_rejection_from_study(self):
         saved = project()

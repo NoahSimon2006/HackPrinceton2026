@@ -22,7 +22,7 @@ Close: “The output is a mapped concept or evaluated alternative with its evide
 Add about 45 seconds after showing the current stormwater footprint, or use this in place of the detailed runoff scenario when time is short. In the port-8010 review workspace, open project `2f06f0bcd94744b3a5147961eefb9e07` and its current revision 5, then choose **Explore in 3D**.
 
 1. Point to the **20 m²** footprint and **3 m³** saved storage. Say: “This is the same saved design rendered in meters; opening this view does not rerun the agent or calculation.”
-2. Switch **Existing / Proposed** without moving the camera. Use **Top view** or drag to orbit, then **Reset view**. The footprint matches the map; Existing hides the intervention while retaining the viewpoint and available context.
+2. Switch **Existing / Proposed** without moving the camera. Existing shows a faint outline. Proposed reveals a shallow soil bed with illustrative grasses inside the same planted footprint drawn on the map. Use **Top view** or drag to orbit, then **Reset view**.
 3. Show **Scene basis**: Vexcel outlines support the building footprints; the 6 m building heights and neutral ground are illustrative. The treatment depth is the existing assumed ponding depth, not surveyed excavation or grading.
 4. Close the dialog, inspect earlier revision 2 and open **Explore in 3D** again. It shows the earlier 40 m² footprint with its own saved identity. Unmatched surrounding geometry is omitted rather than borrowed from the current design.
 

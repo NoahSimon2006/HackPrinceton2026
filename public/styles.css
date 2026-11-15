@@ -427,6 +427,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .proposal-review[data-fixture="false"] { border-left-color: #b98a12; }
 .proposal-review[data-status="draft"], .proposal-review[data-status="conditional"] { border-left-color: var(--guide); }
 .proposal-review[data-status="rejected"] { border-left-color: var(--alert); }
+.proposal-review:not([data-status="draft"], [data-status="conditional"]) .water-planting-note { display: none; }
+.map-fill-definitions { position: absolute; pointer-events: none; }
+.leaflet-proposal-pane .rain-garden-footprint { fill: url(#rain-garden-fill) #38754c; }
 .fixture-tag { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 700; color: #6a3fc0; }
 .proposal-review[data-fixture="false"] .fixture-tag { color: #8a6500; }
 .proposal-review[data-status="draft"] .fixture-tag, .proposal-review[data-status="conditional"] .fixture-tag { color: var(--guide); }
