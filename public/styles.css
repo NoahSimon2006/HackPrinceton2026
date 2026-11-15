@@ -456,6 +456,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .site-review h3 { margin: 18px 0 6px; }
 .site-review h3:first-child { margin-top: 4px; }
 .site-review p { margin: 0 0 10px; font-size: 14px; line-height: 1.6; }
+.site-review .water-next-check { display: grid; gap: 3px; margin-block: 14px; }
+.water-assessment-details { margin-top: 14px; }
+.water-assessment-details .fact-reference { margin: 3px 2px 0; white-space: normal; }
 .assistant .fact-reference { margin-left: 4px; padding: 1px 5px; border: 0; border-radius: 4px; background: var(--accent-tint); color: var(--accent-deep); font-size: 11.5px; font-weight: 700; }
 
 .proposal-result-message { margin: 0 0 12px; padding: 10px 12px; border-left: 3px solid var(--caution); border-radius: 0 10px 10px 0; background: var(--caution-tint); font-size: 13.5px; }
@@ -463,6 +466,18 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .proposal-review[data-fixture="false"] { border-left-color: #b98a12; }
 .proposal-review[data-status="draft"], .proposal-review[data-status="conditional"] { border-left-color: var(--guide); }
 .proposal-review[data-status="rejected"] { border-left-color: var(--alert); }
+.proposal-review[data-stormwater="true"] .proposal-view-actions { margin: 4px 0 12px; }
+.proposal-review[data-stormwater="true"]:has(#open-concept-scene:not(:disabled)) .concept-scene-entry {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+.water-design-highlights { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 4px 10px; margin: 12px 0 16px; }
+.water-design-highlights dt { grid-row: 2; font-size: 12px; color: var(--ink-2); }
+.water-design-highlights dd { grid-row: 1; margin: 0; font: 700 19px/1.15 var(--display); font-variant-numeric: tabular-nums; }
+.water-design-runoff { color: var(--ink-2); }
+.proposal-review:not([hidden]):has(#proposal-stale:not([hidden])) ~ .water-design-review #water-design-stale { display: none; }
+.proposal-review:not([data-status="draft"], [data-status="conditional"]) .water-planting-note { display: none; }
+.map-fill-definitions { position: absolute; pointer-events: none; }
+.leaflet-proposal-pane .rain-garden-footprint { fill: url(#rain-garden-fill) #38754c; }
 .fixture-tag { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 700; color: #6a3fc0; }
 .proposal-review[data-fixture="false"] .fixture-tag { color: #8a6500; }
 .proposal-review[data-status="draft"] .fixture-tag, .proposal-review[data-status="conditional"] .fixture-tag { color: var(--guide); }
@@ -509,6 +524,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .site-details .card:last-child { margin-bottom: 0; }
 .assistant .site-facts-list { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.water-evidence-summary { display: grid; gap: 3px; margin: 12px 0; }
+.water-evidence-summary dt { margin-top: 7px; font-weight: 650; }
+.water-evidence-summary dd { margin: 0; color: var(--ink-2); font-size: 13.5px; line-height: 1.48; }
+.water-evidence-summary dd button { display: block; margin-top: 4px; padding: 2px 0; border: 0; background: transparent; color: var(--accent-deep); text-decoration: underline; font-size: 12.5px; }
 .site-facts-list details { margin: 0; padding: 10px; border: 1px solid var(--rule); border-radius: 10px; background: var(--paper); scroll-margin-top: 12px; }
 .site-facts-list details:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .site-facts-list summary { display: grid; gap: 5px; padding: 0; list-style: none; }

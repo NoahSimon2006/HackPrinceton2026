@@ -32,7 +32,14 @@
     mode=next;renderer?.setMode(next);
     $('concept-scene-existing').setAttribute('aria-pressed',String(next==='existing'));
     $('concept-scene-proposed').setAttribute('aria-pressed',String(next==='proposed'));
-    $('concept-scene-mode-label').textContent=next==='existing'?'Existing mapped context':'Proposed footprint';
+    const rainGarden=displayed?.proposal.workflow==='water' && displayed.displayStatus!=='rejected';
+    $('concept-scene-mode-label').textContent=next==='existing'?'Existing mapped context':rainGarden?'Proposed rain garden':'Proposed footprint';
+    if(rainGarden) {
+      $('concept-scene-mode-note').textContent=next==='existing'
+        ? 'A faint outline locates the proposed bed from the same viewpoint.'
+        : 'Illustrative planting fills the mapped treatment footprint. Bed depth represents the assumed ponding depth.';
+      return;
+    }
     $('concept-scene-mode-note').textContent=next==='existing'
       ? 'The intervention is hidden. The viewpoint and surrounding context stay the same. Ground and building heights are conceptual.'
       : 'The footprint matches the selected 2D design. This view illustrates form; it does not add an engineering assessment.';
@@ -89,7 +96,7 @@
     $('concept-scene-stale').textContent=descriptor.historical?'Earlier saved design · read-only inspection. The current project is unchanged.':'Saved reference · inputs or evidence have changed. This view has not been reevaluated.';
     const query=new URLSearchParams({projectId:descriptor.projectId,revision:String(p.revision),inputHash:p.input_hash,geometryId:p.proposed_geometry_ids[0]});
     try {
-      const [data,module]=await Promise.all([json(`/api/concept-scene?${query}`,{signal:controller.signal}),import('/concept-scene-renderer.js')]);
+      const [data,module]=await Promise.all([json(`/api/concept-scene?${query}`,{signal:controller.signal}),import('/concept-scene-renderer.js?v=2')]);
       if(token!==generation || displayed!==descriptor || !dialog.open)return;
       if(!identity(data,descriptor))throw new Error('The saved scene does not match the selected footprint.');
       fill(data,descriptor);

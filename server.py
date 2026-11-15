@@ -35,8 +35,6 @@ ANALYSIS_SLOTS = BoundedSemaphore(2)
 ACTIVE_ANALYSES = {}
 ANALYSIS_LOCK = Lock()
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
-          "/demo": "demo.html", "/demo.html": "demo.html", "/demo.css": "demo.css", "/demo.js": "demo.js",
-          "/demo-scene-renderer.js": "demo-scene-renderer.js", "/demo-math.js": "demo-math.js",
           "/discovery.js": "discovery.js", "/analysis-stream.js": "analysis-stream.js", "/planner.js": "planner.js", "/proposal.js": "proposal.js",
           "/site-view.js": "site-view.js", "/projects.js": "projects.js", "/scouting.js": "scouting.js",
           "/road-concept.js": "road-concept.js",
@@ -45,7 +43,11 @@ STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
           "/vendor/OrbitControls.js": "vendor/OrbitControls.js", "/vendor/three.LICENSE": "vendor/three.LICENSE",
           "/vector-zoom.js": "vector-zoom.js", "/guide.js": "guide.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
-          "/vendor/leaflet.css": "vendor/leaflet.css"}
+          "/vendor/leaflet.css": "vendor/leaflet.css",
+          # Landing page; the map app stays at "/".
+          "/welcome": "welcome.html", "/welcome.css": "welcome.css", "/welcome.js": "welcome.js",
+          "/welcome-traffic.jpg": "welcome-traffic.jpg", "/welcome-stormwater.jpg": "welcome-stormwater.jpg",
+          "/welcome-share.jpg": "welcome-share.jpg"}
 
 
 def cancel_site_analysis(run_id):
@@ -598,10 +600,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path)
         try:
-            if path.path in STATIC:
+            if path.path in ("/demo", "/demo.html"):
+                self.send_response(302)
+                self.send_header("Location", "/#stormwater")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            elif path.path in STATIC:
                 file = PUBLIC / STATIC[path.path]
-                mime = "text/html" if file.suffix == ".html" else (
-                    "text/css" if file.suffix == ".css" else "text/javascript" if file.suffix == ".js" else "text/plain")
+                mime = {".html": "text/html", ".css": "text/css", ".js": "text/javascript",
+                        ".jpg": "image/jpeg"}.get(file.suffix, "text/plain")
                 # Local development reads assets from disk on every request.
                 # Revalidate the page so reloads don't keep an older app bundle.
                 cache = "public, max-age=3600" if file.parent.name == "vendor" else "no-cache"
@@ -609,12 +617,6 @@ class Handler(BaseHTTPRequestHandler):
             elif path.path == "/api/projects":
                 query = parse_qs(path.query)
                 self.send_json(200, project_store().get(query["id"][0]) if "id" in query else {"projects":project_store().list()})
-            elif path.path == "/api/demo-scene":
-                from demo_scene import build_demo_scene
-                try:
-                    self.send_json(200, build_demo_scene())
-                except ValueError as error:
-                    self.send_json(503, {"error": str(error)})
             elif path.path == "/api/concept-scene":
                 from concept_scene import SceneUnavailable, build_scene, parse_scene_query
                 try:

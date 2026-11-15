@@ -38,6 +38,7 @@
   let workspaceVisible = false;
   let roadConceptPresent = false, evidenceView = false;
   let coordinateInputs = [];
+  let measurementRecord = null;
 
   let projectLoadGeneration = 0;
 
@@ -178,6 +179,8 @@
   function restoreResult(selected, mode, value) {
     const record=selected[mode], result=value.result;
     const stopped=Boolean(result?.analysisError) || ['canceled','interrupted','failed'].includes(value.status);
+    record.waterResult = mode === 'water' && result && !stopped
+      ? {proposal:result.proposal,draftQuestion:result.draftQuestion} : null;
     const stoppedMessage='The previous run stopped. Saved constraints and retrieved evidence are available; continue when ready.';
     record.activity=value.events ?? [];
     const restorePreviousWater=()=>{
@@ -304,12 +307,21 @@
   });
   map.on('plannerinspectevidence',({siteId,evidenceIds})=>{
     if(!site || site.key!==siteId)return;
-    const match=(site[workflow].facts ?? []).find(f=>evidenceIds.includes(f.id) || (f.feature_ids ?? []).some(id=>evidenceIds.includes(id)));
-    $('site-tools').open=true;
-    if(match) {
-      const row=$(`fact-${match.id}`);row.open=true;row.scrollIntoView({block:'nearest'});row.focus?.({preventScroll:true});
-    } else $('site-facts').scrollIntoView({block:'nearest'});
+    const match=(site[workflow].facts ?? []).find(f=>f && (evidenceIds.includes(f.id) ||
+      (Array.isArray(f.feature_ids) && f.feature_ids.some(id=>evidenceIds.includes(id)))));
+    inspectFact(match?.id);
   });
+
+  function inspectFact(id) {
+    $("site-tools").open = true;
+    $("all-site-facts").open = true;
+    const row = id ? $(`fact-${id}`) : null;
+    if (row) {
+      row.open = true;
+      row.scrollIntoView({block:"nearest"});
+      row.focus?.({preventScroll:true});
+    } else $("site-facts").scrollIntoView({block:"nearest"});
+  }
 
   function pointError(point, marking = false) {
     if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return "Enter a finite latitude and longitude for every point.";
@@ -347,11 +359,122 @@
     renderSafely(record, () => renderReview(record));
   }
 
+  function reviewElement(tag, text) {
+    const node = document.createElement(tag);
+    node.textContent = text;
+    return node;
+  }
+
+  function reviewAction(text, action) {
+    const button = reviewElement("button",text);
+    button.type = "button";
+    button.addEventListener("click",action);
+    return button;
+  }
+
+  function renderAssessmentReport(container, report, facts) {
+    for (const [key, heading] of [["findings", "What the evidence shows"], ["recommendations", "Options to evaluate"], ["questions", "Confirm next"]]) {
+      const entries = report[key] ?? [];
+      if (!entries.length) continue;
+      container.append(reviewElement("h3",heading));
+      for (const entry of entries) {
+        const paragraph = reviewElement("p",typeof entry === "string" ? entry : entry.text);
+        for (const id of entry.fact_ids ?? []) {
+          const index = facts.findIndex(fact => fact?.id === id);
+          if (index < 0) continue;
+          const link = reviewAction(workflow === "water" ? facts[index].label : `[${index + 1}]`,() => inspectFact(id));
+          link.className = "fact-reference";
+          link.setAttribute("aria-label",`Source ${index + 1}: ${facts[index].label}`);
+          paragraph.append(link);
+        }
+        container.append(paragraph);
+      }
+    }
+  }
+
+  function renderWaterAssessment(output, record, facts) {
+    const proposal = record.waterResult?.proposal;
+    const blocked = record.waterResult?.draftQuestion;
+    const fits = proposal?.overlap?.status === "checked";
+    const title = fits ? "A rain garden fits the mapped space"
+      : proposal ? "Rain garden concept ready to review" : "No rain garden placed";
+    const next = blocked || (proposal ? "Confirm who can approve work on the parcel and where runoff drains."
+      : "Review the site evidence before revising the brief.");
+    const confirm = reviewElement("p","");
+    confirm.className = "water-next-check";
+    confirm.append(reviewElement("strong","Confirm next"),reviewElement("span",next));
+    output.append(reviewElement("h3",title));
+    if (fits) {
+      const capture = proposal.metrics?.find(metric => metric.id === "captured_volume")?.proposed;
+      output.append(reviewElement("p",`The proposed garden fits inside its mapped parcel and avoids mapped buildings. ${Number.isFinite(capture)
+        ? "The runoff estimate assumes a drainage connection." : "Runoff capture is still unknown."}`));
+    }
+    output.append(confirm);
+    const actions = reviewElement("div","");
+    actions.className = "proposal-view-actions";
+    if (proposal) actions.append(reviewAction("View design",() => {
+      $("guide-tab-design").click();
+      $("guide-tab-design").focus({preventScroll:true});
+    }));
+    if (facts.length || record.sourceStatus) actions.append(reviewAction("See supporting evidence",() => {
+      $("site-tools").open = true;
+      $("guide-tab-evidence").focus({preventScroll:true});
+    }));
+    if (actions.children.length) output.append(actions);
+    if (record.report && ["findings","recommendations","questions"].some(key => record.report[key]?.length)) {
+      const detail = reviewElement("details","");
+      detail.className = "water-assessment-details";
+      detail.append(reviewElement("summary","Full assessment"));
+      renderAssessmentReport(detail,record.report,facts);
+      output.append(detail);
+    }
+  }
+
+  function renderWaterEvidence(record, facts) {
+    const list = $("water-evidence-summary");
+    list.replaceChildren();
+    const proposal = record.waterResult?.proposal;
+    list.hidden = workflow !== "water" || (!facts.length && !record.sourceStatus && !proposal);
+    if (list.hidden) return;
+    const add = (label, summary, action) => {
+      const description = reviewElement("dd",summary);
+      if (action) description.append(action);
+      list.append(reviewElement("dt",label),description);
+    };
+    const fact = id => facts.find(entry => entry?.id === id);
+    const parcel = fact("parcel-area") || fact("outlines-status");
+    if (proposal?.overlap?.status === "checked") {
+      add("Garden location","Inside the mapped parcel and clear of mapped buildings.",
+        !record.stale ? reviewAction("Show on map",() => {
+          if (!$("water-return-current").hidden) $("water-return-current").click();
+          $("focus-proposal").click();
+        }) : null);
+    } else {
+      add("Garden location",parcel?.basis === "measured"
+        ? "Parcel outlines are available. Review them to choose a location."
+        : "No supported garden location is shown.",parcel ? reviewAction("Vexcel evidence",() => inspectFact(parcel.id)) : null);
+    }
+    const rainEvidence = proposal?.evidence?.find(item => ["scenario-rainfall","county-rainfall"].includes(item.id));
+    const rain = rainEvidence ? fact(rainEvidence.id) : fact("scenario-rainfall") || fact("county-rainfall");
+    const county = rain?.id === "county-rainfall";
+    add("Rainfall",Number.isFinite(rain?.value)
+      ? `${rain.value.toLocaleString(undefined,{maximumFractionDigits:2})} inches${county ? " over 24 hours." : " in the planner’s scenario."}`
+      : "No rainfall estimate is available for this assessment.",
+    rain ? reviewAction(county ? "LA County source" : "Scenario inputs",() => inspectFact(rain.id)) : null);
+    const watershed = fact("county-watershed");
+    add("Drainage",proposal ? "The path runoff would take into the garden is unverified." : "Runoff paths still need a site check.",
+      watershed ? reviewAction("Watershed source",() => inspectFact(watershed.id)) : null);
+    const property = facts.find(entry => typeof entry?.id === "string" && entry.id.startsWith("costar-") && !entry.id.startsWith("costar-nearby-"));
+    add("Property and access",property ? "Confirm who can approve work and verify driveway access."
+      : "Property details are unconfirmed. Check permission and driveway access.",
+    property ? reviewAction("CoStar source",() => inspectFact(property.id)) : null);
+  }
+
   function renderReview(record) {
     const facts = Array.isArray(record.facts) ? record.facts : [];
     const output = $("agent-assessment");
     output.replaceChildren();
-    output.hidden = !record.report;
+    output.hidden = !record.report && !(workflow === "water" && (record.waterResult?.proposal || record.waterResult?.draftQuestion));
     $("analysis-message").hidden = !record.evidencePending && !record.evidenceError && !record.displayWarning;
     $("analysis-message").textContent = record.evidencePending ? (record.activitySummary || "Starting site investigation…") : record.evidenceError || record.displayWarning || "";
     $('analysis-synthesis-warning').hidden=!record.synthesisWarning || record.evidencePending;
@@ -359,38 +482,17 @@
     $("cancel-site-analysis").hidden = !record.evidencePending;
     showActivity(record);
     $("analysis-stale").hidden = !record.stale;
-    if (record.report) {
-      for (const [key, heading] of [["findings", "What the evidence shows"], ["recommendations", "Options to evaluate"], ["questions", "Confirm next"]]) {
-        const entries = record.report[key] ?? [];
-        if (!entries.length) continue;
-        const title = document.createElement("h3");
-        title.textContent = heading;
-        output.append(title);
-        for (const entry of entries) {
-          const paragraph = document.createElement("p");
-          paragraph.textContent = typeof entry === "string" ? entry : entry.text;
-          for (const id of entry.fact_ids ?? []) {
-            const index = facts.findIndex((fact) => fact?.id === id);
-            if (index < 0) continue;
-            const link = document.createElement("button");
-            link.type = "button";
-            link.className = "fact-reference";
-            link.textContent = `[${index + 1}]`;
-            link.setAttribute("aria-label", `Source ${index + 1}: ${facts[index].label}`);
-            link.addEventListener("click", () => {
-              $("site-tools").open = true;
-              const row = $(`fact-${id}`);
-              row.open = true;
-              row.scrollIntoView({ block: "center" });
-              row.focus({ preventScroll: true });
-            });
-            paragraph.append(link);
-          }
-          output.append(paragraph);
-        }
-      }
+    if (!output.hidden && workflow === "water") renderWaterAssessment(output,record,facts);
+    else if (record.report) renderAssessmentReport(output,record.report,facts);
+    renderWaterEvidence(record,facts);
+    $("site-facts").hidden = !facts.length && !record.sourceStatus && $("water-evidence-summary").hidden;
+    if (measurementRecord !== record) {
+      measurementRecord = record;
+      $("all-site-facts").open = workflow !== "water";
     }
-    $("site-facts").hidden = !facts.length && !record.sourceStatus;
+    $("all-site-facts-label").hidden = workflow !== "water";
+    $("all-site-facts-label").textContent = facts.length > 1 ? `All ${facts.length} measurements and sources`
+      : facts.length ? "Measurement and source" : "Source status";
     const list = $("site-facts-list");
     const expanded = new Set([...(list.querySelectorAll?.("details[open]") ?? [])].map(row => row.id));
     const focused = document.activeElement?.id;
@@ -552,11 +654,7 @@
         if (!fact) continue;
         const button = document.createElement("button"); button.type = "button";
         button.textContent = fact.label;
-        button.addEventListener("click", () => {
-          $("site-tools").open = true;
-          const target = $(`fact-${id}`); if (!target) return;
-          target.open = true; target.scrollIntoView({block:"center"}); target.focus({preventScroll:true});
-        });
+        button.addEventListener("click", () => inspectFact(id));
         row.append(button);
       }
       list.append(row);
@@ -616,6 +714,7 @@
     record.displayWarning = "";
     // Keep retrieved evidence visible while the new run is in flight.
     record.report = null;
+    record.waterResult = null;
     record.synthesisWarning = '';
     record.activity = [];
     record.activitySummary = "Starting site investigation…";
@@ -661,6 +760,8 @@
       if (activeAnalysis !== run || controller.signal.aborted) return;
       record.evidence = result.evidence;
       record.report = result.report;
+      record.waterResult = mode === "water" && !result.analysisError
+        ? {proposal:result.proposal,draftQuestion:result.draftQuestion} : null;
       record.synthesisWarning = result.synthesisWarning || '';
       if (result.facts?.length || result.report) record.facts = result.facts ?? [];
       record.sourceWarnings = result.sourceWarnings ?? [];
