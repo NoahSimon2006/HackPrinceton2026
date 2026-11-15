@@ -23,6 +23,7 @@ from hydrology import RAINFALL, WATERSHEDS, rainfall_at, rainfall_contours, wate
 from site_evidence import imagery_evidence
 from site_measurements import validate_inputs
 from site_identity import resolve_site
+from property_address import display_text, format_property_address
 from stormwater_settings import validate_settings
 
 ROOT = Path(__file__).resolve().parent
@@ -178,11 +179,10 @@ def property_catalog():
             raw_id = record.get("id")
             if not ((type(raw_id) is int and raw_id > 0) or (isinstance(raw_id, str) and raw_id.strip())):
                 raise ValueError("CoStar property identity is missing or invalid.")
-            address_text = " ".join(" ".join(str(address.get(key) or "") for key in
-                                    ("streetNumber", "streetDirection", "streetName", "streetType")).split())
+            address_text = format_property_address(address)
             item = {
                 "id": str(raw_id).strip(), "lat": lat, "lon": lon,
-                "name": str(record.get("buildingName") or address_text or "Unnamed property").strip(),
+                "name": display_text(record.get("buildingName"), address_text or "Unnamed property"),
                 "address": address_text,
                 "type": types.get(str(record.get("propertyType")), "Unknown"),
             }

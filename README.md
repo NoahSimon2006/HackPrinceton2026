@@ -16,7 +16,7 @@ The [codebase audit](docs/CODEBASE_AUDIT.md) records correctness fixes and remai
 
 ## Run locally
 
-Keep `VEXCEL_API_KEY`, `GROK_API_KEY`, `TOMTOM_API_KEY` and the absolute `COSTAR_KIT_DIR` in the ignored `.env`. The CoStar kit needs `data/commercial-property.jsonl` and `schemas/enums.json`; the exterior walkthrough also requires `commercial-properties.csv` to validate its property-to-model association. Credentials and raw sponsor data stay local.
+Keep `VEXCEL_API_KEY`, `GROK_API_KEY`, `TOMTOM_API_KEY` and the absolute `COSTAR_KIT_DIR` in the ignored `.env`. The CoStar kit needs `data/commercial-property.jsonl` and `schemas/enums.json`; the property-tour viewer also requires `commercial-properties.csv` to validate its property-to-model association. Credentials and raw sponsor data stay local.
 
 ```sh
 python3 -m venv .venv
@@ -64,7 +64,7 @@ The network builder keeps original OSM identifiers, checks the converted connect
 4. Choose **Analyze site** to run one lead Deep Agent with concurrent site-evidence and domain specialists. Expand **Agent activity** to follow specialist assignments, skill reads, files and source results. Use **Project files** to inspect the plan and reports; **Saved projects** and **Continue project** restore earlier work. Changing sites/modes cancels the followed run; a changed discovery selection also cancels the old analysis, including when two features share coordinates.
 5. Under **Site evidence & adjustments**, inspect returned outlines, detections, frontages and locally measured facts. Drawings and manually edited rainfall remain distinct from source values. They do not constitute verified drainage, current traffic, a physical proposal or a benefit calculation. Editing inputs marks prior results stale.
 6. For keyboard site selection, focus the map, pan with arrow keys, then choose **Use map center as site**. Under **Adjust or add map markings**, add points at the map center or edit each point's labeled coordinates, then save the marking using the map controls. Invalid or uncovered points cannot be saved.
-7. Under **Site evidence & adjustments → Optional exterior view**, choose **Check exterior view**. Only tours associated with the selected property and described as relevant exterior/site context can open. Multiple eligible tours have a selector. No match leaves the map usable; no substitute warehouse opens. Matterport loads only on request, with retry/close controls. **Proposed** remains disabled.
+7. Under **Site evidence & adjustments → 3D property tours**, choose **View tours**. All validated tours for the selected property are available in a selector with a tour count. Repeated attachments for one model are grouped; missing captions/dates do not hide a valid tour. A missing or conflicting association is explained. Matterport loads only on request, with retry, slow-loading guidance and an external link. A loaded iframe alone does not establish that a tour is playable. **Proposed** remains disabled.
 8. In Stormwater, choose a researched location or a supported direct site and request a concept with no drawings. Inspect its source-informed siting decisions and internal alternatives. Revise size/form/depth/placement through the brief, or set explicit controls under **Stormwater design & what-if settings**. Keep-clear and runoff-source markings remain under **Site evidence & adjustments**. A runoff calculation requires an explicit assumed connection, coefficient, source marking and event; direct rain reserves storage first. **Earlier design revisions** restores each saved footprint with its own metrics. A tour is not required.
 
 Project inputs, constraints and permitted artifacts persist locally in ignored SQLite storage under `private/agent-workspace/`. Reloads and server restarts retain them. Live traffic inspection is transient and refreshed on continuation, not archived. The labeled **Development preview** uses test geometry. At verified turning-count sites, expand a traffic alternative and choose **Show footprint on map** to inspect the tested layout and its verdict. Stormwater terrain screening uses the expanded four-tile, native 1 m USGS mosaic. Current traffic expires after at most one minute and refreshes only on request.
@@ -87,6 +87,8 @@ node tests/planner-hydrology.mjs
 node tests/analysis-stream.mjs
 node tests/proposal-controller.mjs
 node tests/site-view-controller.mjs
+# Optional local catalog audit (no provider requests or raw records in output):
+.venv/bin/python scripts/audit_site_views.py
 node tests/projects.mjs
 node tests/scouting.mjs
 ```

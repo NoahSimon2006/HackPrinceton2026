@@ -11,7 +11,7 @@
   <script defer src="/app.js?v=19"></script>
   <script defer src="/proposal.js?v=7"></script>
   <script defer src="/analysis-stream.js?v=2"></script>
-  <script defer src="/site-view.js?v=1"></script>
+  <script defer src="/site-view.js?v=2"></script>
   <script defer src="/projects.js?v=1"></script>
   <script defer src="/planner.js?v=19"></script>
   <script defer src="/discovery.js?v=3"></script>
@@ -162,11 +162,11 @@
           </details>
           <details id="site-tools" class="site-details" hidden><summary>Site evidence &amp; adjustments</summary>
         <details class="site-view-entry" aria-labelledby="site-view-entry-title">
-          <summary>Optional exterior view</summary>
-          <div class="site-view-entry-heading"><span aria-hidden="true">◈</span><span class="section-label">EXTERIOR SITE CONTEXT</span></div>
+          <summary>3D property tours</summary>
+          <div class="site-view-entry-heading"><span aria-hidden="true">◈</span><span class="section-label">PROPERTY WALKTHROUGHS</span></div>
           <h2 id="site-view-entry-title">Select a site</h2>
-          <p>Use a relevant exterior tour to inspect access or site conditions. The map remains usable without one.</p>
-          <button id="open-site-view" disabled type="button" aria-haspopup="dialog" aria-controls="site-view-dialog">Check exterior view <span aria-hidden="true">↗</span></button>
+          <p>Explore the apartments, interiors, amenities and exterior spaces included in this property's linked tours.</p>
+          <button id="open-site-view" disabled type="button" aria-haspopup="dialog" aria-controls="site-view-dialog">View tours <span aria-hidden="true">↗</span></button>
           <p id="site-view-entry-status" class="site-view-entry-note" role="status">Select a property or resolve a map location to check its tour.</p>
           <button id="site-view-entry-retry" type="button" hidden>Retry walkthrough</button>
         </details>
@@ -292,11 +292,11 @@
   </div>
   <dialog id="site-view-dialog" class="site-view-dialog" aria-labelledby="site-view-title" aria-describedby="site-view-description">
     <header class="site-view-header">
-      <div><span class="section-label">EXISTING SITE VIEW · MATTERPORT</span><h2 id="site-view-title">Selected property</h2><p id="site-view-tour-title"></p></div>
+      <div><span class="section-label">3D PROPERTY TOURS · MATTERPORT</span><h2 id="site-view-title">Selected property</h2><p id="site-view-tour-title"></p></div>
       <button id="site-view-close" type="button" class="site-view-close" aria-label="Close existing-site walkthrough" autofocus>Close <span aria-hidden="true">×</span></button>
     </header>
     <div class="site-view-toolbar">
-      <div><label for="site-view-tour-choice">Linked tour</label><select id="site-view-tour-choice" aria-label="Linked tour"></select></div>
+      <div><label id="site-view-tour-label" for="site-view-tour-choice">Linked tours</label><select id="site-view-tour-choice" aria-label="Linked tour"></select></div>
       <div class="site-view-modes" role="group" aria-label="Walkthrough view">
         <button type="button" id="site-view-existing" aria-pressed="true">Existing</button>
         <button type="button" id="site-view-proposed" aria-pressed="false" aria-describedby="site-view-description" disabled>Proposed · unavailable</button>

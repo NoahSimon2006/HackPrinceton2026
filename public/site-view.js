@@ -4,24 +4,27 @@
 (() => {
   const dialog = $("site-view-dialog"), open = $("open-site-view");
   let selectedSite = null, selectedProperty = null, workflow = planningMode, descriptor = null;
-  let request = 0, controller = null, frame = null, pending = false, returnFocus = null;
+  let request = 0, controller = null, frame = null, pending = false, returnFocus = null, loadTimer = null;
 
-  function validate(value, propertyId) {
-    const property = value?.property, scan = value?.scan;
-    if (value?.status !== "linked" || property?.id !== propertyId || scan?.exteriorHint !== true || !/^[A-Za-z0-9]{11}$/.test(scan?.modelId ?? "") ||
+  function validateProperty(value, propertyId) {
+    const property = value?.property;
+    if (value?.status !== "linked" || property?.id !== propertyId ||
         !Number.isFinite(property.lat) || !Number.isFinite(property.lon) ||
         property.lat < 33.70 || property.lat > 34.35 || property.lon < -118.67 || property.lon > -118.10 ||
         typeof property.name !== "string" || !property.name.trim() ||
-        typeof property.address !== "string" || !property.address.trim() ||
-        typeof scan.title !== "string" || !scan.title.trim()) throw new Error("The site and walkthrough association could not be verified.");
+        typeof property.address !== "string" || !property.address.trim()) throw new Error("The site and walkthrough association could not be verified.");
+  }
+  function validateScan(scan) {
+    if (!/^[A-Za-z0-9]{11}$/.test(scan?.modelId ?? "")) throw new Error("Invalid tour model.");
     let url;
     try { url = new URL(scan.url); } catch { throw new Error("The walkthrough URL is invalid."); }
     if (url.origin !== "https://my.matterport.com" || url.pathname !== "/show/" || url.username || url.password || url.hash ||
         url.searchParams.getAll("m").length !== 1 || url.searchParams.get("m") !== scan.modelId ||
         [...url.searchParams.keys()].some(key => key !== "m")) throw new Error("The walkthrough does not match this property's approved Matterport model.");
-    return {...value, scan:{...scan,url:url.href}};
+    return {...scan,url:url.href,title:typeof scan.title === "string" && scan.title.trim() ? scan.title.trim() : "3D property tour"};
   }
   function cleanupFrame() {
+    clearTimeout(loadTimer); loadTimer = null;
     const old = frame; frame = null;
     if (old) old.removeAttribute("src");
     $("site-view-stage").replaceChildren();
@@ -64,6 +67,7 @@
     current.referrerPolicy = "no-referrer";
     current.addEventListener("load", () => {
       if (frame !== current || token !== request || !dialog.open) return;
+      clearTimeout(loadTimer); loadTimer = null;
       status("Explore the linked tour. If it is blank or unavailable, retry or open it in a new tab.");
     });
     current.addEventListener("error", () => {
@@ -75,10 +79,16 @@
     $("site-view-retry").disabled = false;
     current.src = descriptor.scan.url;
     $("site-view-stage").append(current);
+    loadTimer = setTimeout(() => {
+      if (frame !== current || token !== request || !dialog.open) return;
+      status("This tour is taking longer to open. Retry the viewer, or open Matterport in a new tab.");
+    }, 12000);
   }
   function fill(value) {
     $("site-view-title").textContent = value.property.address;
-    $("site-view-tour-title").textContent = value.scan.title;
+    const context = ["Exterior", "Interior", "Amenity", "Unspecified"].includes(value.scan.contextLabel) ? value.scan.contextLabel : "Unspecified";
+    $("site-view-tour-title").textContent = `${value.scan.title} · ${context === "Unspecified" ? "Coverage unspecified" : context + " · title hint"}`;
+    $("site-view-tour-label").textContent = `Linked tours (${value.scans.length})`;
     const choices = $("site-view-tour-choice"); choices.replaceChildren();
     for (const scan of value.scans) {
       const option = document.createElement("option"); option.value = scan.modelId;
@@ -100,6 +110,12 @@
       if (typeof text !== "string") continue;
       const item = document.createElement("li"); item.textContent = text; $("site-view-limitations").append(item);
     }
+    for (const exclusion of Array.isArray(value.exclusions) ? value.exclusions : []) {
+      if (!Number.isInteger(exclusion?.count) || exclusion.count < 1 || typeof exclusion.message !== "string") continue;
+      const item = document.createElement("li");
+      item.textContent = `${exclusion.count} ${exclusion.count === 1 ? "tour link omitted" : "tour links omitted"}: ${exclusion.message}`;
+      $("site-view-limitations").append(item);
+    }
     $("site-view-external").href = value.scan.url;
     $("site-view-proposed").disabled = true;
   }
@@ -109,23 +125,31 @@
     const token = ++request, mode = workflow, siteId = selectedSite, propertyId = selectedProperty;
     pending = true; returnFocus = document.activeElement || open;
     open.disabled = true; $("site-view-entry-retry").hidden = true;
-    $("site-view-entry-status").textContent = "Checking exterior or site-context tours for this property…";
+    $("site-view-entry-status").textContent = "Checking 3D tours linked to this property…";
     try {
       const response = await json(`/api/site-view?propertyId=${encodeURIComponent(propertyId)}`, {signal:controller.signal});
       if (token !== request || workflow !== mode || selectedSite !== siteId || selectedProperty !== propertyId) return;
       if (["unavailable", "ambiguous"].includes(response?.status) && response.property?.id === propertyId) {
-        $("site-view-entry-status").textContent = response.message || "No relevant exterior tour for the selected property.";
+        $("site-view-entry-status").textContent = response.message || "No verified 3D tour is linked to this property.";
         open.disabled = false; restoreFocus(); return;
       }
-      const value = validate(response, propertyId);
-      if (!Array.isArray(value.scans) || !value.scans.length || value.scans.length > 100 ||
-          new Set(value.scans.map(scan => scan.modelId)).size !== value.scans.length ||
-          !value.scans.some(scan => JSON.stringify(scan) === JSON.stringify(value.scan))) throw new Error("Invalid tour choices.");
-      value.scans = value.scans.map(scan => validate({...value, scan}, propertyId).scan);
+      validateProperty(response, propertyId);
+      if (!Array.isArray(response.scans)) throw new Error("Invalid tour choices.");
+      const scans = new Map();
+      let skipped = 0;
+      for (const candidate of response.scans) {
+        try {
+          const scan = validateScan(candidate);
+          if (!scans.has(scan.modelId)) scans.set(scan.modelId, scan);
+        } catch { skipped += 1; }
+      }
+      if (!scans.size) throw new Error("No tour links could be verified for this property.");
+      const value = {...response,scans:[...scans.values()],scan:scans.get(response.scan?.modelId) ?? scans.values().next().value};
       descriptor = value; fill(value);
       dialog.showModal();
       $("site-view-close").focus({preventScroll:true});
-      $("site-view-entry-status").textContent = "Existing-site view only · intervention coverage and alignment are unverified.";
+      const excluded = Number.isInteger(value.excludedTourCount) && value.excludedTourCount > 0 ? value.excludedTourCount : 0;
+      $("site-view-entry-status").textContent = `${value.scans.length} linked ${value.scans.length === 1 ? "tour" : "tours"} for this property.${excluded ? ` ${excluded} additional ${excluded === 1 ? "tour link could" : "tour links could"} not be verified; see Coverage & source limits.` : ""}${skipped ? " Some tour records could not be verified." : ""}`;
       loadFrame();
     } catch (error) {
       if (token !== request || error.name === "AbortError") return;
@@ -156,7 +180,7 @@
   function entry(property = null) {
     $("site-view-entry-title").textContent = property?.address || (selectedProperty ? "Selected property" : "Select a property");
     $("site-view-entry-status").textContent = selectedProperty
-      ? "Check exterior, courtyard, loading-area or roof tours linked to this property. Interior-only tours are excluded."
+      ? "View linked apartment, interior, amenity and exterior tours for this property. Coverage varies by tour."
       : "No property is assigned to this point. Choose a property or use the map evidence.";
     open.disabled = !selectedProperty;
     $("site-view-entry-retry").hidden = true;

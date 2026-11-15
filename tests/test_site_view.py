@@ -121,10 +121,10 @@ class SiteViewTest(unittest.TestCase):
         self.write()
         self.assertEqual(self.descriptor()["status"], "ambiguous")
 
-    def test_attachment_confirms_membership_and_interior_only_tours_are_excluded(self):
+    def test_attachment_confirms_membership_and_interior_tours_are_included(self):
         original = deepcopy(self.record["attachments"][0])
         for key, value in (("videoKey", "2wKwkYGbkPc"),
-                           ("videoExternalReferenceType", 0), ("caption", None), ("videoKey", None)):
+                           ("videoExternalReferenceType", 0), ("videoKey", None)):
             with self.subTest(field=key):
                 self.record["attachments"] = [{**original, key: value}]
                 self.write()
@@ -134,11 +134,94 @@ class SiteViewTest(unittest.TestCase):
         self.assertEqual(self.descriptor()["scan"]["modelId"], MODEL_ID)
         self.record["attachments"] = [{**original, "caption": "Interior suite tour"}]
         self.write()
-        self.assertEqual(self.descriptor()["status"], "unavailable")
-        self.assertEqual(self.descriptor()["excludedInteriorOrUnspecified"], 1)
+        self.assertEqual(self.descriptor()["status"], "linked")
+        self.assertEqual(self.descriptor()["scan"]["contextLabel"], "Interior")
+        self.assertFalse(self.descriptor()["scan"]["exteriorHint"])
         self.record["attachments"].append(original)
         self.write()
-        self.assertEqual(self.descriptor()["status"], "unavailable")
+        self.assertEqual(self.descriptor()["tourCount"], 1)
+
+    def test_duplicate_model_metadata_is_preserved_without_duplicate_tours(self):
+        original = self.record["attachments"][0]
+        self.record["attachments"].extend([{**original, "caption": "Fitness Center", "originationDate": "2025-01-01"},
+                                           {**original, "caption": "Pool", "originationDate": "bad date"}])
+        self.rows.append(dict(self.rows[0]))
+        self.write()
+        result = self.descriptor()
+        self.assertEqual(result["tourCount"], 1)
+        self.assertEqual(result["excludedTourCount"], 0)
+        self.assertEqual(result["scan"]["titles"], [TITLE, "Fitness Center", "Pool"])
+        self.assertEqual(result["scan"]["attachmentDates"], ["2024-12-05T19:40:31.783-05:00", "2025-01-01"])
+        self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_optional_metadata_and_property_name_whitespace_do_not_block_identity(self):
+        self.record["attachments"][0].update(caption=None, originationDate="not a date")
+        self.write()
+        result = self.descriptor([{**PROPERTY, "name": "Wall Street\r\n Garment Center"}])
+        self.assertEqual(result["status"], "linked")
+        self.assertEqual(result["property"]["name"], PROPERTY["name"])
+        self.assertEqual(result["scan"]["title"], "3D property tour")
+        self.assertIsNone(result["scan"]["attachmentDate"])
+        self.assertEqual(result["scan"]["contextLabel"], "Unspecified")
+        self.record["attachments"][0]["caption"] = "Fitness\r\n Center"
+        self.write()
+        self.assertEqual(self.descriptor()["scan"]["title"], "Fitness Center")
+        self.assertEqual(self.descriptor()["scan"]["contextLabel"], "Amenity")
+
+    def test_canonical_range_and_suffix_address_still_rejects_wrong_identity(self):
+        self.record["primaryAddress"].update(streetNumberEndRange="520", streetSuffix="E")
+        correct = "510-520 E Olympic Blvd E"
+        self.rows[0]["Address"] = correct
+        self.write()
+        self.assertEqual(self.descriptor([{**PROPERTY, "address": correct}])["status"], "linked")
+        with self.assertRaises(SiteViewUnavailable):
+            self.descriptor()
+        self.rows[0]["Address"] = "510-520 E Olympic Blvd W"
+        self.write()
+        result = self.descriptor([{**PROPERTY, "address": correct}])
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["exclusions"][0]["reason"], "address_mismatch")
+
+    def test_exclusions_explain_invalid_associations_beside_valid_tours(self):
+        self.rows.extend([{**self.rows[0], "MatterportModelId": "bad"},
+                          {**self.rows[0], "MatterportModelId": "abcdefghijk"}])
+        self.write()
+        result = self.descriptor()
+        self.assertEqual(result["status"], "linked")
+        self.assertEqual(result["tourCount"], 1)
+        self.assertEqual(result["excludedTourCount"], 2)
+        self.assertEqual({item["reason"] for item in result["exclusions"]}, {"invalid_model_id", "missing_attachment"})
+        self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_malformed_individual_models_do_not_hide_valid_tours(self):
+        original = self.record["attachments"][0]
+        self.record["attachments"].extend([{**original, "videoKey": []}, {**original, "videoKey": {}},
+                                           {**original, "videoKey": None}, None])
+        self.write()
+        # A short CSV row creates None for missing columns, unlike an empty cell.
+        with (self.root / "commercial-properties.csv").open("a") as file:
+            file.write(PROPERTY_ID + "\n")
+        result = self.descriptor()
+        self.assertEqual(result["status"], "linked")
+        self.assertEqual(result["tourCount"], 1)
+        self.assertEqual(result["scan"]["modelId"], MODEL_ID)
+        self.assertEqual(result["exclusions"], [{"reason": "invalid_model_id", "count": 1,
+                          "message": "A listed tour has no valid Matterport model identifier."}])
+
+    def test_malformed_attachment_collection_is_local_to_its_property(self):
+        other = deepcopy(self.record)
+        other["id"] = 123456
+        other["attachments"] = {"videoKey": MODEL_ID, "private": "PRIVATE"}
+        self.write()
+        with (self.root / "data/commercial-property.jsonl").open("a") as file:
+            file.write(json.dumps(other) + "\n")
+        self.assertEqual(self.descriptor()["tourCount"], 1)
+        self.record["attachments"] = "PRIVATE malformed collection"
+        self.write()
+        result = self.descriptor()
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["exclusions"][0]["reason"], "invalid_attachment_collection")
+        self.assertNotIn("PRIVATE", json.dumps(result))
 
     def test_missing_or_corrupt_local_sources_return_only_safe_error(self):
         for filename in ("commercial-properties.csv", "data/commercial-property.jsonl"):
