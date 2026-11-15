@@ -12,6 +12,7 @@ import sqlite3
 from uuid import uuid4
 
 from site_measurements import validate_inputs
+from stormwater_settings import validate_settings
 
 
 class ProjectConflict(ValueError):
@@ -32,7 +33,7 @@ def validate_snapshot(value):
     if not isinstance(value, dict):
         raise ValueError("Supply the selected site and project inputs.")
     keys = {"workflow", "siteId", "lon", "lat", "propertyId", "question", "markings",
-            "rainfallScenario", "inputRevision", "proposalRevision"}
+            "rainfallScenario", "inputRevision", "proposalRevision", "stormwaterSettings"}
     if set(value) - keys:
         raise ValueError("Unknown project input.")
     from server import site_coordinates, analysis_identity
@@ -47,7 +48,9 @@ def validate_snapshot(value):
         raise ValueError("Invalid property reference.")
     markings, scenario = validate_inputs(value.get("markings", []), value.get("rainfallScenario"), workflow, lon, lat)
     return {**value, "lon": lon, "lat": lat, "markings": markings,
-            "rainfallScenario": scenario, "propertyId": property_id}
+            "rainfallScenario": scenario, "propertyId": property_id,
+            **({'stormwaterSettings': validate_settings(value.get('stormwaterSettings'), workflow)}
+               if workflow == 'water' or value.get('stormwaterSettings') is not None else {})}
 
 
 class ProjectStore:
@@ -71,6 +74,9 @@ class ProjectStore:
                 CREATE TABLE IF NOT EXISTS artifacts (
                   project_id TEXT, path TEXT, content TEXT, run_id TEXT, updated TEXT,
                   PRIMARY KEY(project_id, path));
+                CREATE TABLE IF NOT EXISTS water_designs (
+                  project_id TEXT, input_hash TEXT, revision INTEGER, payload TEXT, created TEXT,
+                  PRIMARY KEY(project_id, input_hash));
             """)
             if "instructions" not in {row[1] for row in db.execute("PRAGMA table_info(projects)")}:
                 db.execute("ALTER TABLE projects ADD COLUMN instructions TEXT NOT NULL DEFAULT '[]'")
@@ -126,11 +132,12 @@ class ProjectStore:
             run = db.execute("SELECT id FROM runs WHERE project_id=? ORDER BY started DESC LIMIT 1", (project_id,)).fetchone()
             events = [json.loads(r[0]) for r in db.execute("SELECT payload FROM events WHERE run_id=? ORDER BY sequence", (run[0],))] if run else []
             artifacts = [dict(r) for r in db.execute("SELECT path,updated FROM artifacts WHERE project_id=? ORDER BY path", (project_id,))]
+            designs = [json.loads(r[0]) for r in db.execute('SELECT payload FROM water_designs WHERE project_id=? ORDER BY revision,created', (project_id,))]
         return {"id": row["id"], "threadId": row["thread_id"], "version": row["version"],
                 "snapshot": json.loads(row["snapshot"]), "status": row["status"], "updated": row["updated"],
                 "activeRun": row["active_run"], "result": json.loads(row["result"]) if row["result"] else None,
                 "resultVersion": row["result_version"], "events": events, "artifacts": artifacts,
-                "instructions": json.loads(row["instructions"])}
+                "instructions": json.loads(row["instructions"]), 'designHistory': designs[-30:]}
 
     def list(self):
         with self.connect() as db:
@@ -200,6 +207,20 @@ class ProjectStore:
             if json.loads(row["snapshot"])["workflow"] == "street":
                 from traffic_retention import archive_result
                 result=archive_result(result)
+            elif result and result.get('proposal') and status == 'ready' and not result.get('analysisError'):
+                from proposal import Proposal
+                proposal = Proposal.model_validate(result['proposal']).model_dump()
+                snapshot = json.loads(row['snapshot'])
+                if (proposal['workflow'] != 'water' or proposal['site_id'] != snapshot['siteId']
+                        or proposal['revision'] != snapshot['proposalRevision'] or proposal['input_revision'] != snapshot['inputRevision']):
+                    raise ValueError('Stormwater publication does not match the saved project revision.')
+                previous = [json.loads(r[0]) for r in db.execute('SELECT payload FROM water_designs WHERE project_id=? AND input_hash!=? ORDER BY revision,created',
+                            (project_id, proposal['input_hash']))]
+                result['designHistory'] = previous[-30:]
+                record = {'revision': proposal['revision'], 'inputRevision': proposal['input_revision'],
+                          'proposal': proposal, 'waterPlan': result.get('waterPlan'), 'alternatives': result.get('alternatives', {})}
+                db.execute('INSERT OR IGNORE INTO water_designs VALUES(?,?,?,?,?)',
+                           (project_id, proposal['input_hash'], proposal['revision'], json.dumps(record, allow_nan=False), now()))
             db.execute("UPDATE runs SET status=? WHERE id=?", (status, run_id))
             db.execute("UPDATE projects SET active_run=NULL,status=?,result=?,result_version=?,updated=? WHERE id=?",
                        (status, json.dumps(result, allow_nan=False), row[1], now(), project_id))

@@ -5,6 +5,7 @@
   map.getPane("proposal").style.pointerEvents = "none";
   let selected = null, published = null, comparison = null, layer = null, request = 0, controller;
   let realRevision = 0;
+  let currentWater = null;
   const show = $("show-proposal");
   const statuses = {fixture:"Development fixture", draft:"Draft concept", conditional:"Conditional treatment", recommended:"Recommended",
     tested:"Tested, eligible", rejected:"Tested, rejected"};
@@ -38,8 +39,10 @@
     controller?.abort(); ++request;
     selected = event.siteId ? event : null;
     comparison = null; realRevision = 0;
+    currentWater = null;
     removeProposal();
     $("traffic-comparison").hidden = true;
+    $("water-design-review").hidden = true;
     $("comparison-stale").hidden = true;
     $("proposal-result-message").hidden = true;
     $("load-proposal-fixture").disabled = !selected;
@@ -51,7 +54,7 @@
   }
   function validate(p, site, revision, fixture) {
     if (p.schema_version !== 1 || p.development_fixture !== fixture || !identity(p, site, revision)) throw new Error("Proposal identity mismatch.");
-    const allowed = fixture ? ["fixture"] : site.workflow === "water" ? ["draft"] : ["recommended","tested","rejected"];
+    const allowed = fixture ? ["fixture"] : site.workflow === "water" ? ["draft","conditional"] : ["recommended","tested","rejected"];
     if (!allowed.includes(p.status)) throw new Error("Proposal status mismatch.");
     if (!Array.isArray(p.geometry) || !p.geometry.length || !Array.isArray(p.metrics) || !p.metrics.length ||
         p.geometry.some(g => g.properties?.revision !== revision) ||
@@ -74,7 +77,7 @@
     });
   }
   function publish(p, area, site, replacement = prepareLayer(p)) {
-    const fixture = p.development_fixture, draft = p.status === "draft";
+    const fixture = p.development_fixture, draft = !fixture && site.workflow === 'water';
     // Publish geometry, measurements and identity together after validation.
     layer?.remove(); layer = replacement; published = p;
     show.disabled = false; show.checked = true; visible();
@@ -83,14 +86,15 @@
     $("proposal-review").setAttribute("data-status", p.status);
     $("proposal-kind").textContent = statuses[p.status];
     $("proposal-title").textContent = fixture ? (site.workflow === "street" ? "Test island footprint" : "Test treatment footprint")
-      : draft ? "Rain garden" : label(p.geometry[0].properties.layout);
+      : draft ? (p.design?.kind==='bioretention'?'Bioretention concept':'Rain garden') : label(p.geometry[0].properties.layout);
     $("proposal-summary").textContent = p.recommendation;
     $("proposal-area-label").textContent = "Footprint";
     $("proposal-area").textContent = `${area.proposed.toFixed(1)} ${area.unit}`;
     $("proposal-impact").textContent = fixture ? "Unassessed" : draft ? "Screening estimate" : "Simulated · see comparison";
     $("proposal-water-metrics").hidden = !draft;
     $("proposal-water-metrics").replaceChildren();
-    if (draft) for (const [id, title] of [["storage_volume","Ponding storage"],["direct_rain_volume","Rain onto garden"],
+    if (draft) for (const [id, title] of [["storage_volume","Ponding storage"],["direct_rain_volume","Rain onto treatment"],
+      ["contributing_area","Marked contributing area (union)"],
       ["runoff_volume","Contributing runoff"],["captured_volume","Capture"],["overflow_volume","Excess contributing runoff"],
       ["direct_overflow_volume","Excess direct rain"]]) {
       const metric = p.metrics.find(m => m.id === id);
@@ -107,6 +111,91 @@
     $("proposal-map-caption").textContent = caption(stale);
     $("proposal-stale").hidden = !stale;
     $("revise-proposal-fixture").disabled = !fixture;
+  }
+  function renderWaterStudy(study, preview='', alternativeEntry=null) {
+    const plan=study.waterPlan, c=plan?.comparison ?? {}, p=alternativeEntry?study.alternatives?.[alternativeEntry.id]:study.proposal;
+    $('water-design-review').hidden=!plan && !(currentWater?.designHistory?.length);
+    $('water-return-current').hidden=!preview;
+    $('water-design-stale').hidden=study.inputRevision===selected.inputRevision;
+    $('water-design-selection').textContent=alternativeEntry
+      ? `Inspecting ${alternativeEntry.label || label(alternativeEntry.id)}: ${alternativeEntry.reason || alternativeEntry.status || 'Alternative footprint.'}`
+      : c.selectionBasis || c.reason || (p?'A provisional concept selected from the available mapped space.':'No eligible concept fits the checked constraints.');
+    const scenario=plan?.scenario ?? c.scenario ?? {}, settings=plan?.settings ?? {};
+    const assumed=(scenario.drainageAssumption ?? settings.drainageAssumption)==='marked_connected';
+    const captured=p?.metrics?.find(m=>m.id==='captured_volume');
+    const name=scenario.name || scenario.label || scenario.rainfallSource || scenario.source;
+    $('water-design-scenario').textContent=[name?`Event: ${name}.`:'Event assumptions are recorded with the footprint.',
+      assumed?'What-if: marked runoff areas are assumed connected. Capture is temporary event storage, not verified drainage or flood protection.':
+        captured?.status==='calculated'?'Scenario calculation; inspect the stated drainage assumptions before relying on capture.':'Drainage connection is unknown. Runoff capture is not assessed.',
+      `Study revision ${study.revision}.`,preview].filter(Boolean).join(' ');
+    $('water-design-decisions').replaceChildren();
+    const decisions=alternativeEntry?(alternativeEntry.decisions ?? []):(plan?.decisions ?? []);
+    for(const decision of decisions) {
+      const text=typeof decision==='string'?decision:[decision.source || decision.provider,decision.decision || decision.text || decision.reason].filter(Boolean).join(': ');
+      const item=element('li',text || 'Inspect the sourced siting evidence.');
+      if(typeof decision==='object' && (decision.evidence_ids || decision.evidenceIds)?.length)
+        item.append(element('small',` Evidence: ${(decision.evidence_ids || decision.evidenceIds).join(', ')}`));
+      if(study===currentWater && !alternativeEntry && typeof decision==='object' && (decision.evidence_ids || decision.evidenceIds)?.length) {
+        const inspect=element('button','Inspect source evidence');inspect.type='button';
+        inspect.addEventListener('click',()=>map.fire('plannerinspectevidence',{siteId:study.siteId,
+          evidenceIds:[...(decision.fact_id?[decision.fact_id]:[]),...(decision.evidence_ids || decision.evidenceIds)]}));item.append(inspect);
+      }
+      $('water-design-decisions').append(item);
+    }
+    if(!$('water-design-decisions').children.length) $('water-design-decisions').append(element('li',alternativeEntry
+      ? 'No separate sponsor decision ledger was recorded for this alternative. The selected concept’s decisions do not apply to this preview.'
+      : 'No additional sponsor decision ledger was recorded for this revision.'));
+    $('water-design-alternatives').replaceChildren();
+    const entries=Array.isArray(c.results)?c.results:Object.entries(c.results ?? {}).map(([id,value])=>({id,...value}));
+    for(const entry of entries) {
+      const card=element('div');card.className='water-alternative';
+      const chosen=entry.id===c.selected;
+      card.append(element('strong',`${entry.label || label(entry.id)}${chosen?' · selected concept':''}`));
+      card.append(element('p',entry.reason || entry.status || 'Inspect the checked alternative.'));
+      const alternative=study.alternatives?.[entry.id];
+      if(alternative) {
+        const inspect=element('button','Inspect this footprint');inspect.type='button';
+        inspect.addEventListener('click',()=>{
+          if(!currentWater || currentWater.siteId!==selected.siteId || study!==currentWater)return;
+          try {
+            const ownSite={...selected,inputRevision:study.inputRevision};
+            const area=validate(alternative,ownSite,study.revision,false);
+            publish(alternative,area,selected,prepareLayer(entry.status==='rejected'?{...alternative,status:'rejected'}:alternative));focus();
+            renderWaterStudy(study,'Alternative footprint · read-only inspection. The saved concept and its constraints are unchanged.',entry);
+            $('proposal-kind').textContent=`Study alternative · ${entry.status || 'concept'}`;
+            if(entry.status==='rejected') {
+              $('proposal-review').setAttribute('data-status','rejected');
+              $('proposal-summary').textContent=`Rejected: ${entry.reason || 'This footprint failed the siting checks.'} ${alternative.recommendation}`;
+            }
+            $('proposal-map-caption').textContent=`${entry.status==='rejected'?'Rejected alternative':'Alternative'} preview · revision ${study.revision}${study.inputRevision!==selected.inputRevision?' · stale inputs':''}`;
+            $('water-return-current').hidden=false;
+          } catch(error) {$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Alternative unavailable: ${error.message}`;}
+        });card.append(inspect);
+      }
+      $('water-design-alternatives').append(card);
+    }
+    if(!entries.length)$('water-design-alternatives').append(element('p','No additional alternatives are available for this revision.'));
+    $('water-design-history').replaceChildren();
+    for(const saved of currentWater?.designHistory ?? []) {
+      if(!saved.proposal || saved.revision>=currentWater.revision)continue;
+      const inspect=element('button',`Inspect revision ${saved.revision}`);inspect.type='button';
+      inspect.addEventListener('click',()=>{
+        if(!currentWater || currentWater.siteId!==selected.siteId)return;
+        try {
+          const ownSite={...selected,inputRevision:saved.inputRevision ?? saved.proposal.input_revision};
+          const area=validate(saved.proposal,ownSite,saved.revision,false);
+          publish(saved.proposal,area,selected);focus();
+          renderWaterStudy({...saved,inputRevision:ownSite.inputRevision},'Earlier revision · read-only inspection. The current concept is unchanged.');
+          $('proposal-kind').textContent=`Earlier revision ${saved.revision} · read only`;
+          $('proposal-map-caption').textContent=`Earlier revision ${saved.revision} · read-only preview`;
+          // Earlier geometry is an intentional inspection, not a request to
+          // rerun the already-current design. Its own metrics remain attached.
+          $('proposal-stale').hidden=true;
+          $('water-design-stale').hidden=true;
+        }catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Earlier revision unavailable: ${error.message}`;}
+      });$('water-design-history').append(inspect);
+    }
+    if(!$('water-design-history').children.length)$('water-design-history').append(element('p','This is the first saved design revision.'));
   }
   function focus() {
     const bounds = layer?.getBounds?.();
@@ -195,19 +284,30 @@
     const p = event.proposal, c = event.comparison;
     try {
       if (selected.workflow === "water" && !c) {
-        if (p && (p.status !== "draft" || event.draftQuestion)) throw new Error("Stormwater draft mismatch.");
+        if (p && (!["draft","conditional"].includes(p.status) || event.draftQuestion)) throw new Error("Stormwater draft mismatch.");
         const area = p ? validate(p, selected, event.revision, false) : null;
+        const waterComparison=event.waterPlan?.comparison;
+        if(p && waterComparison?.selected) {
+          const chosen=event.alternatives?.[waterComparison.selected];
+          const row=(waterComparison.results ?? []).find(item=>item.id===waterComparison.selected);
+          if(!chosen || !row || row.status==='rejected' || chosen.input_hash!==p.input_hash ||
+              JSON.stringify(chosen.geometry)!==JSON.stringify(p.geometry) || JSON.stringify(chosen.metrics)!==JSON.stringify(p.metrics) ||
+              row.inputHash && row.inputHash!==p.input_hash || row.revision && row.revision!==event.revision)
+            throw new Error('Stormwater selection and geometry mismatch.');
+        }
         const replacement = p ? prepareLayer(p) : null;
         controller?.abort(); ++request;
         comparison = null; realRevision = event.revision;
+        currentWater={...event};
         $("proposal-result-message").hidden = Boolean(p);
         if (p) {
           publish(p, area, selected, replacement);
           focus();
         } else {
-          removeProposal();
-          $("proposal-result-message").textContent = event.draftQuestion ?? "No draft is available for this revision.";
+          if(published) {$("proposal-stale").hidden=false;$("proposal-map-caption").textContent=`${caption(true)} · previous result`;}
+          $("proposal-result-message").textContent = `${event.draftQuestion ?? "No draft is available for this revision."}${published?' The previous footprint remains visible for reference; it is not the new result.':''}`;
         }
+        renderWaterStudy(currentWater);
         $("load-proposal-fixture").disabled = false;
         return;
       }
@@ -281,8 +381,25 @@
   $("focus-proposal").addEventListener("click", () => { show.checked = true; visible(); focus(); });
   $("load-proposal-fixture").addEventListener("click", preview);
   $("revise-proposal-fixture").addEventListener("click", preview);
+  $('water-return-current').addEventListener('click',()=>{
+    if(!currentWater || !selected || currentWater.siteId!==selected.siteId)return;
+    if(currentWater.proposal)publish(currentWater.proposal,validate(currentWater.proposal,{...selected,inputRevision:currentWater.inputRevision},currentWater.revision,false),selected);
+    else removeProposal();
+    renderWaterStudy(currentWater);
+  });
   map.on("plannersite", clear);
   map.on("plannerresult", receive);
+  map.on('plannerrestore',event=>{
+    if(!selected || selected.workflow!=='water' || event.workflow!=='water' || event.siteId!==selected.siteId ||
+      !event.proposal || event.inputRevision>selected.inputRevision || event.revision<realRevision)return;
+    try {
+      const area=validate(event.proposal,{...selected,inputRevision:event.inputRevision},event.revision,false);
+      currentWater={...event};realRevision=event.revision;
+      publish(event.proposal,area,selected);renderWaterStudy(currentWater);
+      $('proposal-stale').hidden=false;$('water-design-stale').hidden=false;
+      $('proposal-map-caption').textContent=`${caption(true)} · saved previous result`;
+    }catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Saved footprint unavailable: ${error.message}`;}
+  });
   map.on("plannerinputs", ({inputRevision}) => {
     if (!selected) return;
     selected = {...selected,inputRevision}; controller?.abort(); ++request;
@@ -290,5 +407,6 @@
     $("revise-proposal-fixture").disabled = !published?.development_fixture;
     if (published) { $("proposal-stale").hidden = false; $("proposal-map-caption").textContent = caption(true); }
     if (comparison) $("comparison-stale").hidden = false;
+    if(currentWater)$('water-design-stale').hidden=false;
   });
 })();

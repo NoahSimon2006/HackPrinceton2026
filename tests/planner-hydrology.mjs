@@ -28,10 +28,10 @@ function harness(mode = 'water', options = {}) {
   const map = { handlers: {}, events: [], center:{lat:34.05,lng:-118.25},createPane() {}, getPane: () => ({ style: {} }),
     on(name, handler) { this.handlers[name] = handler; },
     fire(name, event) { this.events.push({name,event}); this.handlers[name]?.(event); }, setView(point) {this.center=Array.isArray(point)?{lat:point[0],lng:point[1]}:point;},getCenter(){return this.center;}, closePopup() {}, getZoom: () => 17 };
-  const requests = [], identityRequests = [];
+  const requests = [], identityRequests = [], saves=[];
   const json = (url, requestOptions = {}) => {
     if (url === '/api/projects') return Promise.resolve({projects:[]});
-    if (url.startsWith('/api/projects?id=')) return Promise.resolve({id:'a'.repeat(32),version:1,artifacts:[],status:'ready'});
+    if (url.startsWith('/api/projects?id=')) return Promise.resolve(options.savedProject ?? {id:'a'.repeat(32),version:1,artifacts:[],status:'ready'});
     if (url.startsWith('/api/site-resolution')) {
       if (!options.captureIdentity) return Promise.resolve({status:'unmatched',property:null,candidates:[],message:'No unique property match.'});
       return new Promise((resolve,reject)=>identityRequests.push({url,options:requestOptions,resolve,reject}));
@@ -43,7 +43,7 @@ function harness(mode = 'water', options = {}) {
     cancelSiteAnalysis: () => {},
     streamSiteAnalysis: (payload, options) => json("/api/site-analysis", {body:JSON.stringify(payload), ...options}),
     URLSearchParams, AbortController, setTimeout:()=>1,clearTimeout(){},window:{addEventListener(){}},
-    localStorage:{getItem:()=>null,setItem(){}}, SavedProject:class{value=null;async save(snapshot){return this.value={id:'a'.repeat(32),version:1,snapshot,artifacts:[],status:'ready'};}}, document: { createElement: element },
+    localStorage:{getItem:()=>null,setItem(){}}, SavedProject:class{constructor(value=null){this.value=value;}async save(snapshot){saves.push(snapshot);return this.value={id:'a'.repeat(32),version:1,snapshot,artifacts:[],status:'ready'};}}, document: { createElement: element },
     L: { latLng: (lat,lng) => {if(!Number.isFinite(lat)||!Number.isFinite(lng))throw Error('Invalid LatLng');return {lat,lng};}, layerGroup: layer, geoJSON: layer, circleMarker: layer,
       polyline:layer,polygon:layer,marker:layer,divIcon:()=>({}),Polyline:function(){} } });
   function select(lat, lng) {
@@ -54,7 +54,7 @@ function harness(mode = 'water', options = {}) {
     $('planner').hidden = !visible;
     map.fire('plannerworkspace', { mode, visible });
   }
-  return { $, map, layers, requests, identityRequests, select, workspace };
+  return { $, map, layers, requests, identityRequests, saves,select, workspace };
 }
 const watershed = (name) => ({ type: 'FeatureCollection', features: [{ type: 'Feature',
   properties: { WATERSHED: name, NAME: ' ' }, geometry: { type: 'Polygon', coordinates: [] } }] });
@@ -356,3 +356,58 @@ console.log('PASS: active-workspace persistence and keyboard site/constraint rev
   h.requests.at(-1).resolve({report:null,facts:[]});await pending;
 }
 console.log('PASS: single stormwater analysis path, optional constraints, guarded property resolution and source/revision isolation');
+
+// Explicit design settings are canonical inputs, survive restoration, and
+// invalidate a pending calculation rather than mixing its metrics with edits.
+{
+  const h=harness();h.select(34.05,-118.25);await flush();
+  h.requests[0].resolve(rainfall);h.requests[1].resolve(watershed('ballona'));await flush();
+  h.$('water-target-area').events.input({target:{value:'42'}});
+  h.$('water-storage-depth').events.input({target:{value:'.2'}});
+  h.$('water-layout').events.change({target:{value:'linear'}});
+  h.$('water-placement').events.change({target:{value:'away_from_previous'}});
+  h.$('water-protect-access').events.change({target:{checked:true}});
+  const pending=h.$('site-analysis').events.submit({preventDefault(){}});await flush();
+  const body=JSON.parse(h.requests[2].options.body);
+  assert.deepEqual(body.stormwaterSettings,{targetAreaM2:42,storageDepthM:.2,layout:'linear',placement:'away_from_previous',runoffCoefficient:null,drainageAssumption:'unknown',protectAccess:true});
+  assert.deepEqual(JSON.parse(JSON.stringify(h.saves.at(-1).stormwaterSettings)),body.stormwaterSettings);
+  h.$('water-target-area').events.input({target:{value:'18'}});
+  assert.equal(h.requests[2].options.signal.aborted,true);
+  h.requests[2].resolve({proposal:{revision:1},report:null,facts:[]});await pending;
+  assert.equal(h.map.events.filter(e=>e.name==='plannerresult').length,0);
+  const saved={id:'a'.repeat(32),version:3,status:'ready',artifacts:[],events:[],result:null,
+    snapshot:{workflow:'water',siteId:body.siteId,lon:-118.25,lat:34.05,propertyId:null,question:'Preserve access.',markings:[],rainfallScenario:{inches:1.5,source:'Named what-if'},stormwaterSettings:body.stormwaterSettings,inputRevision:5,proposalRevision:2}};
+  const r=harness('water',{savedProject:saved});
+  r.map.fire('scoutselect',{project:saved});await flush();await flush();
+  assert.equal(r.$('water-target-area').value,42);
+  assert.equal(r.$('water-storage-depth').value,.2);
+  assert.equal(r.$('water-layout').value,'linear');
+  assert.equal(r.$('water-protect-access').checked,true);
+  assert.equal(r.$('rain-source').value,'Named what-if');
+  assert.equal(r.requests.filter(q=>q.url==='/api/site-analysis').length,0,'restoration never starts a design run');
+}
+{
+  const h=harness();h.select(34.05,-118.25);await flush();
+  h.requests[0].resolve(rainfall);h.requests[1].resolve(watershed('ballona'));await flush();
+  h.$('water-drainage-assumption').events.change({target:{value:'marked_connected'}});
+  await h.$('site-analysis').events.submit({preventDefault(){}});
+  assert.equal(h.requests.length,2);assert.match(h.$('analysis-message').textContent,/explicit runoff coefficient/);
+  h.$('water-runoff-coefficient').events.input({target:{value:'.8'}});
+  await h.$('site-analysis').events.submit({preventDefault(){}});
+  assert.equal(h.requests.length,2);assert.match(h.$('analysis-message').textContent,/Outline a potential runoff source/);
+  h.$('mark-actions').children[1].events.click();
+  h.$('draw-add-center').events.click();h.map.center={lat:34.0501,lng:-118.25};h.$('draw-add-center').events.click();
+  h.map.center={lat:34.0501,lng:-118.2499};h.$('draw-add-center').events.click();h.$('draw-save').events.click();
+  h.$('rain-depth').events.input({target:{value:'1'}});h.$('rain-source').events.input({target:{value:'Explicit one-inch sensitivity event'}});
+  const pending=h.$('site-analysis').events.submit({preventDefault(){}});await flush();
+  const body=JSON.parse(h.requests[2].options.body);
+  assert.equal(body.stormwaterSettings.drainageAssumption,'marked_connected');assert.equal(body.stormwaterSettings.runoffCoefficient,.8);
+  assert.equal(body.markings[0].kind,'drainage');assert.equal(body.rainfallScenario.source,'Explicit one-inch sensitivity event');
+  h.requests[2].resolve({report:null,facts:[],waterPlan:{settings:body.stormwaterSettings},draftQuestion:'Choose a host parcel.',
+    synthesisWarning:'Validated source research and design outputs remain available.',analysisError:null});await pending;
+  assert.equal(h.map.events.filter(e=>e.name==='plannerresult').at(-1).event.waterPlan.settings.runoffCoefficient,.8);
+  assert.equal(h.$('analysis-synthesis-warning').hidden,false);
+  assert.match(h.$('analysis-synthesis-warning').textContent,/Validated source research/);
+  assert.equal(h.$('analysis-stale').hidden,true,'incomplete narrative alone does not invalidate local design evidence');
+}
+console.log('PASS: stormwater settings persistence, explicit what-if guards, marked sources and stale-run cancellation');

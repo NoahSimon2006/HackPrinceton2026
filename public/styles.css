@@ -443,3 +443,14 @@ button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-vi
 .scout-assessment{border-top:1px solid #38503e;margin-top:10px;padding-top:4px}
 .scout-investigation>summary,.scout-method>summary{font-size:11px;cursor:pointer;color:#a5cba8;line-height:1.5}
 .scout-investigation{margin:10px 0}.scout-method{margin:8px 0}
+.stormwater-settings{margin:12px 0;border-top:1px solid #38503e;padding-top:10px}
+.stormwater-settings>summary,.water-design-review summary{cursor:pointer;font-size:12px;color:#b9ddbc;line-height:1.5}
+.stormwater-settings label{display:block;margin:10px 0 5px;font-size:11px;line-height:1.5}
+.stormwater-settings input:not([type=checkbox]),.stormwater-settings select{width:100%;min-width:0;box-sizing:border-box;margin-top:4px;padding:8px;border:1px solid #4d6254;border-radius:6px;background:#15231b;color:#e5ede6}
+.stormwater-settings input[type=checkbox]{width:auto;margin:0 5px 0 0}
+.water-input-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 10px}
+.stormwater-settings p,.water-design-review p,.water-design-review li{font-size:11px;line-height:1.55}
+.water-scenario-note{border-left:3px solid #84bbb1;padding:8px 10px;background:#263c32}
+.water-design-review details{margin:12px 0}.water-design-review ul{padding-left:17px}
+.water-alternative{border:1px solid #415a48;border-radius:8px;padding:10px;margin:9px 0}
+.water-alternative strong{font-size:12px;display:block}.water-alternative button{font-size:11px;padding:7px 9px}

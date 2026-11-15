@@ -84,6 +84,17 @@ def complete():
 
 
 class AgentTest(unittest.TestCase):
+    def test_numeric_validation_suggests_available_facts_without_accepting_missing_citations(self):
+        facts = {'water-footprint_area': fact('water-footprint_area', 'Footprint area', 20, 'm²', source('Local geometry')),
+                 'water-captured_volume': fact('water-captured_volume', 'Temporary runoff storage', 1.984, 'm³', source('Local geometry'), precision=3)}
+        schema = review_schema(facts, set(), set())
+        payload = {'findings': [{'text': 'The footprint is 20 m².', 'fact_ids': ['water-captured_volume']}],
+                   'recommendations': [], 'questions': ['Verify access?']}
+        with self.assertRaisesRegex(ValidationError, 'Available exact-value facts to check: water-footprint_area'):
+            schema.model_validate(payload)
+        payload['findings'][0]['fact_ids'] = ['water-footprint_area']
+        self.assertEqual(schema.model_validate(payload).findings[0].fact_ids, ['water-footprint_area'])
+
     def test_failed_or_invalid_candidate_source_is_distinct_from_successful_empty(self):
         for state in ("failed", "invalid", "empty"):
             with self.subTest(state=state):
@@ -204,7 +215,10 @@ class AgentTest(unittest.TestCase):
         self.assertIn("query_neighborhood_discovery", domain_model.tool_names)
         self.assertTrue(any(f["id"] == "area-terrain-test" for f in result["facts"]))
         self.assertIsNotNone(result["report"])
-        self.assertEqual(result["proposal"]["status"], "draft")
+        self.assertEqual(result["proposal"]["status"], "conditional")
+        self.assertEqual(result["proposal"]["design"]["kind"], "bioretention")
+        self.assertGreaterEqual(len(result["alternatives"]), 2)
+        self.assertTrue(result["waterPlan"]["decisions"])
         self.assertEqual(next(f["value"] for f in result["facts"] if f["id"] == "parcel-area"), 10000)
         self.assertTrue(result["evidence"]["outlines"][0]["geometry"])
         starts = [i for i,e in enumerate(events) if e["stage"] == "investigation" and e["status"] == "started"]

@@ -236,7 +236,7 @@ def property_facts(details, frontages, nearby=None):
         for use in sorted({item["type"] for item in nearby}):
             count = sum(item["type"] == use for item in nearby)
             facts.append(fact(f"costar-nearby-use-{len(facts) + 1}", f"Nearby CoStar records by property type: {use}", count,
-                              "records", origin, basis="reported", method="Geocoded property records within 200 m of the selected intersection.",
+                              "records", origin, basis="reported", method="Geocoded property records within the bounded site query (110 m for stormwater, 200 m for traffic).",
                               note="Location and property use are a screening inventory. Coverage does not establish land ownership or parcel boundaries."))
     if not details:
         warnings.append("No selected CoStar property record. Nearby records and frontage do not establish site ownership or access.")

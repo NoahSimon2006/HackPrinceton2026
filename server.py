@@ -23,6 +23,7 @@ from hydrology import RAINFALL, WATERSHEDS, rainfall_at, rainfall_contours, wate
 from site_evidence import imagery_evidence
 from site_measurements import validate_inputs
 from site_identity import resolve_site
+from stormwater_settings import validate_settings
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
@@ -403,6 +404,7 @@ class Handler(BaseHTTPRequestHandler):
             if workflow not in ("street", "water") or not 0 < len(question) <= 1500:
                 raise ValueError("Choose a workflow and enter a question up to 1,500 characters.")
             markings, scenario = validate_inputs(data.get("markings", []), data.get("rainfallScenario"), workflow, lon, lat)
+            water_settings = validate_settings(data.get('stormwaterSettings'), workflow, markings=markings, for_analysis=True)
             if data.get("waterDesign") is not None:
                 raise ValueError("The separate placement comparison has been retired. Analyze the site and add optional map constraints instead.")
             try:
@@ -453,7 +455,13 @@ class Handler(BaseHTTPRequestHandler):
             selected_id = selected["id"] if selected else None
             radius = 200 if workflow == "street" else 110
             frontages = nearby_frontages(lon, lat, selected_id, radius=radius)
-            nearby = nearby_properties(items, lon, lat, radius) if workflow == "street" else []
+            nearby = nearby_properties(items, lon, lat, radius)
+            if workflow == 'water':
+                # Host association must inspect every catalog point within a
+                # possible parcel, not only the radius-limited nearby inventory.
+                catalog = [{k: item[k] for k in ('id', 'lon', 'lat', 'type')} | {'details': details[item['id']]} for item in items]
+                nearby = [{k: item[k] for k in ('id', 'lon', 'lat', 'type')} | {'details': details[item['id']]} for item in nearby]
+                return (details[selected_id] if selected else None), frontages, nearby, catalog
             return (details[selected_id] if selected else None), frontages, nearby
 
         def hydrology_context():
@@ -519,13 +527,14 @@ class Handler(BaseHTTPRequestHandler):
                     fetch_discovery=lambda: area_facts(workflow, lon, lat),
                     project=project, checkpointer=saver,
                     persist_artifact=(lambda path, content: project_store().artifact(project["id"], path, content, activity.id)) if project else None,
+                    stormwater_settings=water_settings,
                 )
             if activity.cancelled.is_set():
-                result.update(proposal=None, comparison=None, alternatives={}, report=None)
+                result.update(proposal=None, comparison=None, alternatives={}, report=None, waterPlan=None)
             if project:
                 status = "canceled" if activity.cancelled.is_set() else "failed" if result.get("analysisError") else "needs_input" if result.get("draftQuestion") else "ready"
                 if not project_store().finish(project["id"], activity.id, result, status):
-                    result.update(proposal=None, comparison=None, alternatives={}, report=None,
+                    result.update(proposal=None, comparison=None, alternatives={}, report=None, waterPlan=None,
                                   analysisError="This run belongs to earlier inputs. Continue the latest saved project.")
                 result["projectVersion"] = project["version"]
             if streaming:

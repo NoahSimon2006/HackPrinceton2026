@@ -40,6 +40,35 @@
 
   let projectLoadGeneration = 0;
 
+  const waterDefaults = {targetAreaM2:null,storageDepthM:null,layout:'auto',placement:'auto',
+    runoffCoefficient:null,drainageAssumption:'unknown',protectAccess:false};
+  const waterFields = {'water-target-area':'targetAreaM2','water-storage-depth':'storageDepthM',
+    'water-layout':'layout','water-placement':'placement','water-runoff-coefficient':'runoffCoefficient',
+    'water-drainage-assumption':'drainageAssumption','water-protect-access':'protectAccess'};
+  function waterSettings(record, analyze=false) {
+    const value={...waterDefaults,...record.stormwaterSettings};
+    for(const [key,min,max,label] of [['targetAreaM2',2,500,'Target treatment area'],['storageDepthM',.05,.30,'Effective ponding depth'],['runoffCoefficient',0,1,'Runoff coefficient']]) {
+      if(value[key]===null || value[key]==='') {value[key]=null;continue;}
+      value[key]=Number(value[key]);
+      if(!Number.isFinite(value[key]) || value[key]<min || value[key]>max) throw new Error(`${label} must be between ${min} and ${max}.`);
+    }
+    if(analyze && value.drainageAssumption==='marked_connected') {
+      if(value.runoffCoefficient===null) throw new Error('Enter an explicit runoff coefficient for the marked-area what-if.');
+      if(!record.features.some(item=>item.kind==='drainage')) throw new Error('Outline a potential runoff source before evaluating the marked-area what-if.');
+    }
+    return value;
+  }
+  function showWaterSettings() {
+    $('stormwater-settings').hidden=workflow!=='water';
+    const record=site?.water, values={...waterDefaults,...record?.stormwaterSettings};
+    for(const [id,key] of Object.entries(waterFields)) {
+      const input=$(id);input.disabled=!site;
+      if(key==='protectAccess')input.checked=Boolean(values[key]);else input.value=values[key] ?? '';
+    }
+    $('water-what-if-note').hidden=values.drainageAssumption!=='marked_connected';
+    $('water-runoff-coefficient').disabled=!site || values.drainageAssumption!=='marked_connected';
+  }
+
   function projectSnapshot(selected, mode) {
     const record = selected[mode];
     const markings = record.features.map(({kind, points}) => {
@@ -56,6 +85,7 @@
     }
     return {workflow:mode,siteId:selected.key,lon:selected.center.lng,lat:selected.center.lat,
       propertyId:selected.propertyId ?? null,question:record.brief.trim(),markings,rainfallScenario,
+      ...(mode==='water'?{stormwaterSettings:waterSettings(record)}:{}),
       inputRevision:record.revision ?? 0,proposalRevision:Math.max(1,record.proposalRevision ?? 1)};
   }
 
@@ -133,13 +163,18 @@
     record.activity=value.events ?? [];
     if (result) {
       Object.assign(record,{evidence:result.evidence,report:result.report,facts:result.facts ?? [],
+        synthesisWarning:result.synthesisWarning || '',
         sourceWarnings:result.sourceWarnings ?? [],sourceStatus:result.sourceStatus,evidenceError:result.analysisError || result.resumeNotice || '',
         stale:value.resultVersion !== value.version || Boolean(result.analysisError)});
       if(result.hydrology) applyHydrology(selected.water,result.hydrology);
       if(value.resultVersion === value.version && !result.analysisError && (result.proposal || result.comparison || result.draftQuestion))
         map.fire('plannerresult',{siteId:selected.key,workflow:mode,inputRevision:record.revision ?? 0,
           revision:record.proposalRevision,proposal:result.proposal,comparison:result.comparison,
-          alternatives:result.alternatives ?? {},draftQuestion:result.draftQuestion});
+          alternatives:result.alternatives ?? {},draftQuestion:result.draftQuestion,waterPlan:result.waterPlan,designHistory:result.designHistory ?? value.designHistory ?? []});
+      else if(mode==='water' && result.proposal) map.fire('plannerrestore',{
+        siteId:selected.key,workflow:mode,inputRevision:result.proposal.input_revision,revision:result.proposal.revision,
+        proposal:result.proposal,alternatives:result.alternatives ?? {},waterPlan:result.waterPlan,
+        designHistory:result.designHistory ?? value.designHistory ?? []});
     } else {
       const facts = new Map();
       for (const event of record.activity) for (const fact of event.facts ?? []) facts.set(fact.id,fact);
@@ -196,6 +231,14 @@
   map.on('scoutselect', ({project}) => {
     if (project?.snapshot?.workflow === workflow) openProject(project.id);
   });
+  map.on('plannerinspectevidence',({siteId,evidenceIds})=>{
+    if(!site || site.key!==siteId)return;
+    const match=(site[workflow].facts ?? []).find(f=>evidenceIds.includes(f.id) || (f.feature_ids ?? []).some(id=>evidenceIds.includes(id)));
+    $('site-tools').open=true;
+    if(match) {
+      const row=$(`fact-${match.id}`);row.open=true;row.scrollIntoView({block:'nearest'});row.focus?.({preventScroll:true});
+    } else $('site-facts').scrollIntoView({block:'nearest'});
+  });
 
   function pointError(point, marking = false) {
     if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return "Enter a finite latitude and longitude for every point.";
@@ -226,6 +269,8 @@
     output.hidden = !record.report;
     $("analysis-message").hidden = !record.evidencePending && !record.evidenceError;
     $("analysis-message").textContent = record.evidencePending ? (record.activitySummary || "Starting site investigation…") : record.evidenceError || "";
+    $('analysis-synthesis-warning').hidden=!record.synthesisWarning || record.evidencePending;
+    $('analysis-synthesis-warning').textContent=record.synthesisWarning ? `Agent summary incomplete. ${record.synthesisWarning}`:'';
     $("cancel-site-analysis").hidden = !record.evidencePending;
     showActivity(record);
     $("analysis-stale").hidden = !record.stale;
@@ -449,11 +494,16 @@
       }
       rainfallScenario = { inches, source: record.source.trim() };
     }
+    let stormwaterSettings;
+    if(mode==='water') {
+      try {stormwaterSettings=waterSettings(record,true);} catch(error) {record.evidenceError=error.message;showReview(record);return;}
+    }
     record.evidencePending = true;
     record.proposalRevision = proposalRevision;
     record.evidenceError = "";
     // Keep retrieved evidence visible while the new run is in flight.
     record.report = null;
+    record.synthesisWarning = '';
     record.activity = [];
     record.activitySummary = "Starting site investigation…";
     record.stale = Boolean(record.facts?.length);
@@ -466,6 +516,7 @@
       const result = await streamSiteAnalysis({ projectId:saved.id, projectVersion:saved.version,
         lat:selected.center.lat, lon:selected.center.lng,
         propertyId:selected.propertyId, workflow:mode, question, markings, rainfallScenario,
+        ...(mode==='water'?{stormwaterSettings}:{}),
         siteId:selected.key, inputRevision:revision, proposalRevision,
         discoveryReference:record.discovery?.reference ?? null }, {
         signal:controller.signal,
@@ -496,6 +547,7 @@
       if (activeAnalysis !== run || controller.signal.aborted) return;
       record.evidence = result.evidence;
       record.report = result.report;
+      record.synthesisWarning = result.synthesisWarning || '';
       if (result.facts?.length || result.report) record.facts = result.facts ?? [];
       record.sourceWarnings = result.sourceWarnings ?? [];
       record.sourceStatus = result.sourceStatus;
@@ -503,10 +555,11 @@
       if (result.hydrology) applyHydrology(selected.water, result.hydrology);
       // A changed site or marking must never publish geometry from an older run.
       if (site === selected && workflow === mode && (record.revision ?? 0) === revision &&
-          (result.proposal || result.comparison || result.draftQuestion)) {
+          !result.analysisError && (result.proposal || result.comparison || result.draftQuestion)) {
         map.fire("plannerresult", {siteId:selected.key, workflow:mode, inputRevision:revision,
           revision:proposalRevision, proposal:result.proposal ?? null, comparison:result.comparison ?? null,
-          alternatives:result.alternatives ?? {}, draftQuestion:result.draftQuestion ?? null});
+          alternatives:result.alternatives ?? {}, draftQuestion:result.draftQuestion ?? null,
+          waterPlan:result.waterPlan,designHistory:result.designHistory ?? []});
       }
     } catch (error) {
       if (activeAnalysis !== run) return;
@@ -798,6 +851,7 @@
 
   function showWorkflow() {
     showProject();
+    showWaterSettings();
     $("project-file-preview").hidden=true;
     $("traffic-design-guide").hidden = workflow !== "street";
     $("water-tools").hidden = workflow !== "water";
@@ -831,6 +885,7 @@
     if (restored) {
       const snapshot=restored.snapshot, record=site[snapshot.workflow];
       Object.assign(record,{brief:snapshot.question,revision:snapshot.inputRevision,proposalRevision:snapshot.proposalRevision,
+        stormwaterSettings:{...waterDefaults,...snapshot.stormwaterSettings},
         project:new SavedProject(restored),rainEdited:Boolean(snapshot.rainfallScenario),
         depth:snapshot.rainfallScenario?.inches ?? '',source:snapshot.rainfallScenario?.source ?? '',
         features:snapshot.markings.map(({kind,geometry})=>({kind,points:(kind === 'crossing' ? geometry.coordinates : geometry.coordinates[0].slice(0,-1)).map(([lng,lat])=>L.latLng(lat,lng))}))});
@@ -1110,6 +1165,16 @@
     $(id).addEventListener("input", ({ target }) => {
       site.water[field] = target.value;
       site.water.rainEdited = true;
+      inputsChanged(site.water);
+    });
+  }
+  for(const [id,key] of Object.entries(waterFields)) {
+    $(id).addEventListener(['layout','placement','drainageAssumption','protectAccess'].includes(key)?'change':'input',({target})=>{
+      if(!site || workflow!=='water')return;
+      site.water.stormwaterSettings={...waterDefaults,...site.water.stormwaterSettings,
+        [key]:key==='protectAccess'?Boolean(target.checked):target.value};
+      $('water-what-if-note').hidden=site.water.stormwaterSettings.drainageAssumption!=='marked_connected';
+      $('water-runoff-coefficient').disabled=site.water.stormwaterSettings.drainageAssumption!=='marked_connected';
       inputsChanged(site.water);
     });
   }

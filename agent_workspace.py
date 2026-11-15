@@ -1,6 +1,8 @@
 """Curated virtual files and native Deep Agents middleware. No host-file tools."""
 from dataclasses import replace
 import json
+import logging
+import traceback
 from pathlib import Path
 
 from deepagents.backends import StateBackend
@@ -92,6 +94,10 @@ def tool_guard(name, activity, skill_reads, artifact_reads, assignments, backend
             from agent_activity import RunCancelled
             if isinstance(error, RunCancelled):
                 raise
+            # Diagnose local integration failures without recording tool arguments,
+            # source records, request URLs, exception text or credentials.
+            logging.getLogger(__name__).warning('Tool %s failed (%s); frames=%s', tool, type(error).__name__,
+                [(frame.name, frame.lineno) for frame in traceback.extract_tb(error.__traceback__)[-5:]])
             if tool == "task":
                 on_task_failure(args["subagent_type"])
                 return ToolMessage(content=json.dumps({"status":"partial", "artifact":f"/project/reports/{args['subagent_type']}.json",

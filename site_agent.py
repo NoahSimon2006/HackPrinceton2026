@@ -25,7 +25,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from site_measurements import (fact, source, hydrology_facts, measure_candidates, measure_markings,
                                measure_outlines, property_facts)
-from stormwater_design import draft_rain_garden as place_rain_garden
+from stormwater_planning import plan_stormwater
+from stormwater_settings import validate_settings, effective_settings
 from street_design import Layout
 from traffic_analysis import TrafficAnalysis
 
@@ -101,8 +102,13 @@ def review_schema(facts, attempted, required, recommendation_check=None, *, wate
                     tokens = ", ".join(format(value, "f") for value in sorted(unsupported))
                     displays = "; ".join(f"{identifier}: {facts[identifier]['display']}"
                                          for identifier in statement.fact_ids)
+                    matches = '; '.join(f"{identifier} ({item['label']}): {item['display']}"
+                        for identifier, item in facts.items()
+                        if type(item.get('value')) in (int, float) and Decimal(str(item['value'])) in unsupported)[:1600]
                     raise ValueError(f"A statement contains numbers not present in its cited facts: {tokens}. "
                                      f"Cited fact display values: {displays}. "
+                                     f"Available exact-value facts to check: {matches or 'none'}. "
+                                     "Add the matching fact ID only if its meaning supports this statement; keep earlier-revision facts separate from current values. "
                                      "Remove unsupported numbers or copy the exact supported display/date/time wording. "
                                      "Do not add totals, percentages, ages, rounded values, remaining lane counts or proposed dimensions. "
                                      "Do not number prose statements.")
@@ -117,7 +123,7 @@ def review_schema(facts, attempted, required, recommendation_check=None, *, wate
 def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, fetch_property, fetch_hydrology,
                  *, lon, lat, scenario=None, activity=None, discovery=None, traffic_context=None,
                  analysis_identity=None, allow_generated_timing=False, ranking_policy=None, fetch_discovery=None,
-                 project=None, checkpointer=None, persist_artifact=None):
+                 project=None, checkpointer=None, persist_artifact=None, stormwater_settings=None):
     activity = activity or Activity()
     evidence = {"outlines": [], "detections": [], "search": [], "frontages": [], "unavailable": []}
     facts = {item["id"]: item for item in measure_markings(markings, scenario)}
@@ -131,6 +137,16 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     attempted = set()
     hydrology = None
     draft, draft_gap = None, None
+    water_plan = None
+    water_plan_local = {'alternatives': {}}
+    planning_properties = {'selected': None, 'nearby': [], 'hostProperties': []}
+    water_settings = validate_settings(stormwater_settings, workflow, markings=markings, for_analysis=True)
+    previous_record = ((project or {}).get('designHistory') or [None])[-1]
+    previous_result = (project or {}).get('result') or {}
+    if not previous_record and previous_result.get('proposal'):
+        previous_record = previous_result
+    previous_proposal = previous_record.get('proposal') if previous_record else None
+    previous_water_plan = (previous_record or {}).get('waterPlan') or {}
     nearby_properties = []
     draft_requested = workflow == "water" and analysis_identity is not None
     traffic = TrafficAnalysis(traffic_context, analysis_identity, activity,
@@ -206,7 +222,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
 
     def find_parcel_and_buildings() -> dict:
         """Read mapped parcel and building outlines near the selection; returns sourced areas and coverage."""
-        return collect("outlines", lambda: fetch_imagery("outlines"), lambda data: measure_outlines(data, lon, lat, nearby=bool(traffic)),
+        return collect("outlines", lambda: fetch_imagery("outlines"), lambda data: measure_outlines(data, lon, lat, nearby=True),
                        lambda data: evidence.update(outlines=data))
 
     def detect_site_features() -> dict:
@@ -224,8 +240,10 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         """Read allowlisted selected-property facts, local use counts and mapped frontage lengths."""
         def store(data):
             evidence["frontages"] = data[1]
-            nearby_properties.extend(data[2] if len(data) == 3 else [])
-        return collect("property", fetch_property, lambda data: property_facts(*data), store)
+            nearby_properties.extend(data[2] if len(data) >= 3 else [])
+            planning_properties.update(selected=data[0], nearby=data[2] if len(data) >= 3 else [],
+                                       hostProperties=data[3] if len(data) >= 4 else data[2] if len(data) >= 3 else [])
+        return collect("property", fetch_property, lambda data: property_facts(*data[:3]), store)
 
     def read_rainfall_and_watershed() -> dict:
         """Read the actual county rainfall estimate and watershed name, separately from a planner rainfall scenario."""
@@ -270,6 +288,21 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     user_instructions = (project or {}).get("instructions", [])
     context["user_instructions"] = user_instructions if len(user_instructions) <= 5 else user_instructions[:1] + user_instructions[-4:]
     context["full_constraints_reference"] = "/project/constraints.json"
+    if workflow == 'water':
+        context['stormwater_settings'] = water_settings
+        if previous_proposal:
+            context['previous_stormwater_concept'] = {
+                'revision': previous_proposal['revision'], 'settings': previous_water_plan.get('settings', {}),
+                'metrics': [{key: metric[key] for key in ('id', 'unit', 'proposed', 'status')}
+                            for metric in previous_proposal.get('metrics', [])],
+                'usage': 'Prior concept for interpreting revisions, not current source measurements. Regenerate geometry and calculations together.'}
+            prior_facts = [fact('previous-water-' + metric['id'], 'Previous concept ' + metric['id'].replace('_', ' '),
+                metric['proposed'], metric['unit'], source('Saved prior stormwater concept'), basis='modeled', precision=3,
+                method='Persisted local design calculation from the previous successful revision.',
+                note=f"Earlier revision {previous_proposal['revision']}; these values do not describe the current footprint.")
+                for metric in previous_proposal.get('metrics', []) if metric['status'] == 'calculated']
+            facts.update((item['id'], item) for item in prior_facts)
+            context['previous_stormwater_concept']['facts'] = prior_facts
     if (project or {}).get('scouting'):
         selection = project['scouting']
         context['selected_opportunity'] = {key: selection[key] for key in
@@ -430,33 +463,52 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         backend.put("/project/evaluations/traffic.json", payload)
         return Command(update={"files": virtual, "messages": [ToolMessage(content=json.dumps(payload), tool_call_id=runtime.tool_call_id)]})
 
-    def draft_rain_garden(storage_depth_m: float = .15, runoff_coefficient: float | None = None,
-                          protect_driveway: bool = False) -> dict:
-        """Place a draft after investigation. Depth is proposed ponding depth in meters.
-        Supply a scenario coefficient only for planner-marked contributing areas. Set protect_driveway
-        when the planner asks to keep an entrance clear. Returns no raw site geometry.
+    def draft_rain_garden(storage_depth_m: float | None = None, runoff_coefficient: float | None = None,
+                          protect_driveway: bool | None = None, target_area_m2: float | None = None,
+                          layout: str | None = None, placement: str | None = None) -> dict:
+        """Generate bounded physical alternatives and select a sourced stormwater concept.
+        Propose target area 2–500 m², compact/linear layout, near_selection/landscape_first/
+        away_from_previous placement, and ponding depth 0.05–0.30 m. Explicit planner
+        settings override proposals. Runoff uses only the planner's marked_connected
+        what-if and explicit coefficient; this tool cannot establish drainage connectivity.
+        Returns curated calculations and decisions, never raw geometry.
         """
-        nonlocal draft, draft_gap
+        nonlocal draft, draft_gap, water_plan
         activity.check()
         if not {"site-evidence", "domain-analysis"} <= summaries.keys():
             return {"status":"investigation_required", "message":"Finish both specialist investigations first."}
         if "draft" in attempted:
             return {"status": "already_checked"}
-        if not .05 <= storage_depth_m <= .30 or (runoff_coefficient is not None and not 0 <= runoff_coefficient <= 1):
-            return {"status": "invalid_parameters", "message": "Use 0.05–0.30 m effective ponding depth and a runoff coefficient between 0 and 1."}
+        try:
+            settings = effective_settings(water_settings, {
+                'storageDepthM': storage_depth_m, 'targetAreaM2': target_area_m2,
+                'layout': layout, 'placement': placement, 'protectAccess': protect_driveway},
+                previous_water_plan.get('settings'), previous_water_plan.get('userSettings'))
+        except ValueError as error:
+            return {'status': 'invalid_parameters', 'message': str(error)}
         if statuses.get("outlines") == "ready":
-            draft, draft_gap, items = place_rain_garden(lon=lon, lat=lat, evidence=evidence, markings=markings,
-                rainfall=(hydrology or {}).get("estimate"), scenario=scenario, storage_depth_m=storage_depth_m,
-                runoff_coefficient=runoff_coefficient, protect_driveway=protect_driveway, identity=analysis_identity)
+            planned = plan_stormwater(lon=lon, lat=lat, evidence=evidence, markings=markings,
+                rainfall=(hydrology or {}).get("estimate"), scenario=scenario, settings=settings,
+                identity=analysis_identity, previous=previous_proposal, property_context=planning_properties)
+            draft, draft_gap, items = planned['proposal'], planned['question'], planned['facts']
+            water_plan = {'comparison': planned['comparison'], 'decisions': planned['decisions'],
+                          'settings': settings, 'userSettings': water_settings, 'scenario': planned['comparison'].get('scenario'),
+                          'fieldChecks': list(draft.assumptions) if draft else []}
+            # Exact local alternatives stay in the application response and
+            # canonical revision archive; only curated summaries reach the model.
+            water_plan_local['alternatives'] = planned['alternatives']
         else:
             draft_gap = "Which property with mapped parcel and building outlines should host the garden?"
             items = []
         attempted.add("draft")
         facts.update((item["id"], item) for item in items)
         activity.event("lead", "stormwater-draft", "completed" if draft else "empty",
-            "Mapped a rain garden screening draft." if draft else "The available evidence cannot locate a rain garden draft.", facts=items)
-        payload = {"status": "draft" if draft else "needs_location", "facts": items, "question": draft_gap}
+            "Compared sourced stormwater concepts and mapped the selected footprint." if draft else "The available evidence cannot locate a rain garden draft.", facts=items)
+        payload = {"status": "draft" if draft else "needs_location", "facts": items, "question": draft_gap,
+                   'waterPlan': water_plan}
         backend.put("/project/designs/stormwater.json", payload)
+        if analysis_identity:
+            backend.put(f"/project/designs/history/stormwater-{analysis_identity['revision']}.json", payload)
         return payload
 
     shared = "Tool results contain" + instructions.split("Tool results contain", 1)[1]
@@ -489,7 +541,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     if traffic:
         instruction += " When traffic inputs are ready, you MUST call evaluate_designs before the final review. Supply two or three distinct layouts in one call: use generic names, kind lane_reallocation, a mapped approach nb/sb/eb/wb, lanes_removed 1 or 2 while leaving at least one traffic lane, length_m between 20 and 200 within mapped approach length, and new_use curb_extension, bike_lane or pedestrian_space. Distinct alternatives must change different approaches, lane counts, or lengths by at least 20 m; changing use labels alone is not a different traffic test. Use sponsor facts and planner constraints to choose plausible options. Design dimensions are proposed choices, not observed measurements. Only one evaluation is permitted; never rerun to seek a favorable answer. After evaluation recommend only the selected eligible alternative, citing its verdict and relevant metric facts. If no alternative is recommended, return no recommendations and explain why in findings; place missing-data next steps in questions. If traffic inputs are unavailable, report that gap and do not invent a design or impacts. Do not imply bicycle or pedestrian performance is simulated."
     elif draft_requested:
-        instruction += " You MUST call draft_rain_garden after investigation. If asked to keep a driveway or loading entrance clear, set protect_driveway to true. The tool uses mapped constraints and any planner markings. Use the returned facts to explain the location and potential runoff sources. Present calculated capture only as a scenario from planner-marked drainage, and do not infer drainage connectivity. With a draft, include verification as next steps. If placement is unavailable, ask the tool's one specific question and give no site-specific placement recommendation."
+        instruction += " You MUST call draft_rain_garden after investigation. Use the previous concept metrics/settings to interpret revisions: propose a changed target_area_m2 or layout when asked for a smaller/larger/longer concept; use placement away_from_previous when asked for a different location. Explicit planner controls take priority. The tool internally compares bounded alternatives and returns the selected geometry with matching calculations. If asked to keep a driveway or loading entrance clear, set protect_driveway true. Never infer access locations, ownership or drainage connections. The tool may place a provisional nearby host concept while preserving the selected opportunity identity; explain that host assumption if returned. Cite the sponsor decision facts that changed siting, not just availability. Capture requires the explicit marked-connected what-if and coefficient in planner controls; otherwise capture stays unknown while a useful spatial concept can still be shown. Explain the selected physical change and the practical next check in concise sentences. Do not repeat every limitation. If placement is unavailable, ask the tool's one specific question and give no unsupported placement recommendation."
     else:
         instruction += " Do not imply a physical proposal or benefits were calculated."
     lead_tools = []
@@ -511,7 +563,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         agent = build_agent("lead", lead_tools, instruction, required, subagents=subagents, checkpoint_backend=InMemorySaver())
     else:
         agent = build_agent("lead", lead_tools, instruction, required, subagents=subagents, checkpoint_backend=checkpointer)
-    report, error = None, None
+    report, error, synthesis_warning = None, None, None
     activity.event("lead", "planning", "started", "Preparing a site evidence and domain investigation.")
     try:
         with tracing_context(enabled=False):
@@ -533,14 +585,26 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         activity.event("lead", "review", "completed", "Site review ready. Unsupported impacts remain unassessed.")
     except RunCancelled:
         activity.cancelled.set()
+        draft, water_plan = None, None
+        water_plan_local['alternatives'] = {}
         error = "Analysis canceled or time budget reached. Retrieved measurements are preserved."
     except Exception as failure:
         logging.getLogger(__name__).warning("Site review failed (%s)", type(failure).__name__)
         error = "The agent could not finish a source-validated review. Available measurements are shown below; retry the analysis."
         try:
-            activity.event("lead", "review", "failed", "Review unavailable; retrieved evidence is preserved. Retry analysis.")
+            activity.check()
+            if workflow == 'water' and 'draft' in attempted and (draft or draft_gap):
+                error = None
+                synthesis_warning = 'The narrative review was incomplete. The local geometry, source decisions and calculations remain available for inspection.'
+                report = {'findings': [], 'recommendations': [], 'questions': [draft_gap] if draft_gap else []}
+                activity.event('lead', 'review', 'partial', synthesis_warning)
+            else:
+                activity.event("lead", "review", "failed", "Review unavailable; retrieved evidence is preserved. Retry analysis.")
         except RunCancelled:
-            pass
+            activity.cancelled.set()
+            draft, water_plan = None, None
+            water_plan_local['alternatives'] = {}
+            error = 'Analysis canceled or time budget reached. Retrieved measurements are preserved.'
     files.update(backend.saved)
     if durable_agent:
         from traffic_retention import archive_artifact, NOTICE
@@ -562,12 +626,13 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                        if traffic.ready else next((item["value"] for item in reversed(traffic.facts) if item["id"] == "traffic-comparison-status"),
                            "A validated traffic comparison was not completed in this analysis request."))
             traffic.comparison = traffic.unavailable_comparison(message)
-    return {"runId":activity.id, "report":report, "analysisError":error, "facts":list(facts.values()),
+    return {"runId":activity.id, "report":report, "analysisError":error, 'synthesisWarning': synthesis_warning, "facts":list(facts.values()),
             "sourceWarnings":list(dict.fromkeys(warnings)), "sourceStatus":statuses,
             "evidence":evidence, "hydrology":hydrology,
             "proposal": traffic.proposal if traffic else draft.model_dump() if draft else None,
             "comparison": traffic.comparison if traffic else None,
-            "alternatives": traffic.alternatives if traffic else {}, "draftQuestion": draft_gap,
+            "alternatives": traffic.alternatives if traffic else water_plan_local["alternatives"], "draftQuestion": draft_gap,
+            "waterPlan": water_plan, "designHistory": (project or {}).get("designHistory", []),
             "virtualFiles":sorted(path for path in files if path.startswith("/project/")),
             "specialists":{name:bool(value.get("summary")) for name,value in summaries.items()},
             "projectId":project["id"] if project else None,

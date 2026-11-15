@@ -2,7 +2,7 @@
 
 Prepared November 14, 2026. Product decisions approved; implementation proceeds one authorized checkpoint at a time.
 
-**Current implementation:** Checkpoints 0–3 are pushed to `main` through `3515bd1` (Checkpoint 3), following `07c57af` and `e8fed6a`. [Checkpoint 4 researched location selection](CHECKPOINT_4_LOCATION_SELECTION.md) is implemented and uncommitted on `codex/checkpoint-4-location-selection`. Goal plus area now produces researched choices and waits for selection. Historical count layers remain removed; verified sheets remain internal simulation inputs. Desktop is the priority. Checkpoint 5 has not started.
+**Current implementation:** Checkpoints 0–4 are pushed to `main` through `26e3639` (Checkpoint 4), following `3515bd1`, `07c57af` and `e8fed6a`. [Checkpoint 5 stormwater design and revision](CHECKPOINT_5_STORMWATER_LOOP.md) is implemented and uncommitted on `codex/checkpoint-5-stormwater-loop`. A researched location now produces a sourced, revisable 2D concept with internal alternatives, explicit what-if calculations and saved design history. Historical count layers remain removed; verified sheets remain internal simulation inputs. Desktop is the priority. Checkpoint 6 has not started.
 
 Sustainability Map will help Los Angeles urban planners and traffic engineers discover environmental improvement opportunities, choose a location, and develop an inspectable physical concept through conversation. The primary workflow begins with a goal and a map area. The agent investigates that area, presents up to three supported locations, and waits for the user to choose one before developing and evaluating designs.
 
@@ -379,6 +379,8 @@ Connect discovery and sponsor-association tools to the lead's scouting procedure
 **Acceptance:** Both modes can return a supported shortlist from a real area; candidates have distinct reasons and mapped extents; fewer than three is handled; no detailed design proceeds before selection unless explicitly requested; “show more” preserves history; area changes and canceled runs cannot publish obsolete candidates. A more complete dataset cannot silently outrank a better supported environmental opportunity solely through readiness points.
 
 ### Checkpoint 5 Complete the stormwater design loop
+
+**Implemented for review:** See [Checkpoint 5 verification](CHECKPOINT_5_STORMWATER_LOOP.md). Real scout/select/draft/revision and explicit what-if passed, including both sponsor effects, direct-rain reservation and restart restoration. 213 Python tests and eight JavaScript test files pass. Changes remain uncommitted.
 
 **Outcome:** A selected opportunity becomes a sourced, revisable physical concept.
 

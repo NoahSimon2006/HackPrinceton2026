@@ -1,6 +1,6 @@
 # Checkpoint 4 — researched location selection
 
-Implemented November 15, 2026 on `codex/checkpoint-4-location-selection`. Checkpoint 3 was committed as `3515bd1` and pushed to `origin/main`, including the preceding checkpoints. Checkpoint 4 remains uncommitted for review. This report concerns Checkpoint 4 of the revised implementation plan; older numbered discovery/simulation reports describe earlier milestones.
+Implemented November 15, 2026, committed as `26e3639` (`Add researched area opportunities and location selection`) and pushed to `origin/main`. Checkpoint 3 is `3515bd1`; the push includes the preceding checkpoints. This report concerns Checkpoint 4 of the revised implementation plan; older numbered discovery/simulation reports describe earlier milestones.
 
 ## Delivered behavior
 

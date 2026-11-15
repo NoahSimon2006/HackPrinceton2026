@@ -82,6 +82,21 @@
             <form id="site-analysis" class="planner-card">
               <h2><label for="planning-brief">Ask the planning agent</label></h2>
               <textarea id="planning-brief" rows="3" maxlength="1500" required aria-describedby="analysis-provider"></textarea>
+              <details id="stormwater-settings" class="stormwater-settings" hidden>
+                <summary>Stormwater design &amp; what-if settings</summary>
+                <p>Leave dimensions blank to let the agent propose them. These controls override proposed choices and stay with this project.</p>
+                <div class="water-input-grid">
+                  <label for="water-target-area">Target treatment area (m²)<input id="water-target-area" type="number" min="2" max="500" step="any" placeholder="Agent choice"></label>
+                  <label for="water-storage-depth">Effective ponding depth (m)<input id="water-storage-depth" type="number" min="0.05" max="0.30" step="any" placeholder="Agent choice"></label>
+                  <label for="water-layout">Preferred form<select id="water-layout"><option value="auto">Agent choice</option><option value="compact">Compact planting area</option><option value="linear">Linear planting strip</option></select></label>
+                  <label for="water-placement">Placement preference<select id="water-placement"><option value="auto">Agent choice</option><option value="near_selection">Near selected location</option><option value="landscape_first">Prefer landscaping evidence</option><option value="away_from_previous">Away from previous footprint</option></select></label>
+                </div>
+                <label class="evidence-toggle"><input id="water-protect-access" type="checkbox"> Require mapped driveway or loading access to stay clear</label>
+                <label for="water-drainage-assumption">Contributing runoff<select id="water-drainage-assumption"><option value="unknown">Drainage connection unknown · do not calculate capture</option><option value="marked_connected">What-if: assume marked runoff areas drain to this treatment</option></select></label>
+                <label for="water-runoff-coefficient">What-if runoff coefficient (0–1)<input id="water-runoff-coefficient" type="number" min="0" max="1" step="any" placeholder="Enter an explicit assumption" disabled></label>
+                <p id="water-what-if-note" class="water-scenario-note" hidden>This is an assumed drainage connection, not a verified catchment. Outline potential runoff sources in map markings and name the rainfall event below. Overlapping source areas are counted once; rain onto the treatment reserves storage first.</p>
+                <p>To revise, change a control, add a keep-clear marking, or describe the change above, then continue the project.</p>
+              </details>
               <p id="analysis-provider">Your question, measured summaries and selected property facts go to xAI. Coordinates and polygons stay local.</p>
               <button id="run-site-analysis" type="submit" disabled>Analyze site</button>
               <p id="analysis-site-hint">Select a property or pick a map location to enable analysis.</p>
@@ -91,6 +106,7 @@
                 <ol id="activity-list"></ol>
               </details>
               <p id="analysis-message" role="status" hidden></p>
+              <p id="analysis-synthesis-warning" class="water-scenario-note" role="status" hidden></p>
               <p id="analysis-stale" class="analysis-stale" hidden>Inputs changed or the review is incomplete. Analyze again to refresh the assessment.</p>
               <div id="agent-assessment" class="site-review" aria-live="polite" hidden></div>
             </form>
@@ -104,6 +120,16 @@
             <ul id="proposal-assumptions" hidden></ul>
             <button id="focus-proposal" type="button">Zoom to footprint</button>
             <p id="proposal-revision"></p><p id="proposal-stale" hidden>Inputs changed. Analyze again to update this proposal.</p>
+          </section>
+          <section id="water-design-review" class="planner-card water-design-review" hidden>
+            <span class="section-label">STORMWATER CONCEPT STUDY</span>
+            <h2>Why this footprint</h2><p id="water-design-selection"></p>
+            <p id="water-design-scenario" class="water-scenario-note"></p>
+            <p id="water-design-stale" class="analysis-stale" hidden>Inputs changed. These alternatives and calculations belong to the earlier design revision.</p>
+            <details><summary>Sponsor evidence &amp; siting decisions</summary><ul id="water-design-decisions"></ul></details>
+            <details><summary>Inspect internal alternatives</summary><p>These alternatives belong to the same study. Inspecting one changes only the map preview, not the saved concept or project constraints.</p><div id="water-design-alternatives"></div></details>
+            <details><summary>Earlier design revisions</summary><div id="water-design-history"></div></details>
+            <button id="water-return-current" type="button" hidden>Return to current concept</button>
           </section>
           <section id="traffic-comparison" class="planner-card traffic-comparison" hidden aria-live="polite">
             <span class="section-label">TRAFFIC DESIGN COMPARISON</span>
@@ -158,7 +184,7 @@
                 <input id="rain-depth" type="number" min="0" step="any" inputmode="decimal">
                 <label for="rain-source">Scenario source or assumption</label>
                 <input id="rain-source" type="text" maxlength="160" placeholder="e.g. LA County contour estimate">
-                <p>Scenario inputs stay separate from the county estimate. Changing rainfall marks the comparison stale; choose Update comparison to recalculate.</p>
+                <p>Name this event or assumption. It stays separate from the county estimate. Changing rainfall marks the existing concept stale; continue the project to recalculate.</p>
                 <div class="planner-sources">
                   <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/hydrologygis/MapServer/3" target="_blank" rel="noopener">County rainfall contours ↗</a>
                   <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/PW_Open_Data/MapServer/36" target="_blank" rel="noopener">County watershed subbasins ↗</a>
