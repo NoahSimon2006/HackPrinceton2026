@@ -32,8 +32,8 @@ let emissionLines = new Map();
 let selectedRoad = null;
 let selectedLine = null;
 let planningMode = "street";
-// The legacy city layer contains assumed class-default volumes. Only comparisons
-// backed by a selected official turning sheet are enabled in this checkpoint.
+// The city layer mostly uses assumed class-default volumes; its switch, legend and
+// road inspector say which segments have their own count.
 function emissionsActive() { return planningMode === "street" && !$("emissions-layer").disabled; }
 let activePeriod = "midday";
 let activeMetric = "co2";
@@ -490,7 +490,7 @@ function syncEmissionsVisibility() {
   if (!ready) $("road-inspector").hidden = true;
 }
 function loadEmissions() {
-  // Archived class-assumption traffic is not an approved real-data baseline.
+  // Disabling the switch withholds the layer entirely.
   if ($("emissions-layer").disabled) return;
   if (emissionsData) {
     renderEmissions();
