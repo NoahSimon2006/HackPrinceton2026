@@ -44,7 +44,11 @@ STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
           "/vendor/OrbitControls.js": "vendor/OrbitControls.js", "/vendor/three.LICENSE": "vendor/three.LICENSE",
           "/vector-zoom.js": "vector-zoom.js", "/guide.js": "guide.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
-          "/vendor/leaflet.css": "vendor/leaflet.css"}
+          "/vendor/leaflet.css": "vendor/leaflet.css",
+          # Landing page; the map app stays at "/".
+          "/welcome": "welcome.html", "/welcome.css": "welcome.css", "/welcome.js": "welcome.js",
+          "/welcome-traffic.jpg": "welcome-traffic.jpg", "/welcome-stormwater.jpg": "welcome-stormwater.jpg",
+          "/welcome-share.jpg": "welcome-share.jpg"}
 
 
 def load_env():
@@ -571,8 +575,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path.path in STATIC:
                 file = PUBLIC / STATIC[path.path]
-                mime = "text/html" if file.suffix == ".html" else (
-                    "text/css" if file.suffix == ".css" else "text/javascript" if file.suffix == ".js" else "text/plain")
+                mime = {".html": "text/html", ".css": "text/css", ".js": "text/javascript",
+                        ".jpg": "image/jpeg"}.get(file.suffix, "text/plain")
                 # Local development reads assets from disk on every request.
                 # Revalidate the page so reloads don't keep an older app bundle.
                 cache = "public, max-age=3600" if file.parent.name == "vendor" else "no-cache"
