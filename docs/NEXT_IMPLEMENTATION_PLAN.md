@@ -2,7 +2,7 @@
 
 Prepared November 14, 2026. Product decisions approved; implementation proceeds one authorized checkpoint at a time.
 
-**Current implementation:** Checkpoints 0–5 are pushed to `main` through `abf6ef3`, following `26e3639` and `3515bd1`. [Checkpoint 6 traffic design/evaluation/revision](CHECKPOINT_6_TRAFFIC_LOOP.md) is included in this release with the model reliability improvements. Environmental-first policy, named revisions and saved traffic history are implemented. A real native comparison produced three valid rejections; the formerly rate-limited native revision now completes with the same key after the model reliability fix. No eligible real traffic recommendation has been established. Desktop remains the priority; Checkpoint 7 has not started.
+**Current implementation (November 15, 2026):** Checkpoints 0–6 and the [Checkpoint 6 follow-up](CHECKPOINT_6_FOLLOWUP.md) are pushed to `main` through `abb548a`. [Checkpoint 7 core product and demonstration](CHECKPOINT_7_CORE_DEMO.md) is implemented locally with acceptance gaps. Fresh stormwater scouting, the native 40 → 20 m² revision, cancellation recovery and saved traffic history inspection passed. The final native stormwater check passed with both specialists after the latest fix; the final scout check also passed with both specialists. The [desktop walkthrough](DEMO_WALKTHROUGH.md) distinguishes fresh investigation from saved historical evaluations. No eligible real traffic recommendation or material positive CoStar traffic-access evidence at Main/1st has been established; narrow-screen review was limited, and fault/race/source-expiry checks used harnesses. Desktop remains the priority; Checkpoint 8 has not started and requires the user's next instruction.
 
 Sustainability Map will help Los Angeles urban planners and traffic engineers discover environmental improvement opportunities, choose a location, and develop an inspectable physical concept through conversation. The primary workflow begins with a goal and a map area. The agent investigates that area, presents up to three supported locations, and waits for the user to choose one before developing and evaluating designs.
 
@@ -399,6 +399,8 @@ Connect location findings to source-verified demand and valid network inputs. Ge
 **Acceptance:** Complete scout → select → design → evaluate → revise. Verify the hard gates and exact geometry/metric agreement. Demonstrate a valid failed alternative and pursue an eligible real alternative. If data or results prevent an eligible recommendation, record that release gap explicitly; a transparent rejection may still be shown in the demo.
 
 ### Checkpoint 7 Verify the core product and demonstration
+
+**Current status:** Implemented locally, with acceptance gaps. The [report](CHECKPOINT_7_CORE_DEMO.md) separates fresh desktop/native checks, reused historical evidence and harness coverage. The final native scout check completed both specialists; an eligible traffic winner, material CoStar traffic-access evidence and a full narrow-screen journey remain gaps. No blanket release signoff is claimed.
 
 **Outcome:** Both workflows are usable and the sponsor/agent contributions are demonstrable.
 

@@ -19,7 +19,7 @@ from langgraph.types import Command
 from deepagents import create_deep_agent
 from agent_workspace import (WorkspaceBackend, FILESYSTEM_TOOLS, skill_files, permissions, tool_guard, serializable_response)
 from deepagents.profiles import register_harness_profile, HarnessProfile, GeneralPurposeSubagentProfile
-from langchain.agents.middleware import ModelCallLimitMiddleware, after_model, wrap_model_call
+from langchain.agents.middleware import ModelCallLimitMiddleware, after_agent, after_model, wrap_model_call
 from langchain.agents.structured_output import ToolStrategy
 from langchain_xai import ChatXAI
 from langsmith import tracing_context
@@ -406,9 +406,19 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             if name == "lead":
                 check_recommendations(recommendations)
 
+        def request_review_repair():
+            nonlocal review_repair_used, review_repair_pending
+            review_repair_used = review_repair_pending = True
+            activity.event(name, "structured-review", "retry",
+                           "Saving the collected specialist findings in the required cited report format.")
+            return {"messages": [HumanMessage(content=
+                "Your source investigation is complete, but the last response did not save a validated report. "
+                "Finish now with the SiteReview tool, using only the facts already returned and their exact cited values. "
+                "Do not call source or filesystem tools. If a conclusion is unsupported, omit it and ask the necessary question.")],
+                "jump_to": "model"}
+
         @after_model(can_jump_to=["model", "end"])
         def repair_specialist_review(state, runtime):
-            nonlocal review_repair_used, review_repair_pending
             if name == "lead":
                 return None
             activity.check()
@@ -422,14 +432,29 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             if (review_repair_used or last is None or last.tool_calls or needed - attempted
                     or f"/skills/{primary_skill}/SKILL.md" not in skill_reads[name]):
                 return None
-            review_repair_used = review_repair_pending = True
-            activity.event(name, "structured-review", "retry",
-                           "Saving the collected specialist findings in the required cited report format.")
-            return {"messages": [HumanMessage(content=
-                "Your source investigation is complete, but plain text did not save a report. "
-                "Finish now with the SiteReview tool, using only the facts already returned and their exact cited values. "
-                "Do not call source or filesystem tools. If a conclusion is unsupported, omit it and ask the necessary question.")],
-                "jump_to": "model"}
+            return request_review_repair()
+
+        @after_agent(can_jump_to=["model"])
+        def repair_terminal_review(state, runtime):
+            # Mixed ordinary + structured calls can end the native graph after
+            # tools run even when the structured ToolMessage reports validation
+            # failure. At this boundary every tool has replied, so one correction
+            # can reuse the existing evidence without replaying any tool call.
+            if name == "lead":
+                return None
+            activity.check()
+            if (state.get("structured_response") is not None or review_repair_used or needed - attempted
+                    or f"/skills/{primary_skill}/SKILL.md" not in skill_reads[name]):
+                return None
+            messages = state["messages"]
+            position = next((i for i in range(len(messages)-1, -1, -1) if isinstance(messages[i], AIMessage)), None)
+            if position is None:
+                return None
+            review_ids = {call["id"] for call in messages[position].tool_calls if call["name"] == "SiteReview"}
+            failed = any(isinstance(item, ToolMessage) and item.tool_call_id in review_ids and
+                         (item.status == "error" or str(item.content).startswith("Error"))
+                         for item in messages[position+1:])
+            return request_review_repair() if failed else None
 
         @wrap_model_call
         def scoped(request, handler):
@@ -486,7 +511,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             subagents=subagents, skills=["/skills/"], permissions=permissions(name),
             # after_model hooks run in reverse order: increment the call limit
             # before a specialist repair is allowed to jump back to the model.
-            middleware=[repair_specialist_review, ModelCallLimitMiddleware(run_limit=12, exit_behavior="error"), scoped,
+            middleware=[repair_specialist_review, repair_terminal_review, ModelCallLimitMiddleware(run_limit=12, exit_behavior="error"), scoped,
                         tool_guard(name, activity, skill_reads, artifact_reads, assignments, backend, task_failure)],
             system_prompt=instruction, checkpointer=checkpoint_backend if name == "lead" else None,
             response_format=ToolStrategy(review_schema(facts, attempted, needed, validated,

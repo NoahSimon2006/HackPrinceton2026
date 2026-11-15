@@ -6,6 +6,7 @@
   let selected = null, published = null, comparison = null, layer = null, request = 0, controller;
   let realRevision = 0;
   let currentWater = null, currentTraffic = null;
+  let sourceInspectButtons = [];
   const show = $("show-proposal");
   const statuses = {fixture:"Development fixture", draft:"Draft concept", conditional:"Conditional treatment", recommended:"Recommended",
     tested:"Tested, eligible", rejected:"Tested, rejected"};
@@ -19,6 +20,14 @@
   };
   const number = (value, unit = "", digits = 1) => finite(value)
     ? `${value.toLocaleString(undefined, {maximumFractionDigits:digits})}${unit ? ` ${unit}` : ""}` : "Not assessed";
+  function savedNotice(study) {
+    if(!study?.restored && !study?.savedAt)return '';
+    const timestamp=typeof study.savedAt==='string'?Date.parse(study.savedAt):NaN;
+    const publication=Number.isFinite(timestamp)
+      ? `published ${new Date(timestamp).toISOString().replace('T',' ').replace(/\.\d{3}Z$/,' UTC')}`
+      : 'original publication time unavailable';
+    return `Saved result · ${publication}. Historical evaluation; reopening does not rerun it. Source observation dates are separate.`;
+  }
   function visible() {
     if (!layer) return;
     if (show.checked) layer.addTo(map); else layer.remove();
@@ -40,6 +49,7 @@
     selected = event.siteId ? event : null;
     comparison = null; realRevision = 0;
     currentWater = null; currentTraffic = null;
+    sourceInspectButtons = [];
     removeProposal();
     $("traffic-comparison").hidden = true;
     $("water-design-review").hidden = true;
@@ -76,7 +86,7 @@
         : {color:"#ffdc83",weight:3,fillColor:"#e4ad39",fillOpacity:.5},
     });
   }
-  function publish(p, area, site, replacement = prepareLayer(p)) {
+  function publish(p, area, site, replacement = prepareLayer(p), study = null) {
     const fixture = p.development_fixture, draft = !fixture && site.workflow === 'water';
     // Publish geometry, measurements and identity together after validation.
     layer?.remove(); layer = replacement; published = p;
@@ -106,8 +116,8 @@
     if (!fixture) for (const [name, check] of [["Access",p.access],["Overlap",p.overlap]]) {
       $("proposal-checks").append(element("p", `${name}: ${check?.text ?? "Not assessed"}`));
     }
-    $("proposal-revision").textContent = `Revision ${p.revision} · inputs ${p.input_revision} · ${p.input_hash.slice(0,8)}`;
-    const stale = p.input_revision !== site.inputRevision;
+    $("proposal-revision").textContent = [`Revision ${p.revision} · inputs ${p.input_revision} · ${p.input_hash.slice(0,8)}`,savedNotice(study)].filter(Boolean).join('. ');
+    const stale = p.input_revision !== site.inputRevision || Boolean(study?.historicalReference);
     $("proposal-map-caption").textContent = caption(stale);
     $("proposal-stale").hidden = !stale;
     $("revise-proposal-fixture").disabled = !fixture;
@@ -116,7 +126,7 @@
     const plan=study.waterPlan, c=plan?.comparison ?? {}, p=alternativeEntry?study.alternatives?.[alternativeEntry.id]:study.proposal;
     $('water-design-review').hidden=!plan && !(currentWater?.designHistory?.length);
     $('water-return-current').hidden=!preview;
-    $('water-design-stale').hidden=study.inputRevision===selected.inputRevision;
+    $('water-design-stale').hidden=study.inputRevision===selected.inputRevision && !study.historicalReference;
     $('water-design-selection').textContent=alternativeEntry
       ? `Inspecting ${alternativeEntry.label || label(alternativeEntry.id)}: ${alternativeEntry.reason || alternativeEntry.status || 'Alternative footprint.'}`
       : c.selectionBasis || c.reason || (p?'A provisional concept selected from the available mapped space.':'No eligible concept fits the checked constraints.');
@@ -127,18 +137,22 @@
     $('water-design-scenario').textContent=[name?`Event: ${name}.`:'Event assumptions are recorded with the footprint.',
       assumed?'What-if: marked runoff areas are assumed connected. Capture is temporary event storage, not verified drainage or flood protection.':
         captured?.status==='calculated'?'Scenario calculation; inspect the stated drainage assumptions before relying on capture.':'Drainage connection is unknown. Runoff capture is not assessed.',
-      `Study revision ${study.revision}.`,preview].filter(Boolean).join(' ');
+      `Study revision ${study.revision}.`,savedNotice(study),preview].filter(Boolean).join(' ');
     $('water-design-decisions').replaceChildren();
+    sourceInspectButtons=[];
     const decisions=alternativeEntry?(alternativeEntry.decisions ?? []):(plan?.decisions ?? []);
     for(const decision of decisions) {
       const text=typeof decision==='string'?decision:[decision.source || decision.provider,decision.decision || decision.text || decision.reason].filter(Boolean).join(': ');
       const item=element('li',text || 'Inspect the sourced siting evidence.');
       if(typeof decision==='object' && (decision.evidence_ids || decision.evidenceIds)?.length)
         item.append(element('small',` Evidence: ${(decision.evidence_ids || decision.evidenceIds).join(', ')}`));
-      if(study===currentWater && !alternativeEntry && typeof decision==='object' && (decision.evidence_ids || decision.evidenceIds)?.length) {
+      if(study===currentWater && !study.historicalReference && !alternativeEntry && typeof decision==='object' && (decision.evidence_ids || decision.evidenceIds)?.length) {
         const inspect=element('button','Inspect source evidence');inspect.type='button';
-        inspect.addEventListener('click',()=>map.fire('plannerinspectevidence',{siteId:study.siteId,
-          evidenceIds:[...(decision.fact_id?[decision.fact_id]:[]),...(decision.evidence_ids || decision.evidenceIds)]}));item.append(inspect);
+        inspect.addEventListener('click',()=>{
+          if(study!==currentWater || study.historicalReference || study.siteId!==selected?.siteId)return;
+          map.fire('plannerinspectevidence',{siteId:study.siteId,
+            evidenceIds:[...(decision.fact_id?[decision.fact_id]:[]),...(decision.evidence_ids || decision.evidenceIds)]});
+        });item.append(inspect);sourceInspectButtons.push(inspect);
       }
       $('water-design-decisions').append(item);
     }
@@ -160,14 +174,14 @@
           try {
             const ownSite={...selected,inputRevision:study.inputRevision};
             const area=validate(alternative,ownSite,study.revision,false);
-            publish(alternative,area,selected,prepareLayer(entry.status==='rejected'?{...alternative,status:'rejected'}:alternative));focus();
+            publish(alternative,area,selected,prepareLayer(entry.status==='rejected'?{...alternative,status:'rejected'}:alternative),study);focus();
             renderWaterStudy(study,'Alternative footprint · read-only inspection. The saved concept and its constraints are unchanged.',entry);
             $('proposal-kind').textContent=`Study alternative · ${entry.status || 'concept'}`;
             if(entry.status==='rejected') {
               $('proposal-review').setAttribute('data-status','rejected');
               $('proposal-summary').textContent=`Rejected: ${entry.reason || 'This footprint failed the siting checks.'} ${alternative.recommendation}`;
             }
-            $('proposal-map-caption').textContent=`${entry.status==='rejected'?'Rejected alternative':'Alternative'} preview · revision ${study.revision}${study.inputRevision!==selected.inputRevision?' · stale inputs':''}`;
+            $('proposal-map-caption').textContent=`${entry.status==='rejected'?'Rejected alternative':'Alternative'} preview · revision ${study.revision}${study.inputRevision!==selected.inputRevision || study.historicalReference?' · stale inputs':''}`;
             $('water-return-current').hidden=false;
           } catch(error) {$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Alternative unavailable: ${error.message}`;}
         });card.append(inspect);
@@ -184,8 +198,9 @@
         try {
           const ownSite={...selected,inputRevision:saved.inputRevision ?? saved.proposal.input_revision};
           const area=validate(saved.proposal,ownSite,saved.revision,false);
-          publish(saved.proposal,area,selected);focus();
-          renderWaterStudy({...saved,inputRevision:ownSite.inputRevision},'Earlier revision · read-only inspection. The current concept is unchanged.');
+          const historical={...saved,inputRevision:ownSite.inputRevision,restored:true};
+          publish(saved.proposal,area,selected,undefined,historical);focus();
+          renderWaterStudy(historical,'Earlier revision · read-only inspection. The current concept is unchanged.');
           $('proposal-kind').textContent=`Earlier revision ${saved.revision} · read only`;
           $('proposal-map-caption').textContent=`Earlier revision ${saved.revision} · read-only preview`;
           // Earlier geometry is an intentional inspection, not a request to
@@ -238,12 +253,12 @@
   function showTrafficEvaluation(study, alternatives, preview=false) {
     const c=study.comparison, winner=alternatives[c.ranking.recommended];
     renderComparison(c,alternatives,study,preview); comparison=c;
-    if(winner)publish(...winner.slice(0,2),selected,winner[2]);else removeProposal();
+    if(winner)publish(...winner.slice(0,2),selected,winner[2],study);else removeProposal();
     if(preview) {
       $('comparison-stale').hidden=true;$('proposal-stale').hidden=true;
       if(published){$('proposal-kind').textContent=`Earlier evaluation ${study.revision} · read only`;
         $('proposal-map-caption').textContent=`Earlier evaluation ${study.revision} · read-only preview`;}
-    } else $('comparison-stale').hidden=study.inputRevision===selected.inputRevision;
+    } else $('comparison-stale').hidden=study.inputRevision===selected.inputRevision && !study.historicalReference;
   }
   function renderTrafficContext(study, preview) {
     const c=study.comparison,plan=study.trafficPlan ?? {},readiness=plan.readiness ?? c.readiness;
@@ -255,15 +270,20 @@
     $('comparison-missing').replaceChildren();
     for(const missing of readiness?.missing ?? [])$('comparison-missing').append(element('li',typeof missing==='string'?missing:missing.label || missing.reason || 'Required evidence remains unavailable.'));
     const revisionText=typeof plan.revisionSummary==='string'?plan.revisionSummary:plan.revisionSummary?.text;
-    $('comparison-revision-summary').hidden=!preview && !revisionText;
-    $('comparison-revision-summary').textContent=[preview?'Earlier evaluation · read-only inspection. The current project and constraints are unchanged.':'',revisionText].filter(Boolean).join(' ');
+    const notice=savedNotice(study);
+    $('comparison-revision-summary').hidden=!preview && !revisionText && !notice;
+    $('comparison-revision-summary').textContent=[preview?'Earlier evaluation · read-only inspection. The current project and constraints are unchanged.':'',notice,revisionText].filter(Boolean).join(' ');
     $('traffic-design-decisions').replaceChildren();
+    sourceInspectButtons=[];
     for(const decision of plan.sourceDecisions ?? []) {
       const item=element('li',typeof decision==='string'?decision:[decision.source,decision.decision || decision.text].filter(Boolean).join(': '));
       if(decision.evidence_ids?.length)item.append(element('small',` Evidence: ${decision.evidence_ids.join(', ')}`));
-      if(!preview && decision.fact_id) {
+      if(!preview && !study.historicalReference && decision.fact_id) {
         const inspect=element('button','Inspect source evidence');inspect.type='button';
-        inspect.addEventListener('click',()=>map.fire('plannerinspectevidence',{siteId:study.siteId,evidenceIds:[decision.fact_id,...(decision.evidence_ids ?? [])]}));item.append(inspect);
+        inspect.addEventListener('click',()=>{
+          if(study!==currentTraffic || study.historicalReference || study.siteId!==selected?.siteId)return;
+          map.fire('plannerinspectevidence',{siteId:study.siteId,evidenceIds:[decision.fact_id,...(decision.evidence_ids ?? [])]});
+        });item.append(inspect);sourceInspectButtons.push(inspect);
       }
       $('traffic-design-decisions').append(item);
     }
@@ -275,7 +295,7 @@
       inspect.addEventListener('click',()=>{
         if(!selected || selected.workflow!=='street' || currentTraffic?.siteId!==selected.siteId)return;
         try {
-          const own={...saved,siteId:currentTraffic.siteId,workflow:'street',inputRevision:saved.inputRevision ?? saved.comparison.input_revision};
+          const own={...saved,siteId:currentTraffic.siteId,workflow:'street',inputRevision:saved.inputRevision ?? saved.comparison.input_revision,restored:true};
           showTrafficEvaluation(own,trafficAlternatives(own),true);
         }catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Earlier evaluation unavailable: ${error.message}`;}
       });$('traffic-design-history').append(inspect);
@@ -335,7 +355,7 @@
       inspect.type = "button";
       inspect.addEventListener("click", () => {
         if (comparison !== c) return;
-        publish(proposal, area, selected, replacement);
+        publish(proposal, area, selected, replacement, study);
         if(preview){$('proposal-kind').textContent=`Earlier evaluation ${study.revision} · ${statuses[proposal.status]}`;
           $('proposal-map-caption').textContent=`Earlier evaluation ${study.revision} · ${statuses[proposal.status]} · read-only preview`;
           $('proposal-stale').hidden=true;}
@@ -387,7 +407,7 @@
         currentWater={...event};
         $("proposal-result-message").hidden = Boolean(p);
         if (p) {
-          publish(p, area, selected, replacement);
+          publish(p, area, selected, replacement, currentWater);
           focus();
         } else {
           if(published) {$("proposal-stale").hidden=false;$("proposal-map-caption").textContent=`${caption(true)} · previous result`;}
@@ -452,7 +472,7 @@
   $("revise-proposal-fixture").addEventListener("click", preview);
   $('water-return-current').addEventListener('click',()=>{
     if(!currentWater || !selected || currentWater.siteId!==selected.siteId)return;
-    if(currentWater.proposal)publish(currentWater.proposal,validate(currentWater.proposal,{...selected,inputRevision:currentWater.inputRevision},currentWater.revision,false),selected);
+    if(currentWater.proposal)publish(currentWater.proposal,validate(currentWater.proposal,{...selected,inputRevision:currentWater.inputRevision},currentWater.revision,false),selected,undefined,currentWater);
     else removeProposal();
     renderWaterStudy(currentWater);
   });
@@ -463,11 +483,23 @@
   });
   map.on("plannersite", clear);
   map.on("plannerresult", receive);
+  map.on('plannerinvestigation',event=>{
+    if(!selected || event.siteId!==selected.siteId || event.workflow!==selected.workflow ||
+      event.inputRevision!==selected.inputRevision || !Number.isInteger(event.revision) || event.revision<=realRevision)return;
+    const study=selected.workflow==='water'?currentWater:currentTraffic;
+    if(study)study.historicalReference=true;
+    // The next run may reuse source IDs with new values. Preserve the displayed
+    // footprint/preview, but detach its evidence links before that ledger changes.
+    for(const button of sourceInspectButtons){button.hidden=true;button.disabled=true;}
+    if(published){$('proposal-stale').hidden=false;$('proposal-map-caption').textContent=caption(true);}
+    if(comparison)$('comparison-stale').hidden=false;
+    if(currentWater)$('water-design-stale').hidden=false;
+  });
   map.on('plannerrestore',event=>{
     if(selected?.workflow==='street' && event.workflow==='street' && event.siteId===selected.siteId &&
         event.comparison && event.inputRevision<=selected.inputRevision && event.revision>=realRevision) {
       try {
-        const prepared=trafficAlternatives(event);currentTraffic={...event};realRevision=event.revision;
+        const prepared=trafficAlternatives(event);currentTraffic={...event,restored:true};realRevision=event.revision;
         showTrafficEvaluation(currentTraffic,prepared);$('comparison-stale').hidden=false;
         if(published){$('proposal-stale').hidden=false;$('proposal-map-caption').textContent=`${caption(true)} · saved previous result`;}
       }catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Saved evaluation unavailable: ${error.message}`;}
@@ -477,8 +509,8 @@
       !event.proposal || event.inputRevision>selected.inputRevision || event.revision<realRevision)return;
     try {
       const area=validate(event.proposal,{...selected,inputRevision:event.inputRevision},event.revision,false);
-      currentWater={...event};realRevision=event.revision;
-      publish(event.proposal,area,selected);renderWaterStudy(currentWater);
+      currentWater={...event,restored:true};realRevision=event.revision;
+      publish(event.proposal,area,selected,undefined,currentWater);renderWaterStudy(currentWater);
       $('proposal-stale').hidden=false;$('water-design-stale').hidden=false;
       $('proposal-map-caption').textContent=`${caption(true)} · saved previous result`;
     }catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Saved footprint unavailable: ${error.message}`;}

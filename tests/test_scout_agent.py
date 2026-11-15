@@ -4,6 +4,7 @@ from threading import Barrier
 import unittest
 from unittest.mock import Mock, patch
 from pydantic import Field
+from langchain_core.messages import AIMessage
 from agent_activity import Activity, RunCancelled
 from scout_agent import review_scout
 from test_site_agent import ScriptedModel, message, call, read
@@ -108,12 +109,98 @@ class ScoutAgentTest(unittest.TestCase):
         self.assertIsNone(result["review"])
         self.assertNotIn("PRIVATE TOKEN ERROR",str(result))
 
-    def test_plain_text_specialist_saves_partial_and_lead_can_still_cite_facts(self):
-        from langchain_core.messages import AIMessage
-        result,_,_,saved,_=self.run_graph([specialist([AIMessage(content="I cannot finish the schema.")]),specialist(),lead()])
-        self.assertEqual(result["agentStatus"],"partial")
-        self.assertIsNotNone(result["review"])
-        self.assertEqual(json.loads(saved["/project/reports/site-evidence.json"])["status"],"partial")
+    def test_plain_specialist_completion_gets_one_cited_correction_without_source_replay(self):
+        domain=specialist([AIMessage(content="Candidate evidence inspected."),review()])
+        result,_,research,saved,events=self.run_graph([specialist(),domain,lead()])
+        self.assertEqual(result["agentStatus"],"complete")
+        self.assertEqual(result["specialists"],{"site-evidence":"complete","domain-analysis":"complete"})
+        self.assertEqual(domain.tool_sets[-1],{"ScoutReview"})
+        self.assertEqual(len(domain.seen),4)
+        research.assert_called_once()
+        self.assertEqual(len([e for e in events if e["stage"]=="structured-review"]),1)
+        self.assertEqual(json.loads(saved["/project/reports/domain-analysis.json"])["status"],"complete")
+        self.assertIn("/project/reports/domain-analysis.json",result["artifactsRead"]["lead"])
+
+    def test_skipped_candidate_read_gets_one_bounded_read_then_cited_review(self):
+        domain=ScriptedModel(responses=[
+            message(read("/skills/opportunity-scouting/SKILL.md"),read("/project/brief.json")),
+            AIMessage(content="Candidate investigation complete."),
+            message(call("read_candidate_evidence")),review()])
+        result,_,research,saved,events=self.run_graph([specialist(),domain,lead()])
+        self.assertEqual(result["specialists"]["domain-analysis"],"complete")
+        self.assertEqual(len(domain.seen),4)
+        self.assertEqual(domain.tool_sets[-2],{"read_candidate_evidence","ScoutReview"})
+        self.assertEqual(domain.tool_sets[-1],{"ScoutReview"})
+        self.assertEqual([e["stage"] for e in events if e["specialist"]=="domain-analysis" and e["status"]=="retry"],
+                         ["required-evidence","structured-review"])
+        self.assertEqual(json.loads(saved["/project/reports/domain-analysis.json"])["status"],"complete")
+        research.assert_called_once()
+
+    def test_missing_read_correction_cannot_skip_evidence_or_use_other_tools(self):
+        for correction in (AIMessage(content="Still plain text."),review(),
+                           message(call("write_file",{"file_path":"/project/notes/domain-analysis/unexpected.md","content":"UNEXPECTED"}))):
+            with self.subTest(correction=correction):
+                domain=ScriptedModel(responses=[
+                    message(read("/skills/opportunity-scouting/SKILL.md"),read("/project/brief.json")),
+                    AIMessage(content="Candidate investigation complete."),correction,review()])
+                result,_,research,saved,events=self.run_graph([specialist(),domain,lead()])
+                self.assertEqual(result["specialists"]["domain-analysis"],"partial")
+                self.assertEqual(len(domain.seen),3)
+                self.assertEqual(len(domain.responses),1)
+                self.assertEqual(len([e for e in events if e["stage"]=="required-evidence"]),1)
+                self.assertNotIn("UNEXPECTED",str(saved))
+                research.assert_called_once()
+
+    def test_mixed_forbidden_report_write_and_invalid_review_gets_one_correction(self):
+        mixed=message(call("write_file",{"file_path":"/project/reports/domain-analysis.json","content":"FORGED"}),
+                      call("ScoutReview",{"findings":[{"candidate_id":"candidate-a","text":"Capture 9999 m².","fact_ids":["terrain-signal"]}]}))
+        domain=specialist([mixed,review()])
+        result,_,research,saved,events=self.run_graph([specialist(),domain,lead()])
+        self.assertEqual(result["specialists"]["domain-analysis"],"complete")
+        self.assertEqual(len(domain.seen),4)
+        self.assertEqual(domain.tool_sets[-1],{"ScoutReview"})
+        self.assertEqual(len([e for e in events if e["stage"]=="structured-review"]),1)
+        self.assertNotIn("FORGED",str(saved))
+        self.assertNotIn("9999",saved["/project/reports/domain-analysis.json"])
+        research.assert_called_once()
+
+    def test_failed_specialist_correction_stays_partial_bounded_and_cannot_replay_tools(self):
+        for correction in (AIMessage(content="Still plain text."),review("Capture 9999 m²."),review(ids=["invented"]),
+                           message(call("read_candidate_evidence")),
+                           message(call("write_file",{"file_path":"/project/notes/domain-analysis/replayed.md","content":"REPLAYED"}))):
+            with self.subTest(correction=correction):
+                domain=specialist([AIMessage(content="Candidate evidence inspected."),correction,review()])
+                result,_,research,saved,events=self.run_graph([specialist(),domain,lead()])
+                self.assertEqual(result["agentStatus"],"partial")
+                self.assertIsNotNone(result["review"])
+                self.assertEqual(result["candidates"],bundle()["candidates"])
+                self.assertEqual(json.loads(saved["/project/reports/domain-analysis.json"])["status"],"partial")
+                self.assertEqual(len(domain.seen),4)
+                self.assertEqual(len(domain.responses),1,"the failed correction must not start a second retry")
+                self.assertEqual(domain.tool_sets[-1],{"ScoutReview"})
+                self.assertEqual(len([e for e in events if e["stage"]=="structured-review"]),1)
+                research.assert_called_once()
+                self.assertNotIn("REPLAYED",str(saved))
+                self.assertNotIn("9999",str(result["review"]))
+
+    def test_specialist_correction_respects_existing_eight_call_limit(self):
+        domain=specialist([*[message(read("/project/brief.json")) for _ in range(5)],
+                           AIMessage(content="Candidate evidence inspected."),review()])
+        result,_,research,_,_=self.run_graph([specialist(),domain,lead()])
+        self.assertEqual(len(domain.seen),8)
+        self.assertEqual(len(domain.responses),1)
+        self.assertEqual(result["specialists"]["domain-analysis"],"partial")
+        research.assert_called_once()
+
+    def test_cancellation_before_specialist_correction_prevents_another_request(self):
+        domain=specialist([AIMessage(content="Candidate evidence inspected."),review()])
+        def emit(event):
+            if event["stage"]=="structured-review": activity.cancelled.set()
+        activity=Activity(emit)
+        with self.assertRaises(RunCancelled):
+            self.run_graph([specialist(),domain,lead()],activity=activity)
+        self.assertEqual(len(domain.seen),3)
+        self.assertEqual(len(domain.responses),1)
 
     def test_cancellation_never_returns_fallback_candidates(self):
         activity=Activity()

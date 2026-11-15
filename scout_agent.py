@@ -7,9 +7,9 @@ from agent_workspace import WorkspaceBackend, FILESYSTEM_TOOLS, skill_files, per
 from deepagents import create_deep_agent
 from deepagents.backends.utils import create_file_data
 from deepagents.profiles import register_harness_profile, HarnessProfile, GeneralPurposeSubagentProfile
-from langchain.agents.middleware import ModelCallLimitMiddleware, wrap_model_call, wrap_tool_call
+from langchain.agents.middleware import ModelCallLimitMiddleware, after_agent, after_model, wrap_model_call, wrap_tool_call
 from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_xai import ChatXAI
 from langsmith import tracing_context
@@ -157,14 +157,93 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
             return handler(request)
 
         calls = 0
+        review_repair_used = False
+        review_repair_pending = False
+        source_repair_used = False
+        source_repair_pending = False
+        review_correction = (
+            "Your candidate investigation is complete, but plain text did not save a report. "
+            "Finish now with the ScoutReview tool, using only the candidate facts already returned and their exact cited values. "
+            "Do not call source or filesystem tools. Omit unsupported conclusions; an empty findings list is allowed.")
+
+        def correct_review():
+            nonlocal review_repair_used, review_repair_pending
+            review_repair_used = review_repair_pending = True
+            activity.event(name, "structured-review", "retry",
+                           "Saving the collected candidate findings in the required cited report format.")
+            return {"messages": [HumanMessage(content=review_correction)], "jump_to": "model"}
+
+        @after_model(can_jump_to=["model", "end"])
+        def repair_specialist_review(state, runtime):
+            nonlocal review_repair_used, review_repair_pending, source_repair_used, source_repair_pending
+            if name == "lead":
+                return None
+            activity.check()
+            if state.get("structured_response") is not None:
+                return None
+            if review_repair_pending:
+                return {"jump_to": "end"}
+            last = next((item for item in reversed(state["messages"]) if isinstance(item, AIMessage)), None)
+            if source_repair_pending:
+                # A plain response to the one missing-read correction cannot
+                # start another repair or skip the required evidence tool.
+                return {"jump_to": "end"} if last is None or not last.tool_calls else None
+            if (review_repair_used or last is None or last.tool_calls
+                    or "/skills/opportunity-scouting/SKILL.md" not in skills[name]):
+                return None
+            if name not in source_reads:
+                if source_repair_used:
+                    return {"jump_to": "end"}
+                source_repair_used = source_repair_pending = True
+                activity.event(name, "required-evidence", "retry",
+                               "Reading the required candidate evidence before saving a cited report.")
+                return {"messages": [HumanMessage(content=
+                    "Your assignment ended before the required evidence read. Call read_candidate_evidence now. "
+                    "Do not call filesystem tools or submit ScoutReview until that tool returns. "
+                    "Then finish with ScoutReview using only those candidate facts.")], "jump_to": "model"}
+            return correct_review()
+
+        @after_agent(can_jump_to=["model"])
+        def repair_terminal_review(state, runtime):
+            # A mixed normal-tool + invalid ScoutReview response can end the
+            # native tool loop after the normal tools finish. Reuse the same
+            # one-shot correction, after every tool call has been answered.
+            if name == "lead" or state.get("structured_response") is not None or review_repair_used or source_repair_pending:
+                return None
+            activity.check()
+            if name not in source_reads or "/skills/opportunity-scouting/SKILL.md" not in skills[name]:
+                return None
+            last = next((item for item in reversed(state["messages"]) if isinstance(item, AIMessage)), None)
+            review_ids = {call["id"] for call in last.tool_calls if call["name"] == "ScoutReview"} if last else set()
+            if any(isinstance(item, ToolMessage) and item.tool_call_id in review_ids and str(item.content).startswith("Error")
+                   for item in state["messages"]):
+                return correct_review()
+            return None
+
         @wrap_model_call
         def scoped(request, handler):
-            nonlocal calls
+            nonlocal calls, source_repair_pending, review_repair_used, review_repair_pending
             activity.check(); calls += 1
             activity.event(name,"model-request","started",f"Assessing researched opportunities, call {calls} of 8.")
-            response = invoke_model(handler, request.override(tools=[tool for tool in request.tools if tool.name in allowed]),
+            if source_repair_pending and name in source_reads:
+                source_repair_pending = False
+                review_repair_used = review_repair_pending = True
+                activity.event(name, "structured-review", "retry",
+                               "Saving the collected candidate findings in the required cited report format.")
+                request = request.override(messages=[*request.messages, HumanMessage(content=review_correction)])
+            # ToolStrategy adds ScoutReview after this filter, so the single
+            # correction keeps its validators but cannot repeat research or IO.
+            phase_tools = set() if review_repair_pending else {"read_candidate_evidence"} if source_repair_pending else allowed
+            response = invoke_model(handler, request.override(tools=[tool for tool in request.tools if tool.name in phase_tools]),
                 activity=activity, specialist=name, model_name=model_name, key=key)
             activity.check()
+            correction_tool = "ScoutReview" if review_repair_pending else "read_candidate_evidence" if source_repair_pending else None
+            if correction_tool and any(
+                    call["name"] != correction_tool
+                    for item in response.result if isinstance(item, AIMessage) for call in item.tool_calls):
+                # Hidden tools still exist in the graph registry; reject any
+                # unexpected call before it can execute there.
+                raise ValueError("Specialist correction may only call its required phase tool.")
             response = serializable_response(response)
             if response.structured_response is not None and name!="lead":
                 save_report(name,response.structured_response)
@@ -188,7 +267,9 @@ inputs and leave selection to the user; missing inputs do not erase a useful sho
         return create_deep_agent(model=ChatXAI(model=model_name,api_key=key,base_url="https://api.x.ai/v1",
                 timeout=35,max_retries=0,max_tokens=2200,reasoning_effort="low",include_response_headers=True),backend=backend,
             tools=tools,subagents=subagents,skills=["/skills/"],permissions=permissions(name),
-            middleware=[ModelCallLimitMiddleware(run_limit=8,exit_behavior="error"),scoped,boundary,
+            # after_model hooks run in reverse order; count the call before a
+            # correction can jump back to the model within the existing limit.
+            middleware=[repair_specialist_review,repair_terminal_review,ModelCallLimitMiddleware(run_limit=8,exit_behavior="error"),scoped,boundary,
                 tool_guard(name,activity,skills,reads,assignments,backend,lambda target:save_report(target,None,partial=True))],
             system_prompt=prompt,response_format=ToolStrategy(ScoutReview))
 

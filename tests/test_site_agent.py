@@ -329,6 +329,36 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(len(domain.responses),1)
         self.assertFalse(result['specialists']['domain-analysis'])
 
+    def test_mixed_report_write_and_invalid_review_gets_one_bounded_schema_only_correction(self):
+        final=message(call('SiteReview',{'findings':[],'recommendations':[],'questions':['Verify drainage connectivity?']}))
+        bad={'findings':[{'text':'The rainfall estimate is 999 in.','fact_ids':['county-rainfall']}],
+             'recommendations':[],'questions':['Verify drainage connectivity?']}
+        mixed=message(call('write_file',{'file_path':'/project/reports/domain-analysis.json','content':'FORGED REPORT'}),
+                      call('SiteReview',bad))
+        for correction in (final, message(call('SiteReview',bad)), calls('read_rainfall_and_watershed')):
+            with self.subTest(correction=correction):
+                lead=lead_model([calls('delegate'),final]); site=specialist_model('site','water',[final])
+                domain=specialist_model('domain','water',[mixed,correction,final])
+                imagery=Mock(return_value=[]); property_source=Mock(return_value=({},[]))
+                hydrology=Mock(return_value={'estimate':{'inches':1.01,'depth_range':[1,1.1],'method':'interpolated'}})
+                events=[]; saved={}
+                with patch('site_agent.ChatXAI',side_effect=[lead,site,domain]):
+                    result=analyze_site('unused','fake','Review','water',[],imagery,property_source,hydrology,
+                        lon=LON,lat=LAT,activity=Activity(events.append),
+                        persist_artifact=lambda path,content:saved.__setitem__(path,content))
+                self.assertIsNone(result['analysisError'])
+                self.assertEqual(result['specialists']['domain-analysis'],correction is final)
+                self.assertEqual(len(domain.seen),4)
+                self.assertEqual(len(domain.responses),1,'mixed-call failure shares the single correction budget')
+                self.assertEqual(domain.tool_sets[-1],{'SiteReview'})
+                self.assertEqual(len([e for e in events if e['stage']=='structured-review']),1)
+                self.assertIn('numbers not present',str(domain.seen[-1]),'the corrective request sees the actual validation error')
+                self.assertIn('write_file',str(domain.seen[-1]),'the native ordinary-tool result is complete before correction')
+                self.assertNotIn('FORGED REPORT',str(saved))
+                self.assertEqual(imagery.call_count,2); property_source.assert_called_once(); hydrology.assert_called_once()
+                self.assertTrue(any(f['id']=='county-rainfall' for f in result['facts']))
+                self.assertIn('/project/reports/domain-analysis.json',result['artifactsRead']['lead'])
+
     def test_cancellation_before_specialist_correction_prevents_another_model_request(self):
         final=message(call('SiteReview',{'findings':[],'recommendations':[],'questions':['Verify source coverage?']}))
         domain=specialist_model('domain','street',[AIMessage(content='Inputs inspected.'),final])

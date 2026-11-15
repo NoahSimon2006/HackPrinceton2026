@@ -229,6 +229,8 @@ console.log('PASS: discovery seeds a current-traffic site brief and submits a re
   const body=JSON.parse(h.requests[0].options.body);
   assert.equal(body.siteId,'34.050000,-118.250000');
   assert.equal(body.inputRevision,1);assert.equal(body.proposalRevision,1);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.map.events.find(e=>e.name==='plannerinvestigation')?.event)),
+    {siteId:body.siteId,workflow:'street',inputRevision:1,revision:1},'invalidate retained source links before a new run can emit facts');
   h.requests[0].resolve({report:null,facts:[],proposal:{revision:1},comparison:{revision:1}});await pending;
   const published=h.map.events.filter(e=>e.name==='plannerresult');
   assert.equal(published.length,1);assert.equal(published[0].event.siteId,body.siteId);
@@ -237,6 +239,8 @@ console.log('PASS: discovery seeds a current-traffic site brief and submits a re
   const repeated=h.$('site-analysis').events.submit({preventDefault(){}});
   await flush();
   assert.equal(JSON.parse(h.requests[1].options.body).proposalRevision,2);
+  assert.equal(h.map.events.filter(e=>e.name==='plannerinvestigation').at(-1).event.revision,2);
+  assert.equal(h.map.events.filter(e=>e.name==='plannerinvestigation').at(-1).event.inputRevision,1,'same-input retries still invalidate older evidence links');
   h.select(34.06,-118.26);await flush();h.requests[1].resolve({report:null,facts:[],proposal:{revision:2},comparison:{revision:2}});await repeated;
   assert.equal(h.map.events.filter(e=>e.name==='plannerresult').length,1,'superseded site analysis must not emit a proposal');
 }
@@ -558,6 +562,7 @@ console.log('PASS: evidence-row and initial-render failures preserve stream comp
 // reload. Restore its historical geometry as stale, keeping the failure visible.
 {
   const prior={revision:2,inputRevision:1,proposal:null,alternatives:{failed_layout:{status:'rejected'}},
+    savedAt:'2026-11-14T18:00:00+00:00',
     comparison:{status:'completed',site_id:'traffic-saved',workflow:'street',revision:2,input_revision:1,input_hash:'old-evaluation'},
     trafficPlan:{sourceDecisions:[{source:'Vexcel',decision:'Earlier crossing check.',fact_id:'traffic-old-check'}]}};
   const saved={id:'c'.repeat(32),version:4,resultVersion:4,status:'failed',artifacts:[],events:[],trafficDesignHistory:[prior],
@@ -567,6 +572,7 @@ console.log('PASS: evidence-row and initial-render failures preserve stream comp
   const restore=h.map.events.find(e=>e.name==='plannerrestore')?.event;
   assert.equal(restore?.revision,2);assert.equal(restore?.inputRevision,1);
   assert.equal(restore?.comparison.input_hash,'old-evaluation');
+  assert.equal(restore?.savedAt,prior.savedAt);assert.equal(restore?.restored,true);
   assert.equal(restore?.trafficPlan.sourceDecisions[0].fact_id,undefined,'old source IDs cannot inspect the failed run’s current ledger');
   assert.equal(h.map.events.filter(e=>e.name==='plannerresult').length,0,'a failed revision must never publish as current');
   assert.match(h.$('analysis-message').textContent,/Provider rate limit/);
@@ -580,3 +586,60 @@ console.log('PASS: evidence-row and initial-render failures preserve stream comp
   assert.equal(f.map.events.filter(e=>e.name==='plannerrestore').length,0);
 }
 console.log('PASS: failed traffic continuation retains completed history as stale without publishing failed or foreign results');
+
+// A failed water revision must retain the last evaluated concept and its own
+// provenance without giving historical source IDs links into the current run.
+{
+  const prior={revision:2,inputRevision:1,savedAt:'2026-11-14T17:00:00+00:00',
+    proposal:{site_id:'water-saved',workflow:'water',revision:2,input_revision:1,input_hash:'saved-water',
+      geometry:[{id:'garden',geometry:{type:'Polygon',coordinates:[[[-118.25,34.05],[-118.2499,34.05],[-118.2499,34.0501],[-118.25,34.05]]]}}],
+      metrics:[{id:'storage',proposed:3,unit:'m³',revision:2,input_hash:'saved-water'}]},
+    alternatives:{smaller:{revision:2,input_revision:1}},
+    waterPlan:{decisions:[{source:'Vexcel',decision:'Earlier footprint check.',fact_id:'old-water',evidence_ids:['old-outline']}]}};
+  const older={...prior,revision:1,inputRevision:0,proposal:{...prior.proposal,revision:1,input_revision:0}};
+  const invalid=[
+    {...prior,proposal:{...prior.proposal,site_id:'another-site'}},
+    {...prior,proposal:{...prior.proposal,workflow:'street'}},
+    {...prior,revision:5,proposal:{...prior.proposal,revision:5}},
+    {...prior,inputRevision:5,proposal:{...prior.proposal,input_revision:5}},
+    {...prior,revision:3},
+    {...prior,inputRevision:2},
+    {...prior,proposal:{...prior.proposal,development_fixture:true}},
+  ];
+  const saved={id:'d'.repeat(32),version:4,resultVersion:4,status:'failed',artifacts:[],events:[],
+    designHistory:[older,prior,...invalid],
+    snapshot:{workflow:'water',siteId:'water-saved',lon:-118.25,lat:34.05,propertyId:null,
+      question:'Make the garden smaller.',markings:[],rainfallScenario:null,inputRevision:3,proposalRevision:3},
+    result:{analysisError:'The revised design exceeded the run deadline.',facts:[],proposal:{...prior.proposal,revision:3}}};
+  const h=harness('water',{savedProject:saved});h.map.fire('scoutselect',{project:saved});await flush();await flush();
+  const restore=h.map.events.find(e=>e.name==='plannerrestore')?.event;
+  assert.equal(restore?.revision,2);assert.equal(restore?.inputRevision,1);
+  assert.deepEqual(JSON.parse(JSON.stringify(restore?.proposal)),prior.proposal,'saved geometry and metrics remain bound to their original revision');
+  assert.deepEqual(JSON.parse(JSON.stringify(restore?.alternatives)),prior.alternatives);
+  assert.equal(restore?.designHistory.length,2,'only matching site and revision history reaches the inspector');
+  assert.equal(restore?.savedAt,prior.savedAt);assert.equal(restore?.restored,true);
+  assert.equal(restore?.historicalReference,true,'UI must not inspect old source IDs in the failed attempt ledger');
+  assert.equal(restore?.waterPlan.decisions[0].evidence_ids[0],'old-outline','historical provenance stays readable');
+  assert.equal(h.map.events.filter(e=>e.name==='plannerresult').length,0);
+  assert.match(h.$('analysis-message').textContent,/run deadline/);
+  assert.match(h.$('analysis-message').textContent,/saved reference/);
+  assert.equal(h.$('analysis-stale').hidden,false);
+  assert.equal(h.requests.filter(q=>q.url==='/api/site-analysis').length,0);
+  for(const [status,result] of [['canceled',null],['interrupted',{facts:[],draftQuestion:'Incomplete question.'}]]) {
+    const stopped={...saved,status,result};
+    const r=harness('water',{savedProject:stopped});r.map.fire('scoutselect',{project:stopped});await flush();await flush();
+    assert.equal(r.map.events.find(e=>e.name==='plannerrestore')?.event.revision,2);
+    assert.equal(r.map.events.filter(e=>e.name==='plannerresult').length,0);
+    assert.match(r.$('analysis-message').textContent,/previous run stopped/);
+    assert.equal(r.$('analysis-stale').hidden,false);
+  }
+  const foreign={...saved,designHistory:invalid};
+  const f=harness('water',{savedProject:foreign});f.map.fire('scoutselect',{project:foreign});await flush();await flush();
+  assert.equal(f.map.events.filter(e=>e.name==='plannerrestore').length,0);
+  const current={...saved,status:'ready',result:{...saved.result,analysisError:null,proposal:{...prior.proposal,revision:3,input_revision:3},savedAt:prior.savedAt,designHistory:[]}};
+  const c=harness('water',{savedProject:current});c.map.fire('scoutselect',{project:current});await flush();await flush();
+  const restoredCurrent=c.map.events.find(e=>e.name==='plannerresult')?.event;
+  assert.equal(restoredCurrent?.restored,true);assert.equal(restoredCurrent?.savedAt,prior.savedAt);
+  assert.equal(restoredCurrent?.designHistory[1].savedAt,prior.savedAt,'restoration prefers timestamped archive entries over legacy result copies');
+}
+console.log('PASS: stopped stormwater continuation retains same-site historical geometry, provenance and original saved time as stale');
