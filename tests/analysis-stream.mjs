@@ -16,4 +16,7 @@ await assert.rejects(run([event,{...result,run_id:'b'}]),/identity mismatch/);
 await assert.rejects(run([event,event,result]),/sequence mismatch/);
 await assert.rejects(run([event]),/ended early/);
 await assert.rejects(run([event,{type:'error',run_id:'a',error:'Source failed'}]),/Source failed/);
+await assert.rejects(run([event,result,result]),/after its terminal result/);
+await assert.rejects(run([event,result,{...event,sequence:2}]),/after its terminal result/);
+await assert.rejects(run([event,{...result,result:null}]),/Result identity mismatch/);
 console.log('PASS: chunked UTF-8 stream, run identity, event sequence, partial failure and missing terminal result');

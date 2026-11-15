@@ -1,4 +1,4 @@
-"""Build the downtown road emissions layer from counted traffic and CARB fleet rates.
+"""Rebuild the archived road-emissions estimate with explicitly opted-in volume assumptions.
 
 Every road edge gets a weekday daily volume, chosen in this order and labeled with
 its basis:
@@ -17,11 +17,12 @@ LADOT 24-hour count sheets (median across the downloaded sheets). Emissions are
 vehicles x segment length x CARB EMFAC2025 2026 Los Angeles running-exhaust rates.
 No random-trip simulation is used.
 
-Usage: .venv/Scripts/python.exe scripts/build_emissions.py
+Not live planning evidence. Usage: python scripts/build_emissions.py --allow-volume-assumptions
 """
 from __future__ import annotations
 
 import json
+import argparse
 import math
 import statistics
 import xml.etree.ElementTree as ET
@@ -33,12 +34,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from traffic_counts import SheetError, find_sheet  # noqa: E402
-from traffic_sim import street_key  # noqa: E402
+from traffic_sim import fleet_rates, file_hash, FLEET_SOURCE  # noqa: E402
+from street_names import street_key  # noqa: E402
 
 DATA = ROOT / "private" / "discovery"
 OUT = ROOT / "public" / "data" / "emissions.json"
 BBOX = [-118.268, 34.034, -118.219, 34.070]
-CARB = {"CO2": 387.1437, "NOx": 0.1308}  # g/mile, EMFAC2025 v2.1.1 LA (SC) 2026, VMT-weighted running exhaust
 PERIODS = {"midday": {"label": "Weekday midday", "hours": [11, 12, 13]},
            "pm_peak": {"label": "Weekday PM peak", "hours": [16, 17, 18]}}
 ROAD_TYPES = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary",
@@ -114,13 +115,18 @@ def hourly_profile(records):
             for period, spec in PERIODS.items():
                 shares[period].append(statistics.fmean(values[h] for h in spec["hours"]) / day)
         used.append({"url": sheet["url"], "date": sheet["date"], "location": sheet["location"]})
-    if not used:
+    if not used or any(not values for values in shares.values()):
         raise SystemExit("No official 24-hour sheets could be read; refusing to assume hourly shares.")
     return {p: round(statistics.median(v), 5) for p, v in shares.items()}, used
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--allow-volume-assumptions", action="store_true", help="Explicitly reproduce the archived extrapolated layer; not live planning evidence.")
+    if not parser.parse_args().allow_volume_assumptions:
+        parser.error("Archived extrapolated volumes require --allow-volume-assumptions. Live discovery uses source-only counts.")
     import sumolib
+    carb = fleet_rates()
     net = sumolib.net.readNet(str(ROOT / "sim" / "dtla.net.xml"))
     records = json.loads((DATA / "ladot-records.json").read_text())
     edges, by_street, node_streets = [], defaultdict(list), defaultdict(set)
@@ -201,8 +207,8 @@ def main():
         for period in PERIODS:
             volume = daily * shares[period]
             periods[period] = {"vehicles_h": round(volume), "speed_kmh": round(item["edge"].getSpeed() * 3.6, 1),
-                               "co2_kg_h": round(volume * miles * CARB["CO2"] / 1000, 2),
-                               "nox_g_h": round(volume * miles * CARB["NOx"], 2)}
+                               "co2_kg_h": round(volume * miles * carb["CO2"] / 1000, 2),
+                               "nox_g_h": round(volume * miles * carb["NOx"], 2)}
         output.append({"id": item["id"], "name": item["name"], "class": item["kind"], "length_m": round(item["length_m"]),
                        "coordinates": item["coordinates"], "basis": basis, "count": anchor,
                        "basis_detail": detail if basis != "counted" else None, "daily_vehicles": round(daily),
@@ -212,7 +218,8 @@ def main():
     data = {"schema": 2, "title": "Downtown Los Angeles road emissions from counted traffic", "bbox": BBOX,
             "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "periods": {p: {"label": s["label"], "share_of_daily": shares[p]} for p, s in PERIODS.items()},
-            "fleet_rates_g_per_mile": CARB, "summary": summary, "roads": output,
+            "fleet_rates_g_per_mile": carb, "fleet_source_sha256": file_hash(FLEET_SOURCE),
+            "archived_assumption_based": True, "summary": summary, "roads": output,
             "quality": {"road_edges": len(output), "historical_anchor_edges": bases["counted"], "basis_counts": dict(bases),
                         "hourly_profile_sheets": len(sheets), "simulation_teleports": 0},
             "hourly_profile_sheets": sheets,

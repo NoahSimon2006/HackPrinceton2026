@@ -9,6 +9,7 @@ from shapely.geometry import Point, mapping
 
 from proposal import Design, EvidenceReference, Finding, GeometryFeature, Metric, Proposal
 from site_measurements import PROJECT, fact, number, projected, source
+from stormwater import event_storage
 
 DISPLAY = Transformer.from_crs(32611, 4326, always_xy=True)
 MIN_DIAMETER_M = 1.5
@@ -73,14 +74,13 @@ def draft_rain_garden(*, lon, lat, evidence, markings, rainfall, scenario, stora
     landscape_share, radius, _, bed = max(candidates, key=lambda item: item[:3])
 
     area = bed.area
-    storage = area * storage_depth_m
     rainfall_data = scenario or rainfall
     rain_id = "scenario-rainfall" if scenario else "county-rainfall"
     drainage_area = zones["drainage"].area
-    runoff = None
-    if rainfall_data is not None and drainage_area and runoff_coefficient is not None:
-        rainfall_m = number(rainfall_data["inches"], maximum=100) * .0254
-        runoff = rainfall_m * drainage_area * runoff_coefficient
+    rainfall_m = number(rainfall_data["inches"], maximum=100) * .0254 if rainfall_data is not None else None
+    runoff = (rainfall_m * drainage_area * runoff_coefficient
+              if rainfall_m is not None and drainage_area and runoff_coefficient is not None else None)
+    volumes = event_storage(rainfall_m, area, storage_depth_m, runoff)
     geometry = mapping(transform(bed, DISPLAY.transform, interleaved=False))
     fingerprint = sha256(json.dumps(dict(identity, geometry=geometry, evidence=evidence, markings=markings,
         rainfall=rainfall_data, rain_source=rain_id, storage_depth_m=storage_depth_m,
@@ -90,10 +90,12 @@ def draft_rain_garden(*, lon, lat, evidence, markings, rainfall, scenario, stora
     screened = "Event depth × union of planner-marked runoff areas × a scenario runoff coefficient."
     metric_values = [
         ("footprint_area", "m²", area, "Area of the proposed footprint in UTM 11N."),
-        ("storage_volume", "m³", storage, method),
+        ("storage_volume", "m³", volumes["capacity_m3"], method),
+        ("direct_rain_volume", "m³", volumes["direct_rain_m3"], "Event depth × draft footprint area."),
         ("runoff_volume", "m³", runoff, screened),
-        ("captured_volume", "m³", min(runoff, storage) if runoff is not None else None, "Lesser of scenario runoff and ponding storage."),
-        ("overflow_volume", "m³", max(0, runoff - storage) if runoff is not None else None, "Scenario runoff beyond ponding storage. Overflow path is unverified."),
+        ("captured_volume", "m³", volumes["captured_m3"], "Temporary external runoff storage after reserving capacity for direct rain."),
+        ("overflow_volume", "m³", volumes["excess_m3"], "External runoff beyond available storage. Overflow path is unverified."),
+        ("direct_overflow_volume", "m³", volumes["direct_excess_m3"], "Direct rain that exceeds gross ponding storage."),
     ]
     outline_ids = [p["evidenceId"] for p in [parcel_props, *[props for props, _ in buildings]]]
     access_ids = [p["evidenceId"] for p, _ in driveways + parking + frontages]
@@ -113,6 +115,7 @@ def draft_rain_garden(*, lon, lat, evidence, markings, rainfall, scenario, stora
     assumptions = [
         "The bed is a placement concept within the mapped parcel. Verify land cover, utilities, setbacks, grade, infiltration and property permission before design.",
         f"Storage assumes an effective ponding depth of {storage_depth_m:g} m. The placement buffers are screening choices.",
+        "Direct rain on the garden fills storage before runoff from other surfaces.",
     ]
     if runoff is None:
         assumptions.append("Runoff, capture and overflow require a contributing area, event depth and runoff coefficient. A mapped roof does not establish contributing area.")
@@ -125,7 +128,7 @@ def draft_rain_garden(*, lon, lat, evidence, markings, rainfall, scenario, stora
                      "A nearby roof or pavement could feed the bed if downspouts and grading support the connection.")
     statement = f"{siting} {runoff_source}"
     proposal = Proposal(**identity, workflow="water", input_hash=fingerprint, development_fixture=False,
-        status="draft", design=Design(kind="rain_garden", length_m=2 * radius, width_m=2 * radius),
+        status="draft", design=Design(kind="rain_garden", length_m=2 * radius, width_m=2 * radius, storage_depth_m=storage_depth_m),
         evidence=refs, geometry=[GeometryFeature(id="rain-garden", geometry=geometry,
             properties={"revision": revision, "role": "proposed"})], existing_geometry_ids=[],
         proposed_geometry_ids=["rain-garden"], assumptions=assumptions, recommendation=statement,

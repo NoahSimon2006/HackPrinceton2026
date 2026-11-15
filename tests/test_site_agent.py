@@ -50,6 +50,38 @@ def complete():
 
 
 class AgentTest(unittest.TestCase):
+    def test_water_comparison_runs_after_sources_and_only_scalar_facts_reach_models(self):
+        design = {"storage_depth_m": .15, "runoff_coefficient": .9,
+                  "surface_confirmed": True, "connections_confirmed": True,
+                  "access_confirmed": True, "overflow_confirmed": True,
+                  "confirmation_note": "PRIVATE CONFIRMATION TEXT"}
+        verdict = fact("water-treatment-1-verdict", "Treatment verdict", "Conditional screening option", "", source("Local storage screening"))
+        local = {"comparison": {"status":"ready", "ranking":{"recommended":"treatment-1"},
+                  "geometry":{"PRIVATE GEOMETRY":polygon()}}, "proposal":{"private":"LOCAL PROPOSAL"},
+                 "facts":[verdict], "warnings":[]}
+        empty = AIMessage(content="", tool_calls=[{"name":"SiteReview","id":"summary","args":{
+            "findings":[],"recommendations":[],"questions":["Verify site conditions?"]}}])
+        cited = AIMessage(content="", tool_calls=[{"name":"SiteReview","id":"review","args":{
+            "findings":[],"recommendations":[{"text":"Evaluate the conditional screening option after field checks.","fact_ids":[verdict["id"]]}],
+            "questions":["Verify the outlet connection?"]}}])
+        lead, site, domain = ScriptedModel(responses=[calls("investigate_site"),cited]), ScriptedModel(responses=[empty]), ScriptedModel(responses=[empty])
+        events=[]
+        with patch("site_agent.ChatXAI", side_effect=[lead,site,domain]), patch("site_agent.compare_water",return_value=local) as calculate:
+            result=analyze_site("unused","fake","Compare treatments","water",[], lambda _:[],
+                lambda:({"propertyType":"Multifamily","name":"PRIVATE PROPERTY"},[]),
+                lambda:{"estimate":{"inches":1.01,"method":"on_contour","depth_range":[1.01,1.01]}},
+                lon=LON,lat=LAT,water_design=design,analysis_identity=IDENTITY,activity=Activity(events.append))
+        self.assertIsNone(result["analysisError"])
+        self.assertEqual(result["proposal"],local["proposal"])
+        self.assertEqual(calculate.call_args.kwargs["property_details"]["propertyType"],"Multifamily")
+        self.assertEqual(calculate.call_args.kwargs["design"],design)
+        self.assertEqual(calculate.call_args.kwargs["source_status"]["hydrology"],"ready")
+        sent=" ".join(str(message.content) for model in (lead,site,domain) for group in model.seen for message in group)+str(events)
+        for forbidden in ("PRIVATE", "LOCAL PROPOSAL", "coordinates",str(LON),str(LAT)):
+            self.assertNotIn(forbidden,sent)
+        self.assertIn(verdict["id"],sent)
+        self.assertTrue(any(event["stage"]=="water-comparison" for event in events))
+
     def test_failed_or_invalid_candidate_source_is_distinct_from_successful_empty(self):
         for state in ("failed", "invalid", "empty"):
             with self.subTest(state=state):

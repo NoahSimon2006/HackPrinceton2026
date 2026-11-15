@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=19">
+  <link rel="stylesheet" href="/styles.css?v=20">
   <script defer src="/vendor/leaflet.js"></script>
-  <script defer src="/app.js?v=17"></script>
-  <script defer src="/proposal.js?v=5"></script>
-  <script defer src="/analysis-stream.js?v=1"></script>
+  <script defer src="/app.js?v=18"></script>
+  <script defer src="/proposal.js?v=7"></script>
+  <script defer src="/analysis-stream.js?v=2"></script>
   <script defer src="/site-view.js?v=1"></script>
-  <script defer src="/planner.js?v=15"></script>
+  <script defer src="/planner.js?v=17"></script>
   <script defer src="/discovery.js?v=2"></script>
 </head>
 <body>
@@ -71,6 +71,29 @@
               <p id="analysis-stale" class="analysis-stale" hidden>Inputs changed or the review is incomplete. Analyze again to refresh the assessment.</p>
               <div id="agent-assessment" class="site-review" aria-live="polite" hidden></div>
             </form>
+          <details id="water-design" class="planner-card water-design" hidden aria-labelledby="water-design-title">
+            <summary id="water-design-title">Compare your own placements</summary>
+            <p>Outline the runoff source, then two or three distinct treatment alternatives. These are proposed locations, not detected drainage connections. Keep the same contributing surfaces for each alternative.</p>
+            <fieldset id="water-design-fields" disabled>
+              <legend>1 · Map the comparison</legend>
+              <div class="water-draw-actions"><button id="water-mark-drainage" type="button">Mark runoff source</button><button id="water-mark-treatment" type="button">Mark treatment alternative</button><button id="water-mark-access" type="button">Mark keep-clear area</button></div>
+              <p>Edit or remove saved outlines under Site evidence &amp; adjustments.</p>
+              <div class="water-design-grid">
+                <label for="water-storage-depth">Proposed storage depth (m)<input id="water-storage-depth" type="number" min="0.001" max="1" step="any" inputmode="decimal" placeholder="Enter design depth"></label>
+                <label for="water-runoff-coefficient">Runoff coefficient (0–1)<input id="water-runoff-coefficient" type="number" min="0.001" max="1" step="any" inputmode="decimal" placeholder="Enter supported coefficient"></label>
+              </div>
+              <label for="water-confirmation-note">Input basis and verification notes</label>
+              <textarea id="water-confirmation-note" rows="3" maxlength="600" placeholder="Document surface condition, drainage connection, depth and coefficient basis; identify field checks still needed."></textarea>
+              <p class="control-label">2 · Confirm the screening basis</p>
+              <label class="water-confirmation"><input id="water-confirm-surface" type="checkbox"> The runoff outline and coefficient represent the contributing surface.</label>
+              <label class="water-confirmation"><input id="water-confirm-connections" type="checkbox"> Runoff can connect to each marked alternative.</label>
+              <label class="water-confirmation"><input id="water-confirm-access" type="checkbox"> The alternatives preserve necessary access and operations.</label>
+              <label class="water-confirmation"><input id="water-confirm-overflow" type="checkbox"> A safe overflow route has been identified for each alternative.</label>
+              <p class="water-screening-note">Confirm only what you can support. These confirmations are planner inputs, not a survey. County rainfall is sourced separately. Missing confirmations leave the comparison unavailable.</p>
+            </fieldset>
+            <button id="update-water-comparison" type="button" disabled>Update comparison</button>
+            <p>Uses your marked placements for a storage comparison. Edits mark previous results stale. Storage only: no infiltration, drain routing or flood protection is modeled.</p>
+          </details>
           <p id="proposal-result-message" class="proposal-result-message" role="status" hidden></p>
           <section id="proposal-review" class="planner-card proposal-review" hidden aria-live="polite">
             <span id="proposal-kind" class="fixture-tag">DEVELOPMENT FIXTURE</span>
@@ -96,6 +119,18 @@
               <div id="comparison-sources"></div><ul id="comparison-assumptions"></ul>
             </details>
             <p id="comparison-revision"></p>
+          </section>
+          <section id="water-comparison" class="planner-card water-comparison" hidden aria-live="polite">
+            <span class="section-label">CONDITIONAL STORAGE SCREENING</span>
+            <h2 id="water-comparison-title"></h2><p id="water-comparison-outcome"></p>
+            <p id="water-comparison-rainfall" class="comparison-period"></p>
+            <p id="water-comparison-stale" class="analysis-stale" hidden>Inputs changed. Choose Update comparison to recalculate this earlier result.</p>
+            <div id="water-comparison-chart" class="water-volume-chart" role="group" aria-label="Runoff temporarily stored and excess runoff for each alternative"></div>
+            <div id="water-comparison-table" class="comparison-table" role="region" aria-label="Stormwater storage comparison values" tabindex="0"></div>
+            <p class="water-screening-note">No added treatment is a comparison reference, not measured existing retention. Capture means temporary storage of contributing runoff. Direct rain on the treatment uses storage first; infiltration and routed drainage are not modeled.</p>
+            <div id="water-comparison-alternatives" class="comparison-alternatives"></div>
+            <details><summary>Calculation, sources &amp; limits</summary><p id="water-comparison-method"></p><div id="water-comparison-sources"></div><ul id="water-comparison-assumptions"></ul></details>
+            <p id="water-comparison-revision" class="comparison-revision"></p>
           </section>
           <details class="planner-card" id="proposal-development"><summary>Development preview</summary>
             <p>Synthetic geometry to test the map and revision contract only. Not a site design or recommendation; no benefits calculated.</p>
@@ -125,7 +160,7 @@
                 <input id="rain-depth" type="number" min="0" step="any" inputmode="decimal">
                 <label for="rain-source">Scenario source or assumption</label>
                 <input id="rain-source" type="text" maxlength="160" placeholder="e.g. LA County contour estimate">
-                <p>Scenario inputs are saved for this page session. Runoff and capture volumes are not calculated yet.</p>
+                <p>Scenario inputs stay separate from the county estimate. Changing rainfall marks the comparison stale; choose Update comparison to recalculate.</p>
                 <div class="planner-sources">
                   <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/hydrologygis/MapServer/3" target="_blank" rel="noopener">County rainfall contours ↗</a>
                   <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/PW_Open_Data/MapServer/36" target="_blank" rel="noopener">County watershed subbasins ↗</a>

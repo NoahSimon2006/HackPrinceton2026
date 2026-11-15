@@ -1,8 +1,7 @@
-"""Revision-bound map proposals and the synthetic development fixture.
+"""Revision-bound proposals for traffic, stormwater and development fixtures.
 
-The fixture never recommends anything. Real proposals (from_traffic_comparison) are
-built only from a simulated comparison in street_design.evaluate: every metric comes
-from that run, and unassessed checks stay null.
+Traffic metrics come from local simulations. Stormwater metrics come from local
+screening calculations. Unassessed values stay null.
 Geometry is generated and measured in UTM 11N; only display geometry is WGS84.
 """
 from hashlib import sha256
@@ -20,9 +19,10 @@ class StrictModel(BaseModel):
 
 
 class Design(StrictModel):
-    kind: Literal["test_island", "test_bioretention", "lane_reallocation", "rain_garden"]
-    length_m: float = Field(gt=0, le=200)
-    width_m: float = Field(gt=0, le=10)
+    kind: Literal["test_island", "test_bioretention", "lane_reallocation", "rain_garden", "bioretention"]
+    length_m: float | None = Field(default=None, gt=0, le=200)
+    width_m: float | None = Field(default=None, gt=0, le=10)
+    storage_depth_m: float | None = Field(default=None, gt=0, le=1)
     approach: Literal["nb", "sb", "eb", "wb"] | None = None
     lanes_removed: int | None = Field(default=None, ge=1, le=2)
     new_use: Literal["curb_extension", "bike_lane", "bus_lane", "pedestrian_space"] | None = None
@@ -30,13 +30,21 @@ class Design(StrictModel):
     @model_validator(mode="after")
     def kind_fields(self):
         street = (self.approach, self.lanes_removed, self.new_use)
+        if self.kind == "bioretention":
+            if self.storage_depth_m is None or any(v is not None for v in (*street, self.length_m, self.width_m)):
+                raise ValueError("Bioretention uses its drawn polygon and explicit storage depth, not rectangle dimensions.")
+            return self
+        if self.length_m is None or self.width_m is None:
+            raise ValueError("This design needs length and width.")
+        if (self.storage_depth_m is not None) != (self.kind == "rain_garden"):
+            raise ValueError("Only stormwater designs use storage depth.")
         if self.kind == "lane_reallocation":
             if None in street:
                 raise ValueError("Lane reallocation needs approach, lanes_removed and new_use.")
         else:
             if any(v is not None for v in street):
                 raise ValueError("Only lane reallocation takes approach, lanes_removed and new_use.")
-            if self.length_m > 30:
+            if self.kind.startswith("test_") and self.length_m > 30:
                 raise ValueError("Test fixtures are at most 30 m long.")
         return self
 
@@ -87,7 +95,7 @@ class Proposal(StrictModel):
     input_revision: int = Field(ge=0)
     input_hash: str
     development_fixture: bool
-    status: Literal["fixture", "draft", "recommended", "tested", "rejected"]
+    status: Literal["fixture", "draft", "conditional", "recommended", "tested", "rejected"]
     evidence: list[EvidenceReference]
     design: Design
     projected_crs: Literal["EPSG:32611"] = "EPSG:32611"
@@ -103,14 +111,22 @@ class Proposal(StrictModel):
 
     @model_validator(mode="after")
     def same_revision(self):
-        allowed = {"draft"} if self.workflow == "water" else {"recommended", "tested", "rejected"}
-        if self.status not in ({"fixture"} if self.development_fixture else allowed):
-            raise ValueError("Proposal status does not match the workflow.")
+        workflow, statuses = {
+            "test_island": ("street", {"fixture"}),
+            "test_bioretention": ("water", {"fixture"}),
+            "lane_reallocation": ("street", {"recommended", "tested", "rejected"}),
+            "rain_garden": ("water", {"draft"}),
+            "bioretention": ("water", {"conditional"}),
+        }[self.design.kind]
+        if self.workflow != workflow or self.status not in statuses or self.development_fixture != (self.status == "fixture"):
+            raise ValueError("Design kind, workflow and proposal status must agree.")
         ids = [g.id for g in self.geometry]
         if len(set(ids)) != len(ids) or not self.proposed_geometry_ids:
             raise ValueError("Proposal geometry IDs must be unique and nonempty.")
         if not set(self.existing_geometry_ids + self.proposed_geometry_ids) <= set(ids):
             raise ValueError("Missing referenced geometry.")
+        if set(self.existing_geometry_ids) & set(self.proposed_geometry_ids):
+            raise ValueError("Existing and proposed geometry must be distinct.")
         for geometry in self.geometry:
             if geometry.properties.get("revision") != self.revision:
                 raise ValueError("Geometry revision mismatch.")
@@ -119,6 +135,8 @@ class Proposal(StrictModel):
         if any(m.revision != self.revision or m.input_hash != self.input_hash for m in self.metrics):
             raise ValueError("Metric revision or input mismatch.")
         evidence_ids = {e.id for e in self.evidence}
+        if len(evidence_ids) != len(self.evidence) or len({m.id for m in self.metrics}) != len(self.metrics):
+            raise ValueError("Evidence and metric IDs must be unique.")
         if not set(self.access.evidence_ids + self.overlap.evidence_ids) <= evidence_ids:
             raise ValueError("Unknown evidence reference.")
         return self
@@ -179,8 +197,9 @@ def comparison_fingerprint(comparison: dict, *, site_id: str, revision: int, inp
 
 
 def _maximum(values: dict):
-    numbers = [v for v in values.values() if v is not None]
-    return max(numbers) if numbers else None
+    # A maximum over a partial set is only a lower bound, not the reported
+    # maximum across all modeled approaches.
+    return max(values.values()) if values and all(v is not None for v in values.values()) else None
 
 
 def from_traffic_comparison(comparison: dict, layout_name: str, *, site_id: str, revision: int,
@@ -245,3 +264,35 @@ def from_traffic_comparison(comparison: dict, layout_name: str, *, site_id: str,
                                   approach=params["approach"], lanes_removed=params["lanes_removed"], new_use=params["new_use"]),
                     geometry=geometry, existing_geometry_ids=[], proposed_geometry_ids=[geometry[0].id], metrics=metrics,
                     assumptions=list(comparison["assumptions"]), access=access, overlap=overlap, recommendation=text)
+
+
+def from_water_comparison(comparison: dict, layout_name: str, *, site_id: str, revision: int,
+                          input_revision: int) -> Proposal:
+    """Publish only the locally ranked conditional storage screening alternative."""
+    if (comparison.get('status') != 'ready' or comparison['ranking']['recommended'] != layout_name or
+            not comparison['ranking']['verdicts'].get(layout_name, {}).get('eligible')):
+        raise ValueError('Only an eligible, ranked stormwater treatment can be published.')
+    fingerprint = comparison_fingerprint(comparison, site_id=site_id, revision=revision, input_revision=input_revision)
+    base, result = comparison['results']['baseline'], comparison['results'][layout_name]
+    common = dict(revision=revision, input_hash=fingerprint)
+    definitions = [('runoff_m3', 'm³'), ('captured_m3', 'm³'), ('excess_m3', 'm³'),
+                   ('capacity_m3', 'm³'), ('direct_rain_m3', 'm³'), ('direct_excess_m3', 'm³'), ('footprint_m2', 'm²')]
+    metrics = [Metric(id='footprint_area' if key == 'footprint_m2' else key, unit=unit, baseline=base[key], proposed=result[key], status='calculated',
+                      method=comparison['method'], **common) for key, unit in definitions]
+    treatment_id, drainage_id = f'{layout_name}-footprint', 'contributing-surface'
+    geometry = [GeometryFeature(id=treatment_id, geometry=comparison['geometry'][layout_name]['geometry'],
+                                properties={'revision': revision, 'role': 'proposed', 'layout': layout_name}),
+                GeometryFeature(id=drainage_id, geometry=comparison['contributing_geometry']['geometry'],
+                                properties={'revision': revision, 'role': 'contributing', 'layout': layout_name})]
+    return Proposal(site_id=site_id, workflow='water', revision=revision, input_revision=input_revision,
+                    input_hash=fingerprint, development_fixture=False, status="conditional",
+                    design=Design(kind='bioretention', storage_depth_m=comparison['design']['storage_depth_m']),
+                    evidence=[EvidenceReference(id='vexcel-outlines', source='Vexcel parcel and mapped building outlines', classification='observed'),
+                              EvidenceReference(id='costar-context', source='Selected CoStar property use and reported operations', classification='reported'),
+                              EvidenceReference(id='planner-water-inputs', source='Planner drawings, depth, coefficient and site confirmations', classification='user_provided'),
+                              EvidenceReference(id='water-rainfall', source=comparison['rainfall']['label'], classification='user_provided' if comparison['rainfall']['basis']=='user_provided' else 'modeled')],
+                    geometry=geometry, existing_geometry_ids=[drainage_id], proposed_geometry_ids=[treatment_id], metrics=metrics,
+                    assumptions=comparison['assumptions'],
+                    access=Finding(status='checked', text='Planner confirmed access preservation; drawn keep-clear and available CoStar frontage checks found no conflict. Missing frontage geometry remains unassessed, and physical access is not independently verified.', evidence_ids=['planner-water-inputs','costar-context']),
+                    overlap=Finding(status='checked', text='Treatment lies within the mapped parcel, outside mapped buildings, the external contributing area and drawn keep-clear areas.', evidence_ids=['vexcel-outlines','planner-water-inputs']),
+                    recommendation='Conditional screening preference: greatest external runoff stored, then smallest footprint. Confirm grades, soils, utilities, setbacks, drainage and overflow before detailed design. This is not construction feasibility or permanent runoff removal.')

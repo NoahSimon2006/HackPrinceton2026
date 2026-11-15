@@ -41,31 +41,39 @@ def feature(geometry, label, **properties):
 
 
 def parcel_features(payload, evidence, *, nearby=False):
-    parcels = [
-        item for item in payload.get("features", [])
-        if (nearby or item["properties"].get("request-information.inside-parcel"))
-        and polygon_geometry(item.get("geometry"))
-    ]
-    if not parcels:
-        return
+    if not isinstance(payload, dict) or not isinstance(payload.get("features"), list):
+        raise ValueError("Parcel response has no valid feature collection.")
+    parcels = []
+    for item in payload["features"]:
+        if not isinstance(item, dict) or not isinstance(item.get("properties"), dict):
+            raise ValueError("Parcel response contains an invalid feature.")
+        if nearby or item["properties"].get("request-information.inside-parcel") is True:
+            parcels.append(item)
     parcels.sort(key=lambda item: item["properties"].get("metadata.ortho-date-estimate") or "", reverse=True)
-    seen = set()
+    seen, outlines = set(), []
     for parcel in parcels if nearby else parcels[:1]:
-        geometry = polygon_geometry(parcel["geometry"])
-        signature = json.dumps(geometry, sort_keys=True)
+        props = parcel["properties"]
+        boundary = polygon_geometry(parcel.get("geometry"))
+        structures = props.get("structures")
+        if boundary is None or (not isinstance(structures, list) and not (nearby and structures is None)):
+            raise ValueError("Parcel response has incomplete boundary or building coverage.")
+        signature = json.dumps(boundary, sort_keys=True)
         if signature in seen:
             continue
         seen.add(signature)
-        props = parcel["properties"]
         metadata = {
             "collection": props.get("metadata.collection"),
             "date": (props.get("metadata.ortho-date-estimate") or "")[:10],
         }
-        evidence["outlines"].append(feature(geometry, "Parcel boundary", **metadata))
-        for structure in props.get("structures") or []:
+        outlines.append(feature(boundary, "Parcel boundary", buildingCoverage=structures is not None, **metadata))
+        for structure in structures or []:
+            if not isinstance(structure, dict):
+                raise ValueError("Parcel response contains an invalid building.")
             footprint = polygon_geometry(structure.get("footprint.wkt"))
-            if footprint:
-                evidence["outlines"].append(feature(footprint, "Building footprint", **metadata))
+            if footprint is None:
+                raise ValueError("Parcel response contains an unusable building footprint.")
+            outlines.append(feature(footprint, "Building footprint", **metadata))
+    evidence["outlines"].extend(outlines)
 
 
 def detection_features(payload, evidence, labels):
@@ -89,13 +97,13 @@ def detection_features(payload, evidence, labels):
             geometry = polygon_geometry(candidate.get("bbox"))
             if geometry is None:
                 raise ValueError("Detection response contains an unusable candidate box.")
-            evidence["detections"].append(feature(geometry, label.capitalize(), score=candidate.get("confidence")))
+            score = candidate.get("confidence")
+            if score is not None and (isinstance(score, bool) or not isinstance(score, (int, float))
+                                      or not math.isfinite(score) or not 0 <= score <= 1):
+                raise ValueError("Detection response contains an invalid confidence score.")
+            evidence["detections"].append(feature(geometry, label.capitalize(), score=score))
     evidence["detections"].sort(key=lambda item: item["properties"]["score"] or 0, reverse=True)
-    # Preserve separate coverage for each class when one detector is much noisier.
-    evidence["detections"][:] = [
-        item for label in labels
-        for item in [f for f in evidence["detections"] if f["properties"]["label"] == label.capitalize()][:12]
-    ]
+
 
 
 def imagery_evidence(request, layers, lon, lat, workflow, group):

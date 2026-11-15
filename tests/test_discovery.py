@@ -12,6 +12,12 @@ from terrain_discovery import d8, path_from
 
 
 class TerrainTest(unittest.TestCase):
+    def test_diagonal_nodata_marks_d8_contribution_incomplete(self):
+        z=np.full((7,7),10.)
+        z[2,2]=np.nan
+        z[3,3]=1.
+        _,_,edge,_=d8(z)
+        self.assertTrue(edge[3,3], 'D8 includes diagonal neighbors, so diagonal NoData is an incomplete boundary')
     def test_downhill_diagonal_routes_conserve_area_and_stop_at_flats(self):
         z = np.array([[4,3,2],[3,2,1],[2,1,0]], dtype=float)
         target, area, edge, _ = d8(z, 2)
@@ -86,6 +92,19 @@ def snapshot():
 
 
 class DiscoveryTest(unittest.TestCase):
+    def test_cached_snapshot_changes_require_a_new_content_version(self):
+        from hashlib import sha256
+        data=snapshot();data.pop('version')
+        data['version']=sha256(json.dumps(data,sort_keys=True).encode()).hexdigest()[:16]
+        with tempfile.TemporaryDirectory() as folder, patch('discovery.DATA',Path(folder)):
+            path=Path(folder)/'street.json';path.write_text(json.dumps(data))
+            self.assertEqual(discovery.load_discovery('street')['version'],data['version'])
+            data['layers'][0]['features'][0]['properties']['value']=999999
+            path.write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError,'content changed'):discovery.load_discovery('street')
+            path.write_text('[]')
+            with self.assertRaises(ValueError):discovery.load_discovery('street')
+
     def test_reference_is_resolved_locally_and_rejects_stale_or_different_sites(self):
         data=snapshot(); reference={'version':data['version'],'layer':'counts','feature':'count-one'}
         with patch('discovery.load_discovery',return_value=data):
@@ -111,11 +130,19 @@ class DiscoveryTest(unittest.TestCase):
         ref = {'version':data['version'],'layer':'turning','feature':feature['id']}
         with tempfile.TemporaryDirectory() as folder, patch('discovery.DATA',Path(folder)), \
              patch('discovery.load_discovery',return_value=data), patch('traffic_counts.load_sheet',return_value=sheet):
+            network=Path(folder)/'network.xml'; network.write_bytes(b'<net/>')
+            data['sources']['osm']={'input_sha256':sha256(network.read_bytes()).hexdigest()}
+            network_patch=patch('discovery.NETWORK',network);network_patch.start();self.addCleanup(network_patch.stop)
             cache = Path(folder)/'sheets'; cache.mkdir(); pdf=cache/sheet['filename']; pdf.write_bytes(blob)
             parsed = Path(folder)/'turning-sheets.json'; parsed.write_text(json.dumps({feature['id']:sheet}))
             result = discovery.traffic_context(ref,-118.25,34.05)
             self.assertEqual(result['sheet'],sheet)
             self.assertEqual(result['node_id'],'node')
+            nearby=discovery.traffic_context(ref,-118.24999,34.05001)
+            self.assertEqual((nearby['lon'],nearby['lat']),(-118.25,34.05), 'Use the canonical matched node center for deterministic network cuts')
+            network.write_bytes(b'<net changed="true"/>')
+            with self.assertRaisesRegex(ValueError,'Road network changed'):discovery.traffic_context(ref,-118.25,34.05)
+            network.write_bytes(b'<net/>')
             pdf.write_bytes(b'%PDF changed')
             with self.assertRaises(ValueError):discovery.traffic_context(ref,-118.25,34.05)
             pdf.write_bytes(blob)

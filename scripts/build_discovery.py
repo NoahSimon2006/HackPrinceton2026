@@ -11,7 +11,6 @@ from hashlib import sha256
 import json
 import math
 from pathlib import Path
-import re
 import sys
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -20,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from hydrology import county_features, rainfall_contours, rainfall_at, COUNTY_GIS, RAINFALL
 from terrain_discovery import d8, path_from
+from street_names import street_key
 
 DATA = ROOT/'private'/'discovery'
 LADOT = 'https://data.lacity.org/resource/94wu-3ps3.json'
@@ -69,14 +69,6 @@ def save(workflow, bbox, sources, layers, audit):
     temporary.write_text(json.dumps(data,separators=(',',':'),allow_nan=False));temporary.replace(path)
     print(workflow,[(x['id'],x['status'],len(x['features'])) for x in layers],flush=True)
     return data
-
-
-def street_key(name):
-    text=name.upper()
-    text=re.sub(r'\b(\d+)\s*(ST|ND|RD|TH)\b',r'\1',text)
-    for pattern,replacement in [(r'\b(NORTH|SOUTH|EAST|WEST|N|S|E|W)\b',''),(r'\b(AVENUE|AVE|AV)\b','AV'),(r'\b(STREET|STR|ST)\b','ST'),(r'\b(BOULEVARD|BLVD|BL)\b','BL'),(r'\b(PLACE|PL)\b','PL'),(r'\b(DRIVE|DR)\b','DR'),(r'\b(ROAD|RD)\b','RD')]:
-        text=re.sub(pattern,replacement,text)
-    return ' '.join(re.findall(r'[A-Z0-9]+',text))
 
 
 def count_records(records, intersections):

@@ -83,9 +83,10 @@ class TrafficProposalTest(unittest.TestCase):
         c["checks"]["eb-curb"]["building_overlap_m2"] = None
         c["results"]["eb-curb"]["mean_delay_s"] = None
         c["results"]["baseline"]["max_queue_m"] = {"nb":None}
+        c["results"]["baseline"]["max_noise_db"] = {"nb":72, "eb":None}
         p = from_traffic_comparison(c,"eb-curb",site_id="s",revision=1,input_revision=0)
         self.assertEqual(p.overlap.status,"unassessed")
-        for key in ("mean_delay","max_queue","nox_per_hour"):
+        for key in ("mean_delay","max_queue","nox_per_hour","roadway_noise"):
             m = next(x for x in p.metrics if x.id == key)
             self.assertEqual(m.status,"unassessed")
             self.assertIsNone(m.baseline)

@@ -24,6 +24,11 @@ class ProposalTest(unittest.TestCase):
             lambda p:p['geometry'][0]['properties'].update(revision=2),
             lambda p:p['metrics'][1].update(proposed=0),
             lambda p:p.update(proposed_geometry_ids=['missing']),
+            lambda p:p.update(workflow='water'),
+            lambda p:p.update(development_fixture=False),
+            lambda p:p['metrics'].append(p['metrics'][0].copy()),
+            lambda p:p['evidence'].append(p['evidence'][0].copy()),
+            lambda p:p.update(existing_geometry_ids=p['proposed_geometry_ids']),
         ):
             import copy
             changed=copy.deepcopy(original);mutate(changed)

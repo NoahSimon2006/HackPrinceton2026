@@ -1,9 +1,11 @@
 """Read locally built, source-backed discovery snapshots. Never use fixtures."""
 import json
+from hashlib import sha256
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "private" / "discovery"
+NETWORK = ROOT / "sim" / "dtla.net.xml"
 
 
 def load_discovery(workflow):
@@ -13,15 +15,23 @@ def load_discovery(workflow):
     if not path.exists():
         raise FileNotFoundError("Discovery data has not been built. Run scripts/build_discovery.py; no substitute data is displayed.")
     data = json.loads(path.read_text())
-    if data.get("schema") != 1 or data.get("workflow") != workflow or not isinstance(data.get("layers"), list):
+    if (not isinstance(data, dict) or data.get("schema") != 1 or data.get("workflow") != workflow
+            or not isinstance(data.get("layers"), list) or not isinstance(data.get("sources"), dict)):
         raise ValueError("Discovery snapshot is invalid. Rebuild the source data.")
+    # A cached feature may have changed without its reference/version changing.
+    # Validate the builder's content hash before exposing it as sourced evidence.
+    payload = {key:value for key,value in data.items() if key != "version"}
+    expected = sha256(json.dumps(payload, sort_keys=True, allow_nan=False).encode()).hexdigest()[:16]
+    if data.get("version") != expected:
+        raise ValueError("Discovery snapshot content changed. Rebuild the source data.")
     return data
 
 
 def _resolve(workflow, reference, lon=None, lat=None):
     if reference is None:
         return None
-    if not isinstance(reference, dict) or set(reference) != {"version", "layer", "feature"}:
+    if (not isinstance(reference, dict) or set(reference) != {"version", "layer", "feature"}
+            or any(not isinstance(value, str) or not value for value in reference.values())):
         raise ValueError("Invalid discovery reference.")
     data = load_discovery(workflow)
     if reference["version"] != data["version"]:
@@ -61,7 +71,7 @@ def traffic_context(reference, lon, lat):
     resolved = _resolve("street", reference, lon, lat)
     if resolved is None or resolved[1]["id"] != "turning":
         return None
-    _, _, feature = resolved
+    data, _, feature = resolved
     p = feature["properties"]
     path = DATA / "turning-sheets.json"
     if not path.exists():
@@ -75,12 +85,15 @@ def traffic_context(reference, lon, lat):
     pdf = DATA / "sheets" / filename
     if not pdf.is_file():
         raise ValueError("Original count sheet is unavailable. Rebuild discovery data.")
-    from hashlib import sha256
     from traffic_counts import load_sheet
+    expected_network = data.get("sources", {}).get("osm", {}).get("input_sha256")
+    if (not isinstance(expected_network, str) or not NETWORK.is_file()
+            or sha256(NETWORK.read_bytes()).hexdigest() != expected_network):
+        raise ValueError("Road network changed or is unavailable. Rebuild discovery before comparing traffic.")
     if sha256(pdf.read_bytes()).hexdigest() != p.get("sheet_sha256"):
         raise ValueError("Count source changed. Rebuild discovery and select the site again.")
     parsed = load_sheet(filename, DATA / "sheets")
     if parsed != sheet or parsed["url"] != p.get("sheet_url") or parsed["date"] != p.get("period"):
         raise ValueError("Count sheet does not match discovery. Rebuild source data.")
     return {"sheet": parsed, "period": "pm", "node_id": p["network_node"],
-            "lon": lon, "lat": lat}
+            "lon": p["center"][0], "lat": p["center"][1]}

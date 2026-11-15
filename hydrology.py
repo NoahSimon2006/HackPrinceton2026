@@ -18,8 +18,12 @@ def county_features(layer, geometry, geometry_type, fields):
         "outFields": fields, "returnGeometry": "true",
     })
     with urlopen(f"{layer}/query?{query}", timeout=12) as response:
-        payload = json.loads(response.read(5_000_000))
-    if payload.get("type") != "FeatureCollection" or payload.get("exceededTransferLimit"):
+        raw = response.read(5_000_001)
+        if len(raw) > 5_000_000:
+            raise ValueError("LA County hydrology response exceeded its size limit.")
+        payload = json.loads(raw)
+    if (not isinstance(payload, dict) or payload.get("type") != "FeatureCollection"
+            or payload.get("exceededTransferLimit") or not isinstance(payload.get("features"), list)):
         raise ValueError("LA County returned incomplete hydrology data.")
     return payload["features"]
 
@@ -33,6 +37,13 @@ def rainfall_contours(bounds):
 
 def closest_point(lon, lat, line):
     """Return the closest offset to a contour in a local metric plane."""
+    if not isinstance(line, (list, tuple)) or len(line) < 2:
+        raise ValueError("A rainfall contour needs at least two coordinate pairs.")
+    for coordinate in line:
+        if (not isinstance(coordinate, (list, tuple)) or len(coordinate) != 2
+                or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in coordinate)
+                or not -180 <= coordinate[0] <= 180 or not -90 <= coordinate[1] <= 90):
+            raise ValueError("Rainfall contour coordinates are invalid.")
     x_scale = 111_320 * math.cos(math.radians(lat))
     points = [((x - lon) * x_scale, (y - lat) * 111_320) for x, y in line]
     best = (math.inf, 0, 0)
@@ -46,13 +57,27 @@ def closest_point(lon, lat, line):
 
 
 def rainfall_at(lon, lat, features):
+    if (isinstance(lon, bool) or isinstance(lat, bool) or not isinstance(lon, (int, float))
+            or not isinstance(lat, (int, float)) or not math.isfinite(lon) or not math.isfinite(lat)
+            or not -180 <= lon <= 180 or not -90 <= lat <= 90 or not isinstance(features, list)):
+        raise ValueError("Invalid rainfall lookup inputs.")
     nearest = {}
     for feature in features:
+        if not isinstance(feature, dict) or not isinstance(feature.get("properties"), dict):
+            raise ValueError("Rainfall source contains an invalid feature.")
         geometry = feature["geometry"]
         if not geometry or geometry["type"] not in ("LineString", "MultiLineString"):
             continue
-        depth = float(feature["properties"]["CONTOUR"])
+        raw_depth = feature["properties"].get("CONTOUR")
+        try:
+            depth = float(raw_depth)
+        except (TypeError, ValueError):
+            raise ValueError("Rainfall contour depth is invalid.") from None
+        if isinstance(raw_depth, bool) or not math.isfinite(depth) or not 0 <= depth <= 100:
+            raise ValueError("Rainfall contour depth is invalid.")
         lines = [geometry["coordinates"]] if geometry["type"] == "LineString" else geometry["coordinates"]
+        if not isinstance(lines, (list, tuple)) or not lines:
+            raise ValueError("Rainfall contour geometry is empty.")
         for line in lines:
             point = closest_point(lon, lat, line)
             nearest[depth] = min(point, nearest.get(depth, point))

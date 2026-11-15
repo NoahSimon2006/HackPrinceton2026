@@ -373,6 +373,13 @@ button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-vi
 .proposal-result-message{padding:13px 15px;border:1px solid #8a713c;border-radius:8px;background:#302c20;color:#f0d69a;font-size:12px;line-height:1.6}
 .traffic-design-guide{font-size:12px;line-height:1.65;color:#afc4b8;padding:12px 14px;border-left:2px solid #91cba2;background:#a3d8b107;margin:0 0 16px}
 .traffic-design-guide strong{color:#d9eddf;font-weight:600}.traffic-comparison,.proposal-review{min-width:0;overflow-wrap:anywhere}
+.water-design,.water-comparison{min-width:0;overflow-wrap:anywhere;border-color:#416a60;background:linear-gradient(145deg,#18312b,#14241f)}
+.water-design>summary{cursor:pointer;font-weight:700}.water-comparison>h2{margin-top:9px}.water-design p,.water-comparison p{font-size:11px;line-height:1.65;color:#b5cec2}
+.water-design fieldset{min-width:0;border:0;padding:0;margin:18px 0}.water-design legend{font-size:11px;color:#bce8cd;margin-bottom:10px;font-weight:700}
+.water-draw-actions{display:grid;gap:7px}.water-draw-actions button{text-align:left}.water-design-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:18px 0 12px}.water-design-grid label{min-width:0;font-size:11px;line-height:1.5}.water-design-grid input{width:100%;min-width:0;margin-top:6px}
+.water-design .water-confirmation{display:flex;align-items:flex-start;gap:9px;font-size:11px;line-height:1.6;margin:10px 0;color:#d0e3d7}.water-design .water-confirmation input{width:16px;height:16px;flex:0 0 16px;margin:2px 0;accent-color:#a9dfb7}.water-design fieldset:disabled{opacity:.55}
+.water-screening-note{border-left:2px solid #659689;padding-left:10px}.water-volume-chart{display:grid;gap:15px;margin:20px 0}.water-volume-row strong{font-size:11px;text-transform:capitalize}.water-volume-row small{display:block;margin-top:6px;font-size:10px;color:#b5cec2}.water-volume-bar{height:9px;display:flex;overflow:hidden;border-radius:5px;background:#31453d;margin-top:7px}.water-volume-bar .stored{background:#a9dfb7}.water-volume-bar .excess{background:#d5a878}.water-comparison .comparison-revision{font-size:10px;color:#9bb6a6}.water-comparison a{color:#aee5d5}.water-comparison ul{padding-left:18px;font-size:11px;line-height:1.6}.water-comparison .comparison-alternatives summary span{display:block;font-size:10px;color:#aac9b7;margin-top:4px}
+@media(max-width:380px){.water-design-grid{grid-template-columns:1fr}}
 
 #use-map-center{margin-top:7px}.planner .keyboard-map-help{font-size:10px;line-height:1.5;color:#9db5a7;margin:8px 0 12px}
 .keyboard-marking-editor{border-top:1px solid #3b5747;margin-top:12px;padding-top:12px}

@@ -30,7 +30,7 @@ TRADEOFF = .10
 
 
 class Layout(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
     name: str = Field(pattern=r"^[a-z0-9-]{2,32}$")
     kind: Literal["lane_reallocation"]
     approach: Literal["nb", "sb", "eb", "wb"]
@@ -107,32 +107,44 @@ def sponsor_checks(design, outlines: list | None, frontages: list | None) -> dic
               "parcel_evidence": [], "access_evidence": []}
     if outlines:
         parcels, buildings = [], []
+        missing_building_coverage = False
         for feature in outlines:
             try:
+                label = feature["properties"].get("label")
+                if label not in ("Parcel boundary", "Building footprint"):
+                    continue
                 geometry = utm(feature["geometry"])
-            except (ValueError, KeyError, TypeError):
-                continue
-            label = feature.get("properties", {}).get("label")
-            if label not in ("Parcel boundary", "Building footprint"):
-                continue
+                if geometry.geom_type not in ("Polygon", "MultiPolygon"):
+                    raise ValueError("Outline must be an area")
+            except (ValueError, KeyError, TypeError, AttributeError):
+                # A filtered invalid building must not turn into zero overlap.
+                parcels, buildings = [], []
+                break
             target = parcels if label == "Parcel boundary" else buildings
             target.append((feature["properties"].get("evidenceId"), geometry))
+            if label == "Parcel boundary" and feature["properties"].get("buildingCoverage") is False:
+                missing_building_coverage |= design.intersection(geometry).area > .05
         if parcels:
             result["parcel_overlap_m2"] = round(design.intersection(unary_union([g for _, g in parcels])).area, 2)
         if buildings:
-            result["building_overlap_m2"] = round(design.intersection(unary_union([g for _, g in buildings])).area, 2)
+            overlap = round(design.intersection(unary_union([g for _, g in buildings])).area, 2)
+            if overlap or not missing_building_coverage:
+                result["building_overlap_m2"] = overlap
         result["parcel_evidence"] = [i for i, g in parcels + buildings if design.intersection(g).area > .05 and i]
     if frontages:
         conflicts, assessed = [], 0
         for frontage in frontages:
-            if frontage.get("curbCuts") is None:
-                continue
             try:
+                cuts = frontage.get("curbCuts")
+                if type(cuts) is not int or cuts < 0:
+                    continue
                 line = utm(frontage["geometry"])
-            except (ValueError, KeyError, TypeError):
+                if line.geom_type != "LineString":
+                    continue
+            except (ValueError, KeyError, TypeError, AttributeError):
                 continue
             assessed += 1
-            if frontage["curbCuts"] > 0 and design.distance(line) <= 3.0:
+            if cuts > 0 and design.distance(line) <= 3.0:
                 conflicts.append(frontage.get("evidenceId"))
         if assessed == len(frontages):
             result["access_conflicts"] = len(conflicts)
@@ -163,7 +175,10 @@ def rank(results: dict, checks: dict, keep_clear: list | None = None, *, policy=
             other = after[name]
             if not finite(value) or not finite(other):
                 return None
-            change = 10 ** ((other - value) / 10) - 1 if energy else relative(value, other)
+            try:
+                change = 10 ** ((other - value) / 10) - 1 if energy else relative(value, other)
+            except OverflowError:
+                return None
             if change is None:
                 return None
             changes.append(change)
@@ -174,12 +189,13 @@ def rank(results: dict, checks: dict, keep_clear: list | None = None, *, policy=
             continue
         reasons, check = [], checks.get(name, {})
         completion, base_completion = metrics.get("completion_share"), base.get("completion_share")
-        if not finite(completion) or not finite(base_completion) or base_completion <= 0:
+        if (not finite(completion) or not finite(base_completion)
+                or not 0 <= completion <= 1 or not 0 < base_completion <= 1):
             reasons.append("trip completion is unavailable")
         elif completion < MIN_COMPLETION * base_completion:
             reasons.append("completes less than 98% of baseline completed demand")
         unable, base_unable = metrics.get("unable_to_enter_share"), base.get("unable_to_enter_share")
-        if not finite(unable) or not finite(base_unable):
+        if not finite(unable) or not finite(base_unable) or not 0 <= unable <= 1 or not 0 <= base_unable <= 1:
             reasons.append("entry-failure accounting is unavailable")
         elif unable > base_unable + MAX_UNABLE_TO_ENTER + 1e-9:
             reasons.append("entry failures exceed baseline by more than 2 percentage points")
@@ -187,7 +203,7 @@ def rank(results: dict, checks: dict, keep_clear: list | None = None, *, policy=
             reasons.append("teleported vehicles invalidate the comparison")
         for field, label in (("parcel_overlap_m2", "parcel overlap"), ("building_overlap_m2", "building overlap"),
                              ("access_conflicts", "property access")):
-            if check.get(field) is None:
+            if not finite(check.get(field)) or check[field] < 0:
                 reasons.append(f"{label} remains unassessed")
         if check.get("building_overlap_m2", 0):
             reasons.append(f"overlaps mapped buildings by {check['building_overlap_m2']} m²")
@@ -216,12 +232,12 @@ def rank(results: dict, checks: dict, keep_clear: list | None = None, *, policy=
                 unit = " sound energy" if key == "noise" else ""
                 reasons.append(f"{key}{unit} worsens by more than 10%")
         changes["parcel_overlap"] = (min(1.0, check["parcel_overlap_m2"] / 50)
-                                      if check.get("parcel_overlap_m2") is not None else None)
+                                      if finite(check.get("parcel_overlap_m2")) and check["parcel_overlap_m2"] >= 0 else None)
         changes["access"] = (min(1.0, check["access_conflicts"] / 2)
-                             if check.get("access_conflicts") is not None else None)
+                             if finite(check.get("access_conflicts")) and check["access_conflicts"] >= 0 else None)
         score = -sum(WEIGHTS[k] * v for k, v in changes.items()) if all(v is not None for v in changes.values()) else None
         verdicts[name] = {"eligible": not reasons, "ineligible_reasons": reasons,
-                          "score": round(score, 4) if score is not None else None,
+                          "score": score,
                           "changes": {k: round(v, 4) if v is not None else None for k, v in changes.items()},
                           "tradeoffs": [k for k in ("delay", "queue", "noise", "co2") if changes[k] is not None and changes[k] > 0]}
     eligible = [n for n, v in verdicts.items() if v["eligible"]]
@@ -236,7 +252,7 @@ def rank(results: dict, checks: dict, keep_clear: list | None = None, *, policy=
 
 def evaluate(study, layouts: list[Layout], outlines=None, frontages=None, keep_clear=None, *, activity=None, policy=None, extra_checks=None) -> dict:
     """Simulate baseline plus layouts with paired seeds, measure footprints and checks, rank."""
-    if not 1 <= len(layouts) <= 3 or len({l.name for l in layouts}) != len(layouts):
+    if not 1 <= len(layouts) <= 3 or len({l.name for l in layouts}) != len(layouts) or any(l.name == "baseline" for l in layouts):
         raise ValueError("Evaluate one to three uniquely named layouts.")
     patches, shapes, checks, descriptions = {}, {}, {}, {}
     zones = []

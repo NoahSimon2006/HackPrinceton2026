@@ -114,6 +114,7 @@ def parse_manual(text: str) -> dict:
         if match:
             first, second = _ints(match.group(2).split()), _ints(match.group(3).split())
             combined, *peds = _ints(match.groups()[3:])
+            _check(match.group(1) not in current["rows"], "Duplicate hour or TOTAL row in manual count.")
             current["rows"][match.group(1)] = (first, second, combined, peds)
     _check(len(tables) == 2 and tables[0]["first"] == "NORTHBOUND" and tables[1]["first"] == "EASTBOUND",
            "Expected north/south and east/west approach tables.")
@@ -137,12 +138,14 @@ def parse_manual(text: str) -> dict:
             crossings[ped_one][hour], crossings[ped_two][hour] = peds[0], peds[2]
         first, second, combined, peds = rows["TOTAL"]
         for name, values in ((one, first), (two, second)):
+            _check(sum(values[:3]) == values[3], f"{name.upper()}: printed TOTAL movement columns do not sum to its total.")
             for index, move in enumerate(MOVES):
                 _check(sum(approaches[name][h][move] for h in table_hours) == values[index],
                        f"{name.upper()} {move}: hourly values do not sum to the printed column total.")
-        _check(sum(rows[h][2] for h in table_hours) == combined, "Combined column total does not reproduce.")
-        _check(sum(crossings[ped_one].values()) == peds[0] and sum(crossings[ped_two].values()) == peds[2],
-               "Pedestrian totals do not reproduce.")
+        _check(first[3] + second[3] == combined and sum(rows[h][2] for h in table_hours) == combined,
+               "Combined column total does not reproduce.")
+        _check(all(sum(rows[h][3][i] for h in table_hours) == peds[i] for i in range(4)),
+               "Pedestrian or school-crossing totals do not reproduce.")
     heavy = {}
     for label, key in (("DUAL-\nWHEELED", "dual_wheeled"), ("BUSES", "buses"), ("BIKES", "bikes")):
         found = re.search(re.escape(label) + r"\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)", text)
@@ -164,16 +167,21 @@ def parse_auto(text: str) -> dict:
     first, second = ("nb", "sb") if direction.group(1) == "N/S" else ("wb", "eb")
     pattern = re.compile(r"^(\d{1,2}) (AM|PM|NN)\s+" + r"\s+".join([r"([\d,]+)"] * 11) + r"\s*$")
     hourly = {first: [], second: []}
+    seen_hours = []
     for line in text.splitlines():
         match = pattern.match(line.strip())
         if not match:
             continue
+        hour, suffix = int(match.group(1)), match.group(2)
+        _check(1 <= hour <= 12 and (suffix != "NN" or hour == 12), "Invalid automatic count hour.")
+        clock_hour = hour % 12 + (12 if suffix in ("PM", "NN") else 0)
+        seen_hours.append(clock_hour)
         values = _ints(match.groups()[2:])
         _check(sum(values[0:4]) == values[4] and sum(values[5:9]) == values[9], "Quarter-hours do not sum to the hour.")
         _check(values[4] + values[9] == values[10], "Directions do not sum to the hourly total.")
         hourly[first].append(values[4])
         hourly[second].append(values[9])
-    _check(len(hourly[first]) == 24, "Expected 24 hourly rows.")
+    _check(seen_hours == list(range(24)), "Expected one chronological row for each of the 24 hours.")
     totals = re.search(r"24 HOUR VEHICLES TOTAL\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)", text)
     _check(totals, "Daily totals missing.")
     day_first, day_second, day_all = _ints(totals.groups())
@@ -213,6 +221,7 @@ def find_sheet(primary: str, cross: str, count_date: str, kind: str, cache: Path
 
 def peak_hour(sheet: dict, period: str) -> str:
     """Busiest counted hour in the AM (before noon) or PM window of a manual sheet."""
+    _check(period in ("am", "pm"), "Choose a counted AM or PM period.")
     window = [h for h in sheet["hours"] if (h in ("7-8", "8-9", "9-10", "10-11", "11-12")) == (period == "am")]
     _check(window, f"No {period.upper()} hours on this sheet.")
     return max(window, key=lambda h: sum(sum(a[h].values()) for a in sheet["approaches"].values()))

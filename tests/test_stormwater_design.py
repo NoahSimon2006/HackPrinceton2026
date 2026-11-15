@@ -45,6 +45,7 @@ class StormwaterDesignTest(unittest.TestCase):
         self.assertNotEqual(first.input_hash, second.input_hash)
         values = {metric.id:metric.proposed for metric in second.metrics}
         self.assertEqual(values["runoff_volume"], 4.064)  # Overlapping markings count once.
+        self.assertAlmostEqual(values["captured_volume"], values["storage_volume"] - values["direct_rain_volume"], places=3)
         self.assertAlmostEqual(values["runoff_volume"], values["captured_volume"] + values["overflow_volume"], places=3)
         self.assertIn("marking-1", second.access.evidence_ids)
 
