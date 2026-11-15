@@ -4,7 +4,7 @@
 
 ## Implemented behavior
 
-Choose **Explore in 3D** on a published footprint. The viewer opens on request and shows **Existing** and **Proposed** from one shared camera. Orbit, zoom, pan, top view, reset and surroundings controls support desktop inspection. A saved or earlier design keeps its own revision, hash, metrics and original save time. A rejected alternative retains its rejection label. A comparison without a selected footprint does not silently choose a 3D layout.
+Under **Results → Design**, choose **Explore in 3D** on a published footprint. The viewer opens on request and shows **Existing** and **Proposed** from one shared camera. Orbit, zoom, pan, top view, reset and surroundings controls support desktop inspection. A saved or earlier design keeps its own revision, hash, metrics and original save time. A rejected alternative retains its rejection label. A comparison without a selected footprint does not silently choose a 3D layout.
 
 The scene source comes from the validated publication actually displayed on the map, including internal alternatives and read-only history. The server resolves that design from its canonical saved project using project, revision, input hash and geometry identity. It rejects mismatches and development fixtures. Opening 3D does not rerun an agent, simulation or environmental calculation.
 
@@ -62,3 +62,7 @@ Branch: `codex/checkpoint-8-conceptual-3d`.
 Checkout: `/Users/Derek/Documents/Codex/2026-11-14/https-github-com-noahsimon2006-hackprinceton2026-https-2/work/checkpoint-7-core-demo`.
 
 The directory retains its earlier Checkpoint 7 name, but the active branch contains Checkpoint 8. The review server is <http://127.0.0.1:8010/#stormwater>, using the independent local project database with the prepared studies. Concurrent Desktop interface/guide work is preserved. See the [demo walkthrough](DEMO_WALKTHROUGH.md) for the presentation sequence.
+
+## Guided interface integration
+
+Merged the five-step interface from `e373365` with the conceptual viewer. The new layout and tours remain intact; Explore in 3D is on Results → Design, and the dialog is outside the guide panes. Resolved layout, stylesheet, static-route and README conflicts. The nine scene-builder tests and focused guide, scene, proposal and planner controller files pass on the combined tree. Browser verification opened the saved 20 m² design through the new Results step, opened and closed 3D, restored focus to its opener and disposed the canvas, with no console errors or warnings.

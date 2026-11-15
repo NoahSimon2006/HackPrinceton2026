@@ -364,7 +364,8 @@ console.log('PASS: active-workspace persistence and keyboard site/constraint rev
   const h=harness('street',{captureIdentity:true});h.select(34.05,-118.25);
   const property={id:'matched',lat:34.0501,lon:-118.2501,name:'Matched site',address:'Source address',type:'Multifamily'};
   h.identityRequests[0].resolve({status:'matched',property,candidates:[],message:'Same mapped parcel'});await flush();
-  assert.match(h.$('site-location').textContent,/34.05000, -118.25000/);
+  assert.equal(h.$('site-location').textContent,'Source address','a matched property is identified by its address');
+  assert.equal(h.$('site-resolution-status').textContent,'','the named card confirms a match without a routine success line');
   assert.equal(h.map.events.at(-1).name,'planneridentity');
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
   await flush();

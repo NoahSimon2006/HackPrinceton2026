@@ -35,7 +35,7 @@ function result(status='running',candidates=[]) {return {id:'search1',runId:'run
   const h=harness();h.start();assert.equal(h.requests[0].url,'/api/scouts');
   h.requests[0].resolve(result());await flush();assert.equal(h.$('scout-start').disabled,true);
   await h.poll();h.requests[1].resolve(result('ready',[candidate()]));await flush();
-  assert.match(text(h.$('scout-results')),/Data readiness · separate from priority/);
+  assert.match(text(h.$('scout-results')),/Evidence available/);
   assert.match(text(h.$('scout-results')),/USGS/);assert.equal(h.groups[1].items.length,2,'extent and numbered marker shown');
   assert.equal(h.events.filter(e=>e.type==='scoutselect').length,0,'publishing a shortlist does not choose or design a site');
   findButton(h,'Choose this location').events.click();assert.equal(h.requests[2].url,'/api/scouts/select');

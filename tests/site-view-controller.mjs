@@ -25,7 +25,6 @@ function harness({selected=true}={}) {
   const map={handlers:{},on(name,handler){(this.handlers[name]??=[]).push(handler);},fire(name,event){for(const handler of this.handlers[name]??[])handler(event);}};
   const json=(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject}));
   const selectProperty=property=>{selections.push(property);map.fire('plannersite',{siteId:'property:'+property.id,property,workflow:'street'});};
-  $('site-view-proposed').disabled=true;
   $('open-site-view').focus();
   vm.runInNewContext(source,{$,map,json,selectProperty,planningMode:'street',document,URL,AbortController,
     setTimeout(fn,delay){const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout(id){timers.delete(id);}});
@@ -46,9 +45,8 @@ async function open(h,descriptor=good()) {
   assert.equal(h.requests[0].url,'/api/site-view?propertyId=6067080');assert.equal(h.selections.length,0);
   assert.equal(h.$('site-view-dialog').open,true);assert.equal(h.document.activeElement,h.$('site-view-close'));
   assert.equal(frame.src,good().scan.url);assert.match(frame.title,/510 E Olympic/);
-  assert.equal(h.$('site-view-proposed').disabled,true);
   assert.match(h.$('site-view-source').textContent,/CoStar/);
-  frame.events.load();assert.match(h.$('site-view-status').textContent,/If it is blank or unavailable/);
+  frame.events.load();assert.match(h.$('site-view-status').textContent,/If the tour is blank or unavailable/);
   assert.equal(frame.attributes.allow,'fullscreen');
   assert.doesNotMatch(h.$('site-view-status').textContent,/verified loaded|coverage confirmed/i);
   let prevented=false;h.$('site-view-dialog').events.cancel({preventDefault(){prevented=true;}});
@@ -116,7 +114,6 @@ for(const event of [
   assert.doesNotMatch(h.$('site-view-entry-status').textContent,/Checking/,'canceled metadata must not retain a loading message');
   const active=harness(),frame=await open(active);active.map.fire(...event);
   assert.equal(active.$('site-view-dialog').open,false);assert.equal(frame.src,undefined);
-  assert.equal(active.$('site-view-proposed').disabled,true);
 }
 {
   const h=harness({selected:false});await h.$('open-site-view').events.click();
@@ -153,7 +150,9 @@ for (const contextLabel of ['Interior','Amenity','Unspecified']) {
   assert.match(h.$('site-view-tour-label').textContent,/\(1\)/);
   assert.equal(h.$('site-view-tour-choice').disabled,true);
   assert.doesNotMatch(h.$('site-view-source').textContent,/Invalid Date/);
-  assert.match(h.$('site-view-tour-title').textContent,contextLabel==='Unspecified'?/Coverage unspecified/:new RegExp(contextLabel+' · title hint'));
+  assert.doesNotMatch(h.$('site-view-tour-title').textContent,/title hint|·/,'a single tour shows its plain title');assert.ok(h.$('site-view-tour-title').textContent);
+  assert.equal(h.$('site-view-tour-picker').hidden,true,'no selector for one tour');
+  assert.match(h.$('site-view-limitations').children[0].textContent,contextLabel==='Unspecified'?/Coverage unspecified/:new RegExp('tour title: '+contextLabel.toLowerCase()),'inferred coverage is a source limit');
   h.$('site-view-close').events.click();
   assert.equal(h.timers.size,0);
 }
@@ -180,6 +179,9 @@ for (const contextLabel of ['Interior','Amenity','Unspecified']) {
   });
   d.scan=d.scans[100];await open(h,d);
   assert.equal(h.$('site-view-tour-choice').children.length,101);
+  const labels=h.$('site-view-tour-choice').children.map(option=>option.textContent);
+  assert.equal(new Set(labels).size,101,'tours sharing a title are numbered, never listed as identical entries');
+  assert.match(labels[0],/ 1$/);assert.match(labels[100],/ 101$/);
   assert.equal(h.$('site-view-tour-choice').disabled,false);
   assert.equal(h.$('site-view-tour-choice').value,d.scan.modelId);
 }
@@ -203,7 +205,8 @@ for (const contextLabel of ['Interior','Amenity','Unspecified']) {
   assert.doesNotMatch(h.$('site-view-status').textContent,/playback verified|successfully loaded/i);
   h.$('site-view-tour-choice').events.change({target:{value:'abcdefghijk'}});
   assert.equal(h.timers.size,1);assert.equal(retried.src,undefined);
-  assert.match(h.$('site-view-tour-title').textContent,/Amenity · title hint/);
+  assert.equal(h.$('site-view-tour-title').textContent,'','the selector already names the chosen tour');assert.equal(h.$('site-view-tour-picker').hidden,false);
+  assert.match(h.$('site-view-limitations').children[0].textContent,/tour title: amenity/);
   const stale=[...h.timers.values()][0];
   h.map.fire('plannersite',{siteId:'property:other',property:{...d.property,id:'other'},workflow:'street'});
   assert.equal(h.timers.size,0);assert.equal(h.$('site-view-dialog').open,false);

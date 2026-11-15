@@ -40,7 +40,7 @@ STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
           "/concept-scene.js": "concept-scene.js", "/concept-scene-renderer.js": "concept-scene-renderer.js",
           "/vendor/three.module.js": "vendor/three.module.js", "/vendor/three.core.js": "vendor/three.core.js",
           "/vendor/OrbitControls.js": "vendor/OrbitControls.js", "/vendor/three.LICENSE": "vendor/three.LICENSE",
-          "/vector-zoom.js": "vector-zoom.js",
+          "/vector-zoom.js": "vector-zoom.js", "/guide.js": "guide.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
           "/vendor/leaflet.css": "vendor/leaflet.css"}
 

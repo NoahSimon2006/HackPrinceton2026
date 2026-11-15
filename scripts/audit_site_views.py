@@ -35,7 +35,7 @@ def audit():
             model = scan['modelId']
             assert re.fullmatch(r'[A-Za-z0-9]{11}', model), 'Invalid model returned'
             assert scan['url'] == f'https://my.matterport.com/show/?m={model}', 'Untrusted tour URL'
-            assert owners.setdefault(model, prop['id']) == prop['id'], 'Model associated with multiple properties'
+            assert owners.setdefault(model, prop['id']) == prop['id'] or scan.get('sharedWithOtherProperty'), 'Shared model returned without disclosure'
             models.add(model)
         statuses[value['status']] += 1
         tours += len(scans)

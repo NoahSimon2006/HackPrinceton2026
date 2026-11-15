@@ -126,9 +126,10 @@ def site_view_descriptor(directory, catalog_items, property_id):
             if not supported:
                 exclusions["unsupported_attachment"] += 1
                 continue
-            if owners.get(model) != {property_id}:
-                exclusions["ambiguous_model"] += 1
-                continue
+            # A model listed under another property as well (often one complex with
+            # two addresses) still opens here: this property's own address row and
+            # attachment were both required above. The overlap is disclosed.
+            shared = owners.get(model) != {property_id}
             # The same verified property/model may have several listing records.
             # Optional titles and dates describe the link, not its identity.
             titles = sorted({display_text(item.get("caption"), limit=500) for item in supported} - {""})
@@ -151,7 +152,8 @@ def site_view_descriptor(directory, catalog_items, property_id):
             scans[model] = {"modelId": model, "title": title, "titles": titles,
                             "url": f"https://my.matterport.com/show/?m={model}",
                             "attachmentDate": dates[-1] if dates else None, "attachmentDates": dates,
-                            "contextLabel": context, "exteriorHint": exterior_hint}
+                            "contextLabel": context, "exteriorHint": exterior_hint,
+                            "sharedWithOtherProperty": shared}
         choices = sorted(scans.values(), key=lambda scan: (not scan["exteriorHint"], scan["title"], scan["modelId"]))
         ambiguous = bool(exclusions["ambiguous_model"])
         result = {"property": prop, "status": "linked" if choices else "ambiguous" if ambiguous else "unavailable",
@@ -160,12 +162,15 @@ def site_view_descriptor(directory, catalog_items, property_id):
                   "exclusions": [{"reason": reason, "count": count, "message": messages[reason]}
                                  for reason, count in sorted(exclusions.items()) if count],
                   "source": {"provider": "CoStar local property kit",
-                             "association": "Matching property address, CSV model join and attachment metadata; cross-property model matches are excluded."},
+                             "association": "Matching property address, CSV model join and attachment metadata. A tour also listed under another property is included only when this property's own address and attachment confirm it."},
                   "limitations": [
                       "Tours are linked to this property by listing metadata. Context labels are title hints only; actual coverage and playback require visual inspection.",
                       "Tour titles and attachment dates are listing metadata, not a verified scan date or current site survey.",
                       "No supported 2D proposal is registered to this scan. The proposed-design view is unavailable.",
                   ]}
+        shared_count = sum(scan["sharedWithOtherProperty"] for scan in choices)
+        if shared_count:
+            result["limitations"].insert(0, f"{shared_count} of these tours {'is' if shared_count == 1 else 'are'} also listed under another property, so {'it' if shared_count == 1 else 'they'} may show a neighbouring building.")
         if choices:
             result["availabilityMessage"] = f"{len(choices)} linked property tour(s). Playback availability has not been verified."
         else:

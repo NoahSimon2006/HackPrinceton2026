@@ -34,11 +34,14 @@
   }
   function paintArea() {
     areaLayer.clearLayers(); $('scout-view-area').hidden=!bounds;
-    if(!bounds) { $('scout-area-label').textContent='The visible map area will be used when you start.'; return; }
+    $('scout-area').textContent=bounds?'Update area':'Use current map area';
+    if(!bounds) { $('scout-area-label').textContent='Search area: current map view.'; return; }
     const [w,s,e,n]=bounds;
     L.rectangle([[s,w],[n,e]],{color:'#d4e6bf',weight:2,dashArray:'7 6',fillOpacity:.025,interactive:false}).addTo(areaLayer);
     const width=(e-w)*111.32*Math.cos((s+n)/2*Math.PI/180),height=(n-s)*111.32;
-    $('scout-area-label').textContent=`Search area · ${width.toFixed(1)} × ${height.toFixed(1)} km. Panning keeps this boundary; use the button to change it.`;
+    $('scout-area-label').textContent=`Fixed search area · ${width.toFixed(1)} × ${height.toFixed(1)} km`;
+    // Screen-reader explanation of what "fixed" means; sighted users see the outlined area stay put.
+    $('scout-area-label').append(el('span',' Panning the map keeps this area. Use Update area to change it.','visually-hidden'));
   }
   function setArea() {
     try {
@@ -96,9 +99,8 @@
     const unavailable=expired(candidate), article=el('article',undefined,'scout-card');
     article.id=`scout-candidate-${candidate.id}`;
     const title=el('h3');title.append(el('span',String(index+1),'scout-number'),el('span',candidate.label || 'Previous traffic opportunity'));article.append(title);
-    if(!candidate.propertyId && candidate.center?.every(Number.isFinite))
-      article.append(el('p',`Map location ${index+1} · ${candidate.center[1].toFixed(5)}, ${candidate.center[0].toFixed(5)}`,'scout-basis'));
-    article.append(el('p','OPPORTUNITY · NOT A DESIGN','scout-stage'));
+    // A research candidate, never a design: say so without shouting.
+    article.append(el('p','Opportunity · impact unassessed','scout-stage'));
     if(unavailable) {
       article.append(el('p',candidate.resumeNotice || 'This traffic observation expired. Run a fresh search before choosing it.','scout-readiness'));
       if(search?.selected?.candidateId===candidate.id) article.append(button('Open selected project',()=>map.fire('scoutselect',{project:{id:search.selected.projectId,snapshot:{workflow:mode}}})));
@@ -107,10 +109,13 @@
     article.append(el('h4','Environmental opportunity'),el('p',candidate.environmental?.summary || 'Impact remains to be established.'));
     if(candidate.direction) article.append(el('p',`Explore: ${candidate.direction}`));
     const readiness=el('section',undefined,'scout-readiness');
-    readiness.append(el('h4','Data readiness · separate from priority'),el('p',candidate.readiness?.summary || 'Further investigation is needed.'));
+    readiness.append(el('h4','Evidence available'),el('p',candidate.readiness?.summary || 'Further investigation is needed.'));
     article.append(readiness);
     const investigation=el('details',undefined,'scout-investigation');investigation.open=false;
     investigation.append(el('summary','Investigation and evidence'));
+    if(!candidate.propertyId && candidate.center?.every(Number.isFinite))
+      investigation.append(el('p',`Map location ${index+1} · ${candidate.center[1].toFixed(5)}, ${candidate.center[0].toFixed(5)}`,'scout-basis'));
+    investigation.append(el('p','Evidence availability is reported separately and does not raise a location’s priority.','scout-basis'));
     if(candidate.environmental?.basis) investigation.append(el('p',candidate.environmental.basis,'scout-basis'));
     if(candidate.reason) investigation.append(el('p',candidate.reason,'scout-reason'));
     const citations=evidence(candidate), facts=new Map((candidate.evidence ?? []).map((fact,index)=>[fact.id,{fact,index}]));

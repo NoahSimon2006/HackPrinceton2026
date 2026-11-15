@@ -39,6 +39,7 @@
   function removeProposal() {
     map.fire("proposaldisplay", {proposal:null});
     published = null; layer?.remove(); layer = null;
+    $("proposal-identity").textContent = "";
     show.checked = false; show.disabled = true;
     $("proposal-review").hidden = true;
     $("proposal-stale").hidden = true;
@@ -53,6 +54,7 @@
     sourceInspectButtons = [];
     removeProposal();
     $("traffic-comparison").hidden = true;
+    $("comparison-identity").textContent = "";
     $("water-design-review").hidden = true;
     $("comparison-stale").hidden = true;
     $("proposal-result-message").hidden = true;
@@ -117,7 +119,9 @@
     if (!fixture) for (const [name, check] of [["Access",p.access],["Overlap",p.overlap]]) {
       $("proposal-checks").append(element("p", `${name}: ${check?.text ?? "Not assessed"}`));
     }
-    $("proposal-revision").textContent = [`Revision ${p.revision} · inputs ${p.input_revision} · ${p.input_hash.slice(0,8)}`,savedNotice(study)].filter(Boolean).join('. ');
+    $("proposal-revision").textContent = [`Revision ${p.revision}`,savedNotice(study)].filter(Boolean).join('. ');
+    // Input identity is kept for traceability under the project details.
+    $("proposal-identity").textContent = `Design revision ${p.revision} · inputs ${p.input_revision} · ${p.input_hash.slice(0,8)}`;
     const stale = p.input_revision !== site.inputRevision || Boolean(study?.historicalReference);
     $("proposal-map-caption").textContent = caption(stale);
     $("proposal-stale").hidden = !stale;
@@ -164,8 +168,8 @@
       $('water-design-decisions').append(item);
     }
     if(!$('water-design-decisions').children.length) $('water-design-decisions').append(element('li',alternativeEntry
-      ? 'No separate sponsor decision ledger was recorded for this alternative. The selected concept’s decisions do not apply to this preview.'
-      : 'No additional sponsor decision ledger was recorded for this revision.'));
+      ? 'No separate decisions were recorded for this option. The selected concept’s decisions do not apply to this preview.'
+      : 'No separate decisions were recorded for this revision.'));
     $('water-design-alternatives').replaceChildren();
     const entries=Array.isArray(c.results)?c.results:Object.entries(c.results ?? {}).map(([id,value])=>({id,...value}));
     for(const entry of entries) {
@@ -195,7 +199,8 @@
       }
       $('water-design-alternatives').append(card);
     }
-    if(!entries.length)$('water-design-alternatives').append(element('p','No additional alternatives are available for this revision.'));
+    // An empty disclosure is noise; show it only when there is something to open.
+    $('water-design-alternatives-box').hidden=!entries.length;
     $('water-design-history').replaceChildren();
     for(const saved of currentWater?.designHistory ?? []) {
       if(!saved.proposal || saved.revision>=currentWater.revision)continue;
@@ -217,7 +222,7 @@
         }catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Earlier revision unavailable: ${error.message}`;}
       });$('water-design-history').append(inspect);
     }
-    if(!$('water-design-history').children.length)$('water-design-history').append(element('p','This is the first saved design revision.'));
+    $('water-design-history-box').hidden=!$('water-design-history').children.length;
   }
   function focus() {
     const bounds = layer?.getBounds?.();
@@ -270,7 +275,7 @@
   function renderTrafficContext(study, preview) {
     const c=study.comparison,plan=study.trafficPlan ?? {},readiness=plan.readiness ?? c.readiness;
     const order=Array.isArray(c.ranking.selection_order)?c.ranking.selection_order.join(' → '):c.ranking.selection_order;
-    $('comparison-policy').textContent=`${order || (c.ranking.policy?.startsWith('strict')?'Earlier weighted comparison policy; inspect its recorded assumptions.':'Environmental impact first; feasibility and disruption next.')} Data readiness is shown separately. Policy: ${c.ranking.policy || plan.policy || 'Recorded with this evaluation'}.`;
+    $('comparison-policy').textContent=`${order || (c.ranking.policy?.startsWith('strict')?'Earlier weighted comparison policy; inspect its recorded assumptions.':'Environmental impact first; feasibility and disruption next.')} Evidence availability is shown separately.`;
     $('comparison-readiness').textContent=typeof readiness==='string'?readiness:
       readiness?.label || readiness?.basis || (c.status==='unavailable'?'Required simulation inputs are incomplete.':
         'Simulation completed under the listed historical inputs. Inspect each layout’s unresolved source and feasibility checks before relying on its result.');
@@ -294,7 +299,7 @@
       }
       $('traffic-design-decisions').append(item);
     }
-    if(!$('traffic-design-decisions').children.length)$('traffic-design-decisions').append(element('li','Inspect each layout’s parcel, building, access and crossing checks below. No separate design-decision ledger was recorded.'));
+    if(!$('traffic-design-decisions').children.length)$('traffic-design-decisions').append(element('li','Inspect each layout’s parcel, building, access and crossing checks below. No separate design decisions were recorded.'));
     $('traffic-design-history').replaceChildren();
     for(const saved of currentTraffic?.trafficDesignHistory ?? []) {
       if(!saved.comparison || saved.revision>=currentTraffic.revision)continue;
@@ -307,7 +312,7 @@
         }catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Earlier evaluation unavailable: ${error.message}`;}
       });$('traffic-design-history').append(inspect);
     }
-    if(!$('traffic-design-history').children.length)$('traffic-design-history').append(element('p','This is the first saved traffic evaluation.'));
+    $('traffic-design-history-box').hidden=!$('traffic-design-history').children.length;
     $('traffic-return-current').hidden=!preview;
   }
   function renderComparison(c, alternatives, study=currentTraffic, preview=false) {
@@ -320,7 +325,8 @@
     $("comparison-outcome").textContent = c.ranking?.reason ?? c.ranking?.selection_reason ?? (recommended ? `${label(recommended)} is the recommended option under these simulation inputs.` : "None of the tested layouts met the recommendation rules.");
     $("comparison-period").textContent = `LADOT count: ${c.count_date ?? "date unavailable"} · ${c.peak_hour ?? c.period ?? "period unavailable"}`;
     $("comparison-stale").hidden = true;
-    $("comparison-revision").textContent = `Revision ${c.revision} · inputs ${c.input_revision} · ${c.input_hash.slice(0,8)}`;
+    $("comparison-revision").textContent = `Revision ${c.revision}`;
+    $("comparison-identity").textContent = `Evaluation revision ${c.revision} · inputs ${c.input_revision} · ${c.input_hash.slice(0,8)} · policy ${c.ranking?.policy || study?.trafficPlan?.policy || 'recorded with this evaluation'}`;
     const table = element("table"), head = element("thead"), heading = element("tr");
     const corner = element("th", "Metric"); corner.setAttribute("scope", "col"); heading.append(corner);
     for (const name of ["baseline", ...names]) {
@@ -352,12 +358,12 @@
       const before=c.results.baseline,after=c.results[name];
       const change=finite(before.co2_kg_per_hour) && before.co2_kg_per_hour>0 && finite(after.co2_kg_per_hour)
         ? 100*(after.co2_kg_per_hour/before.co2_kg_per_hour-1):null;
-      const environment=element('p',`Environmental result: ${number(after.co2_kg_per_hour,'kg CO₂ / demand hour')}${finite(change)?` · ${number(Math.abs(change),'%')} ${change<0?'lower':change>0?'higher':'change'} than baseline`:'. Change not assessed'}. A lower total cannot justify stranded traffic or a failed hard gate.`);
+      const environment=element('p',`Environmental result: ${number(after.co2_kg_per_hour,'kg CO₂ / demand hour')}${finite(change)?` · ${number(Math.abs(change),'%')} ${change<0?'lower':change>0?'higher':'change'} than baseline`:'. Change not assessed'}.`);
       environment.className='comparison-environment';card.append(environment);
       const practical=element('p',`Feasibility & disruption: ${number(after.mean_delay_s,'s / vehicle')} mean delay; ${number(finite(after.completion_share)?after.completion_share*100:null,'%')} of offered demand completed; ${number(maximum(after.max_queue_m),'m')} maximum approach queue.`);
       practical.className='comparison-practical';card.append(practical);
       if(finite(verdict.changes?.queue))card.append(element('p',`Worst individual approach queue change: ${verdict.changes.queue>0?'+':''}${number(verdict.changes.queue*100,'%')} versus that approach’s own baseline. This gate differs from the overall maximum shown in the table.`));
-      if(verdict.readiness)card.append(element('p',`Data readiness: ${verdict.readiness.status==='evaluated'?'required checks evaluated':'additional evidence needed'}${verdict.readiness.gaps?.length?`. ${verdict.readiness.gaps.join('; ')}`:''}. This does not increase the environmental rank.`));
+      if(verdict.readiness)card.append(element('p',`Evidence available: ${verdict.readiness.status==='evaluated'?'required checks evaluated':'additional evidence needed'}${verdict.readiness.gaps?.length?`. ${verdict.readiness.gaps.join('; ')}`:''}. This does not increase the environmental rank.`));
       const inspect = element("button", "Show footprint on map");
       inspect.type = "button";
       inspect.addEventListener("click", () => {
@@ -378,8 +384,6 @@
       card.append(element("p", `Mapped access conflicts: ${number(check.access_conflicts, "", 0)}. Keep-clear conflict: ${check.keep_clear_conflict === true ? "Yes" : check.keep_clear_conflict === false ? "No" : "Not assessed"}.`));
       const detectionStatus = {ready:"Available", empty:"No candidates returned", unavailable:"Unavailable"}[check.detection_status] ?? "Not assessed";
       card.append(element("p", `Crossing/driveway detection: ${detectionStatus}. Overlapping crosswalk candidates: ${number(check.candidate_crosswalk_overlaps, "", 0)}. Driveway candidates: ${number(check.candidate_driveway_overlaps, "", 0)}.`));
-      card.append(element("p", "Detection candidates require field verification; an empty response does not confirm that a crossing or driveway is absent."));
-      card.append(element("p", "Mapped checks do not establish ownership, access approval or construction feasibility."));
       $("comparison-alternatives").append(card);
     }
     $("comparison-sources").replaceChildren();

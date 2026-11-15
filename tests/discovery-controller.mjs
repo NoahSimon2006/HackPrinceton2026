@@ -58,12 +58,13 @@ function data(workflow='street',id='flow') {
   h.map.fire('plannerworkspace',{mode:'water'});
   assert.equal(h.requests[0].options.signal.aborted,true);
   h.requests[1].reject(new Error('Restart server'));await flush();
-  assert.equal(h.$('discovery-retry').hidden,false);
-  h.$('discovery-retry').events.click();
+  assert.equal(h.$('discovery-refresh').hidden,false,'a failed stormwater load still offers recovery');
+  assert.equal(h.$('discovery-refresh').textContent,'Retry','one recovery action per failed fetch');
+  h.$('discovery-refresh').events.click();
   h.requests[2].resolve(data('water','terrain'));await flush();
   h.requests[0].resolve(data());await flush();
   assert.equal(h.$('discovery-layer').value,'terrain','late traffic response cannot repaint stormwater');
-  assert.equal(h.$('discovery-retry').hidden,true);
+  assert.equal(h.$('discovery-refresh').hidden,true,'stormwater has no live refresh once loaded');
   h.$('discovery-feature').value='one';h.$('discovery-feature').events.change();
   assert.equal(h.events.find(x=>x.name==='discoveryselect').event.workflow,'water');
 }
