@@ -164,8 +164,11 @@ class AgentTest(unittest.TestCase):
         with patch("site_agent.ChatXAI", side_effect=[model,site_model,domain_model]):
             result = analyze_site("unused", "fake", "Review this site", "water", [],
                 imagery, lambda: (details, []), hydrology, lon=LON, lat=LAT, activity=Activity(events.append), discovery=selected,
-                analysis_identity=IDENTITY)
+                analysis_identity=IDENTITY,
+                fetch_discovery=lambda: ([fact("area-terrain-test", "Nearby terrain contribution", 900, "m²", source("USGS"), basis="estimated", note="Not verified drainage.")], []))
         self.assertIsNone(result["analysisError"])
+        self.assertIn("query_neighborhood_discovery", domain_model.tool_names)
+        self.assertTrue(any(f["id"] == "area-terrain-test" for f in result["facts"]))
         self.assertIsNotNone(result["report"])
         self.assertEqual(result["proposal"]["status"], "draft")
         self.assertEqual(next(f["value"] for f in result["facts"] if f["id"] == "parcel-area"), 10000)

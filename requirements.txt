@@ -8,3 +8,5 @@ langsmith==0.14.17
 pyproj==3.8.0
 shapely==2.2.0
 pypdf==6.3.0
+mapbox-vector-tile==2.2.0
+openlr==1.0.1

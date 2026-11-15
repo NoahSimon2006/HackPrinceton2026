@@ -114,7 +114,7 @@ def review_schema(facts, attempted, required, recommendation_check=None, *, wate
 
 def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, fetch_property, fetch_hydrology,
                  *, lon, lat, scenario=None, activity=None, discovery=None, traffic_context=None,
-                 analysis_identity=None, allow_generated_timing=False, ranking_policy=None):
+                 analysis_identity=None, allow_generated_timing=False, ranking_policy=None, fetch_discovery=None):
     activity = activity or Activity()
     evidence = {"outlines": [], "detections": [], "search": [], "frontages": [], "unavailable": []}
     facts = {item["id"]: item for item in measure_markings(markings, scenario)}
@@ -138,9 +138,9 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     else:
         instructions += " Stormwater capture means temporary event storage. Do not infer infiltration, peak-flow reduction, flood protection or construction feasibility."
     lock = RLock()
-    source_locks = {name: RLock() for name in ("outlines", "detections", "search", "property", "hydrology", "traffic")}
+    source_locks = {name: RLock() for name in ("outlines", "detections", "search", "property", "hydrology", "traffic", "discovery")}
     providers = {"outlines": "Vexcel parcel extraction", "detections": "Vexcel detection", "search": "Vexcel imagery search",
-                 "property": "CoStar local property kit", "hydrology": "LA County hydrology", "traffic": "Traffic input inventory"}
+                 "property": "CoStar local property kit", "hydrology": "LA County hydrology", "traffic": "Traffic input inventory", "discovery": "Source-backed neighborhood discovery"}
 
     def availability(name, message):
         return fact(f"{name}-status", f"{providers[name]} availability", message, "", source(providers[name]),
@@ -153,7 +153,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             activity.check()
             if name in cached:
                 return cached[name]
-            specialist = "domain-analysis" if name in ("hydrology", "traffic") else "site-evidence"
+            specialist = "domain-analysis" if name in ("hydrology", "traffic", "discovery") else "site-evidence"
             activity.event(specialist, name, "started", f"Reading {providers[name]}.")
             try:
                 data = fetch()
@@ -232,9 +232,16 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             required.add("comparison")
         return result
 
+    def query_neighborhood_discovery() -> dict:
+        """Inspect sourced signals within this site's bounded neighborhood. Current flow never supplies turning demand or emissions; terrain never verifies drains or flooding."""
+        return collect('discovery', fetch_discovery, lambda data:data, lambda _:None)
+
     site_tools = [find_parcel_and_buildings, detect_site_features, read_costar_property, search_aerial_imagery]
     domain_tools = [read_rainfall_and_watershed] if workflow == "water" else [read_traffic_inputs]
     required = {"outlines", "detections", "property", "hydrology" if workflow == "water" else "traffic"}
+    if fetch_discovery is not None:
+        domain_tools.append(query_neighborhood_discovery)
+        required.add('discovery')
     summaries = {}
     delegated = False
     # Each run owns its virtual files; no host filesystem or raw provider records.

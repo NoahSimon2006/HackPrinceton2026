@@ -158,7 +158,7 @@ def turning_records(records, intersections):
 def build_traffic(refresh=False):
     import sumolib
     from itertools import combinations
-    layer=dict(id='counts',label='Historical traffic counts',status='ready',classification='reported',unit='vehicles reported',
+    layer=dict(id='counts',label='Dated automated counts',status='ready',classification='reported',unit='automated detections · count duration unknown',
         period='2011–2016 · source count dates',source='ladot',
         method='Latest automated AT-intersection record per primary/cross street matched to local OSM junction names. No demand extrapolation, direction splitting or time conversion.',
         limitations='Historical reported totals, not current traffic. Count duration is not documented; these are not vehicles/hour. Manual and unverified count types are excluded. Locations are approximate OSM matches, not surveyed count stations.',features=[])
@@ -200,120 +200,16 @@ def build_traffic(refresh=False):
     return save('street',DTLA,sources,[layer,turning],audit)
 
 
-def download_terrain(refresh=False):
-    import rasterio
-    from rasterio.windows import from_bounds
-    from pyproj import Transformer
-    path=DATA/'kipling-dem.tif'
-    if path.exists() and not refresh:return path
-    with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN='EMPTY_DIR',CPL_VSIL_CURL_ALLOWED_EXTENSIONS='.tif',GDAL_HTTP_TIMEOUT='30',GDAL_HTTP_MAX_RETRY='1'):
-        with rasterio.open(DEM) as src:
-            if src.res!=(1.,1.) or src.crs.to_epsg()!=26911:raise ValueError('Unexpected terrain grid; inspect before routing.')
-            x,y=Transformer.from_crs(4326,src.crs,always_xy=True).transform(*PILOT)
-            window=from_bounds(x-200,y-200,x+200,y+200,src.transform).round_offsets().round_lengths()
-            data=src.read(1,window=window,masked=True)
-            if data.shape!=(400,400) or data.count()!=data.size:raise ValueError('Pilot DEM window is incomplete.')
-            profile=src.profile.copy();profile.update(width=400,height=400,transform=src.window_transform(window),compress='deflate')
-            with rasterio.open(path,'w',**profile) as out:out.write(data.filled(src.nodata),1)
-            (DATA/'terrain-source.json').write_text(json.dumps({'url':DEM,'crs':str(src.crs),'resolution_m':list(src.res),'window':list(window.flatten()),'bounds':list(rasterio.windows.bounds(window,src.transform)),'publication_date':'2025-08-11','product':'USGS 1 Meter 11 x37y378 CA_LosAngeles_B23'}))
-    return path
-
-
-def build_water(refresh=False):
-    import numpy as np
-    import rasterio
-    from pyproj import Transformer
-    from shapely.geometry import shape,box,mapping,Point
-    from shapely import transform
-    def shape_transform(fn, geometry):return transform(geometry,fn,interleaved=False)
-    source={'dem':{'label':'USGS 3DEP · 1 m bare-earth DEM','url':DEM,'retrieved_at':NOW,'observed_at':None,'published_at':'2025-08-11','vertical_datum':'NAVD88, meters','product':'USGS 1 Meter 11 x37y378 CA_LosAngeles_B23'},
-            'rainfall':{'label':'LA County rainfall contours','url':RAINFALL,'retrieved_at':NOW,'observed_at':None},
-            'catchments':{'label':'LA County storm-drain study catchments','url':CATCHMENTS,'retrieved_at':NOW,'observed_at':None}}
-    limits='Bare-earth screening only: buildings, curb cuts and drains are not routed. Flats/pits remain unresolved; no sink filling. Window-limited contributing area is not runoff volume, flood depth or a verified drainage area. Small elevation differences may be within DEM error.'
-    terrain=dict(id='terrain',label='Terrain paths & collection candidates',status='ready',classification='derived',unit='m² of raster area',period='USGS product published 2025-08-11 · acquisition date unverified',source='dem',
-                 method='D8 steepest strictly downhill neighbor on the native 1m grid. Accumulate one square meter per valid cell; stop at flats/pits. Display inner 240m area with an 80m context buffer.',limitations=limits,features=[])
-    rain=dict(id='rainfall',label='Design rainfall',status='ready',classification='estimated',unit='inches',period='85th-percentile · 24-hour',source='rainfall',method='County contour interpolation at 30m display-cell centers. Cell geometry is a display grid, not source resolution.',limitations='Design rainfall depth, not a forecast, rainfall intensity or flood depth. Contour date unavailable.',features=[])
-    catch=dict(id='catchments',label='County drainage context',status='ready',classification='reported',unit='mapped catchment',period='County hydrology study compilation · date unavailable',source='catchments',method='County catchment polygons clipped to the discovery pilot for display.',limitations='Regional storm-drain study context; not a parcel flow boundary. No inlet-level connection is verified.',features=[])
-    to_geo=Transformer.from_crs(26911,4326,always_xy=True);to_xy=Transformer.from_crs(4326,26911,always_xy=True)
-    x,y=to_xy.transform(*PILOT);study=box(x-120,y-120,x+120,y+120)
-    boundary=shape_transform(to_geo.transform,study);bbox=list(boundary.bounds);audit={}
-    try:
-        raw=cached_json('county-catchments.json',lambda:county_features(CATCHMENTS,','.join(map(str,bbox)),'esriGeometryEnvelope','AREA_NAME,OUTFALL_ID'),refresh)
-        source['catchments'].update(input_provenance(DATA/'county-catchments.json'))
-        for i,f in enumerate(raw):
-            clipped=shape(f['geometry']).intersection(boundary)
-            if clipped.is_empty:continue
-            center=clipped.representative_point()
-            catch['features'].append({'type':'Feature','id':f'catchment-{i+1}','geometry':mapping(clipped),'properties':{'label':f['properties']['AREA_NAME'],'value':f['properties']['AREA_NAME'],'center':[center.x,center.y],'scalar_detail':{'outfall_reference':f['properties'].get('OUTFALL_ID'),'scope':'Mapped regional context, not an inferred parcel connection.'}}})
-        if not catch['features']:catch.update(status='empty')
-    except (OSError,ValueError,KeyError) as e:catch.update(status='unavailable',error=str(e),features=[])
-    try:
-        contours=cached_json('county-rainfall.json',lambda:rainfall_contours(tuple(bbox)),refresh)
-        source['rainfall'].update(input_provenance(DATA/'county-rainfall.json'))
-        for row in range(8):
-            for col in range(8):
-                cell=box(x-120+col*30,y-120+row*30,x-90+col*30,y-90+row*30)
-                center=to_geo.transform(cell.centroid.x,cell.centroid.y)
-                estimate=rainfall_at(*center,contours)
-                if estimate is None:continue
-                rain['features'].append({'type':'Feature','id':f'rain-{row}-{col}','geometry':mapping(shape_transform(to_geo.transform,cell)),
-                    'properties':{'label':'County design rainfall','value':estimate['inches'],'center':list(center),'scalar_detail':{'interpolation':estimate['method'],'bracketing_contours_in':estimate['depth_range']}}})
-        if not rain['features']:rain.update(status='empty')
-    except (OSError,ValueError,KeyError) as e:rain.update(status='unavailable',error=str(e),features=[])
-    try:
-        path=download_terrain(refresh)
-        source['dem'].update(input_provenance(path))
-        with rasterio.open(path) as src:
-            if src.res!=(1.,1.) or src.crs.to_epsg()!=26911:raise ValueError('Unexpected raster grid.')
-            z=src.read(1,masked=True).filled(np.nan).astype(float);affine=src.transform
-        if not np.isfinite(z).all():raise ValueError('Terrain has NoData; inspect coverage before routing.')
-        target,area,edge,slope=d8(z)
-        h,w=z.shape
-        def xy(i):return affine*(i%w+.5,i//w+.5)
-        def coord(i):return list(to_geo.transform(*xy(i)))
-        def interior(i):return study.contains(Point(*xy(i)))
-        def county(i):
-            point=Point(*coord(i))
-            matches=[f['properties']['AREA_NAME'] for f in (raw if catch['status']=='ready' else []) if shape(f['geometry']).covers(point)]
-            return ', '.join(sorted(set(matches))) or 'No covering county catchment returned'
-        # Select high-contributing-area paths, then avoid repeating shared cells.
-        candidates=np.argsort(area,axis=None)[::-1];used=set();paths=[];sinks=[]
-        for index in candidates:
-            index=int(index)
-            if area.flat[index]<100:break
-            if not interior(index):continue
-            if target.flat[index]<0:
-                if len(sinks)<16 and all(math.dist(xy(index),xy(j))>=12 for j in sinks):sinks.append(index)
-                continue
-            if index in used or len(paths)>=32:continue
-            # Follow upstream through its strongest contributing neighbor to
-            # show an actual contiguous path instead of a one-cell arrow.
-            head=index
-            for _ in range(80):
-                r,c=divmod(head,w)
-                upstream=[rr*w+cc for rr in range(max(0,r-1),min(h,r+2)) for cc in range(max(0,c-1),min(w,c+2)) if target[rr,cc]==head and area[rr,cc]>=25]
-                if not upstream:break
-                head=max(upstream,key=lambda j:area.flat[j])
-            route=path_from(head,target)
-            route=longest_inside_path(route,interior)
-            if len(route)<6 or z.flat[route[0]]-z.flat[route[-1]]<.2:continue
-            if sum(i in used for i in route)>len(route)*.4:continue
-            used.update(route);paths.append(route)
-        for n,route in enumerate(paths):
-            first,last=route[0],route[-1];length=sum(math.dist(xy(a),xy(b)) for a,b in zip(route,route[1:]))
-            terrain['features'].append({'type':'Feature','id':f'flow-{n+1}','geometry':{'type':'LineString','coordinates':[coord(i) for i in route]},'properties':{
-                'label':'Inferred downhill terrain path','kind':'flow','value':round(float(area.flat[last]),1),'center':coord(route[len(route)//2]),
-                'scalar_detail':{'upstream_elevation_m':round(float(z.flat[first]),3),'downstream_elevation_m':round(float(z.flat[last]),3),'drop_m':round(float(z.flat[first]-z.flat[last]),3),'path_length_m':round(length,2),'window_edge_contribution':bool(edge.flat[last]),'county_context':county(last)},
-                'grid_reference':{'start_row_col':list(divmod(first,w)),'end_row_col':list(divmod(last,w))}}})
-        for n,i in enumerate(sinks):
-            terrain['features'].append({'type':'Feature','id':f'collection-{n+1}','geometry':{'type':'Point','coordinates':coord(i)},'properties':{'label':'Unresolved collection candidate','kind':'collection','value':round(float(area.flat[i]),1),'center':coord(i),'scalar_detail':{'elevation_m':round(float(z.flat[i]),3),'window_edge_contribution':bool(edge.flat[i]),'county_context':county(i),'classification':'DEM sink or flat; drainage and ponding are unverified.'},'grid_reference':{'row_col':list(divmod(i,w))}}})
-        audit={'raster_cells':int(z.size),'valid_cells':int(np.isfinite(z).sum()),'raster_range_m':[float(z.min()),float(z.max())],'grid_crs':'EPSG:26911','grid_resolution_m':1,'context_m':400,'display_m':240,'threshold_area_m2':100,'path_min_drop_m':.2,'unresolved_terminals':int((target<0).sum()),'catchment_check':'Spatial overlay against county polygons only; inlet connectivity unverified.'}
-        if not terrain['features']:terrain.update(status='empty')
-    except (OSError,ValueError,KeyError) as e:terrain.update(status='unavailable',error=str(e),features=[])
-    return save('water',bbox,source,[terrain,rain,catch],audit)
+def build_water(refresh=False, sponsors=False):
+    from water_discovery import build_water as expanded_water
+    return expanded_water(DATA, refresh=refresh, sponsors=sponsors)
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--refresh',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--refresh',action='store_true')
+    parser.add_argument('--workflow',choices=('street','water','both'),default='both')
+    parser.add_argument('--sponsors',action='store_true',help='Fetch the three bounded Vexcel site samples for water discovery.')
+    args=parser.parse_args()
     DATA.mkdir(parents=True,exist_ok=True)
-    build_traffic(args.refresh);build_water(args.refresh)
+    if args.workflow in ('street','both'):build_traffic(args.refresh)
+    if args.workflow in ('water','both'):build_water(args.refresh,args.sponsors)

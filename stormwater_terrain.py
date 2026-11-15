@@ -32,12 +32,23 @@ def terrain_screen(geometry, path=None):
         from shapely.geometry import box, mapping, shape
         from site_measurements import projected
 
-        path = Path(path) if path is not None else DATA / "kipling-dem.tif"
-        meta = json.loads((path.parent / "terrain-source.json").read_text())
-        origin = json.loads((path.parent / "water.json").read_text())["sources"]["dem"]
+        directory = Path(path).parent if path is not None else DATA
+        origin = json.loads((directory / "water.json").read_text())["sources"]["dem"]
+        expanded = origin.get('raster_file') == 'western-dem.tif'
+        path = Path(path) if path is not None else directory / ('western-dem.tif' if expanded else 'kipling-dem.tif')
+        metadata_path = directory / ('western-terrain-source.json' if expanded else 'terrain-source.json')
+        meta = json.loads(metadata_path.read_text())
         digest = sha256(path.read_bytes()).hexdigest()
-        if (meta.get("url") != DEM_URL or origin.get("url") != DEM_URL
-                or meta.get("publication_date") != origin.get("published_at")
+        if expanded:
+            from water_discovery import DEM_URLS, DEM_PAGE, WESTERN, BUFFER_M
+            if (meta.get('urls') != DEM_URLS or origin.get('url') != DEM_PAGE
+                    or origin.get('urls') != DEM_URLS or meta.get('pilot_bbox') != list(WESTERN)
+                    or meta.get('buffer_m') != BUFFER_M or meta.get('input_sha256') != digest
+                    or sha256(metadata_path.read_bytes()).hexdigest() != origin.get('metadata_sha256')):
+                raise ValueError('Expanded source metadata mismatch')
+        elif meta.get('url') != DEM_URL or origin.get('url') != DEM_URL:
+            raise ValueError('Source metadata mismatch')
+        if (meta.get("publication_date") != origin.get("published_at")
                 or meta.get("publication_date") != "2025-08-11"
                 or meta.get("crs") != "EPSG:26911" or meta.get("resolution_m") != [1., 1.]
                 or origin.get("vertical_datum") != "NAVD88, meters"
@@ -76,7 +87,8 @@ def terrain_screen(geometry, path=None):
                       relief_m=round(float(heights.max()-heights.min()), 3),
                       median_slope_percent=round(float(np.median(slopes)), 2),
                       max_slope_percent=round(float(slopes.max()), 2), sampled_cells=int(selected.sum()),
-                      source={"provider":"USGS 3DEP 1 m bare-earth DEM", "url":DEM_URL,
+                      source={"provider":"USGS 3DEP 1 m bare-earth DEM", "url":origin['url'],
+                              "urls":origin.get('urls',[DEM_URL]),
                               "publication_date":meta["publication_date"], "observed_at":None,
                               "retrieved_at":origin.get("retrieved_at"), "resolution_m":1,
                               "vertical_datum":"NAVD88, meters", "input_sha256":digest},

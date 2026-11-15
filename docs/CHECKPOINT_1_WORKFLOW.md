@@ -1,5 +1,7 @@
 # Checkpoint 1 — one workflow and selected-site identity
 
+**Later update:** Checkpoints 0/1 were committed as `07c57af`; see [Checkpoint 2](CHECKPOINT_2_DISCOVERY.md) for current work. The status below records the Checkpoint 1 review.
+
 Checkpoint 1 is complete and ready for review. The working branch is `codex/checkpoint-1-site-identity`, preserving all uncommitted Checkpoint 0 changes from the verified `99333b3` baseline. Nothing was committed, pushed or merged. The updated local app runs at **http://127.0.0.1:8003/**. Checkpoint 2A has not started.
 
 ## What changed

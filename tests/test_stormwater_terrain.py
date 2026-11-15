@@ -72,7 +72,7 @@ class TerrainScreenTest(unittest.TestCase):
             self.skipTest("Real cached USGS data unavailable")
         result = terrain_screen(self.polygon)
         self.assertEqual(result["status"],"ready")
-        self.assertEqual(result["source"]["url"],DEM_URL)
+        self.assertIn(DEM_URL,result["source"]["urls"])
         self.assertGreaterEqual(result["max_slope_percent"],0)
         self.assertLess(result["max_elevation_m"],100)
 

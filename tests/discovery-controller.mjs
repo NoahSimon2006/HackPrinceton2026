@@ -4,21 +4,22 @@ import vm from 'node:vm';
 const source=await readFile(new URL('../public/discovery.js',import.meta.url),'utf8');
 const flush=()=>new Promise(setImmediate);
 function harness(mobile=false) {
-  const elements=new Map(),requests=[],events=[],rendered=[];
+  const elements=new Map(),requests=[],events=[],rendered=[],timers=[],clock={now:Date.now()};
+  class TestDate extends Date {static now(){return clock.now;}}
   const element=()=>({value:'',disabled:false,hidden:false,children:[],events:{},textContent:'',
     classList:{contains:()=>false},setAttribute(){},append(...children){this.children.push(...children);},
     replaceChildren(){this.children=[];},addEventListener(name,fn){this.events[name]=fn;}});
   const $=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
-  const overlay={attached:false,clearLayers(){rendered.length=0;},addTo(){this.attached=true;},remove(){this.attached=false;}};
+  const overlay={attached:false,clearLayers(){rendered.length=0;},addTo(){this.attached=true;return this;},remove(){this.attached=false;}};
   const map={handlers:{},createPane(){},getPane:()=>({style:{}}),fitBounds(){},setView(){},closePopup(){},getCenter:()=>({lat:34.05,lng:-118.25}),getZoom:()=>17,
     fire(name,event){events.push({name,event});this.handlers[name]?.(event);},on(name,fn){this.handlers[name]=fn;},attributionControl:{addAttribution(){}}};
   const popup={setLatLng(){return this;},setContent(content){this.content=content;return this;},openOn(){return this;}};
   const json=(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject}));
-  vm.runInNewContext(source,{$,map,json,planningMode:'street',coverage:null,AbortController,window:{matchMedia:()=>({matches:mobile})},
+  vm.runInNewContext(source,{$,map,json,planningMode:'street',coverage:null,AbortController,setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},Date:TestDate,window:{matchMedia:()=>({matches:mobile})},
     document:{createElement:element,getElementById:$},
     L:{latLng:(lat,lng)=>({lat,lng}),layerGroup:()=>overlay,popup:()=>popup,circleMarker:()=>({}),
       geoJSON:(data,options)=>{for(const feature of data.features){const leaf={bindTooltip(){},on(name,fn){this[name]=fn;}};options.onEachFeature(feature,leaf);rendered.push({feature,leaf});}return{addTo(){}};}}});
-  return{$,map,requests,events,rendered,overlay};
+  return{$,map,requests,events,rendered,overlay,timers,clock};
 }
 function data(workflow='street',id='counts') {
   return{schema:1,workflow,version:`${workflow}-hash`,bbox:[-118.26,34.04,-118.24,34.06],
@@ -74,3 +75,31 @@ console.log('PASS: source-only discovery, selection, off toggle, partial failure
   assert.equal(h.$('discovery-body').hidden,false,'layer controls can always be reopened');
 }
 console.log('PASS: narrow-screen controls collapse after selection and reopen on request');
+
+{
+  const h=harness();const current=data();
+  const live={...current.layers[0],id:'flow',version:'flow-current',status:'partial',unit:'% of free-flow speed',
+    features:[{...current.layers[0].features[0],id:'slow-road',properties:{...current.layers[0].features[0].properties,
+      value:50,scalar_detail:{speed_kmh:20,relative_speed:.5,road_closure:false}}}]};
+  current.layers.unshift(live);current.flow_expires_epoch=h.clock.now/1000+60;
+  current.flow_expires_at=new Date(current.flow_expires_epoch*1000).toISOString();
+  h.requests[0].resolve(current);await flush();
+  assert.equal(h.$('discovery-layer').value,'flow');
+  h.rendered[0].leaf.click();
+  assert.equal(h.events.find(e=>e.name==='discoveryselect').event.reference.version,'flow-current');
+  h.clock.now+=61000;h.timers[0]();
+  assert.equal(h.rendered.length,0,'expired flow must disappear');
+  assert.match(h.$('discovery-status').textContent,/expired/);
+  assert.equal(h.requests.length,1,'expiry must not create automatic provider polling');
+  h.$('discovery-layer').value='counts';h.$('discovery-layer').events.change();
+  assert.equal(h.rendered.length,1,'historical data remains available after live expiry');
+  h.rendered[0].leaf.click();
+  assert.equal(h.events.filter(e=>e.name==='discoveryselect').at(-1).event.reference.version,'street-hash');
+  h.$('discovery-refresh').events.click();
+  assert.equal(h.requests.length,2,'refresh is explicitly initiated');
+  h.map.fire('plannerworkspace',{mode:'water'});
+  h.requests[2].resolve(data('water','rainfall'));await flush();
+  h.requests[1].resolve(data());await flush();
+  assert.equal(h.$('discovery-layer').value,'rainfall','late flow refresh cannot replace stormwater');
+}
+console.log('PASS: separately versioned flow, partial coverage, expiry removal, explicit refresh and retained historical references');

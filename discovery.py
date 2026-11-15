@@ -27,18 +27,36 @@ def load_discovery(workflow):
     return data
 
 
+def map_discovery(workflow):
+    """Attach an independently versioned, short-lived current traffic layer."""
+    data = load_discovery(workflow)
+    if workflow == 'street':
+        from traffic_flow import get_snapshot
+        live = get_snapshot()
+        data['layers'] = live['layers'] + data['layers']
+        data['sources'].update(live['sources'])
+        data['flow_expires_at'] = live.get('expires_at')
+        data['flow_expires_epoch'] = live.get('expires_epoch')
+        data['flow_audit'] = live['audit']
+    return data
+
+
 def _resolve(workflow, reference, lon=None, lat=None):
     if reference is None:
         return None
     if (not isinstance(reference, dict) or set(reference) != {"version", "layer", "feature"}
             or any(not isinstance(value, str) or not value for value in reference.values())):
         raise ValueError("Invalid discovery reference.")
-    data = load_discovery(workflow)
+    if workflow == 'street' and reference['layer'] in ('flow','approaches'):
+        from traffic_flow import resolve_snapshot
+        data = resolve_snapshot(reference['version'])
+    else:
+        data = load_discovery(workflow)
     if reference["version"] != data["version"]:
         raise ValueError("Discovery data changed. Select the feature again.")
     layer = next((x for x in data["layers"] if x["id"] == reference["layer"]), None)
     feature = next((f for f in (layer or {}).get("features", []) if f["id"] == reference["feature"]), None)
-    if not feature or layer.get("status") != "ready":
+    if not feature or layer.get("status") not in ("ready", "partial"):
         raise ValueError("Selected discovery feature is unavailable.")
     p = feature["properties"]
     if lon is not None and lat is not None:
@@ -58,8 +76,59 @@ def discovery_context(workflow, reference, lon=None, lat=None):
     p = feature["properties"]
     return {"layer":layer["id"], "classification":layer["classification"], "value":p.get("value"),
             "unit":layer["unit"], "period":p.get("period",layer["period"]),
-            "source":{**data["sources"][layer["source"]], "observed_at":p.get("period") if workflow == "street" else data["sources"][layer["source"]].get("observed_at")}, "method":layer["method"],
+            "source":{**data["sources"][layer["source"]], "observed_at":p.get("period") if layer['id'] in ('counts','turning') else data["sources"][layer["source"]].get("observed_at")}, "method":layer["method"],
             "limitations":layer["limitations"], "detail":p.get("scalar_detail",{})}
+
+
+def query_area(workflow, bounds, limit=12, *, data=None):
+    """Bounded local spatial query; returns the same records the map displays."""
+    import math
+    from shapely.geometry import shape, box
+    if (workflow not in ('street','water') or not isinstance(bounds,(list,tuple)) or len(bounds)!=4
+            or any(isinstance(x,bool) or not isinstance(x,(int,float)) or not math.isfinite(x) for x in bounds)
+            or not -180<=bounds[0]<bounds[2]<=180 or not -90<=bounds[1]<bounds[3]<=90
+            or bounds[2]-bounds[0]>.1 or bounds[3]-bounds[1]>.1
+            or isinstance(limit,bool) or not isinstance(limit,int) or not 1<=limit<=50):
+        raise ValueError('Choose a bounded discovery area and a limit from 1 to 50.')
+    data = data if data is not None else map_discovery(workflow)
+    boundary=box(*bounds); pilot=box(*data['bbox'])
+    results=[]
+    for layer in data['layers']:
+        matching=[f for f in layer['features'] if shape(f['geometry']).intersects(boundary)] if layer['status'] in ('ready','partial') else []
+        results.append({'layer':layer['id'],'status':layer['status'],'unit':layer['unit'],
+                        'method':layer['method'],'limitations':layer['limitations'],'period':layer['period'],
+                        'version':layer.get('version',data['version']),'source':data['sources'][layer['source']],
+                        'total':len(matching),'truncated':len(matching)>limit,'features':matching[:limit],
+                        'error':layer.get('error')})
+    return {'workflow':workflow,'coverage':'outside_pilot' if not pilot.intersects(boundary) else
+            'inside_pilot' if pilot.covers(boundary) else 'partial_pilot','layers':results}
+
+
+def area_facts(workflow, lon, lat, *, data=None):
+    """Curated site-neighborhood tool output. No names, coordinates or raw records."""
+    import math
+    from site_measurements import fact
+    dy=350/111320; dx=dy/math.cos(math.radians(lat))
+    result=query_area(workflow,[lon-dx,lat-dy,lon+dx,lat+dy],3,data=data)
+    facts=[]
+    for layer in result['layers']:
+        origin=layer['source']
+        source={'provider':origin['label'],'url':origin['url'],'observed_at':origin.get('observed_at'),
+                'retrieved_at':origin.get('retrieved_at'),'collection':origin.get('product')}
+        note=f"{layer['period']}. {layer['limitations']}"
+        facts.append(fact('area-'+layer['layer']+'-coverage','Neighborhood '+layer['layer']+' coverage',
+                          layer['status']+'; '+result['coverage']+'; '+str(layer['total'])+' intersecting features',
+                          '',source,basis='availability',method='Local intersection within a bounded 350 m neighborhood.',note=note))
+        for index,feature in enumerate(layer['features']):
+            p=feature['properties']; prefix='area-'+layer['layer']+'-'+str(index+1)
+            facts.append(fact(prefix,'Nearby '+layer['layer']+' signal',p['value'],layer['unit'],source,
+                              basis='estimated' if layer['layer'] in ('flow','approaches','terrain','rainfall') else 'reported',method=layer['method'],note=note))
+            d=p.get('scalar_detail',{})
+            if layer['layer'] in ('flow','approaches'):
+                for name,label,unit in [('speed_kmh','Estimated speed','km/h'),('free_flow_kmh','Derived free-flow reference','km/h'),('length_m','Displayed length','m'),('time_penalty_s','Screened excess travel time','seconds')]:
+                    if d.get(name) is not None:
+                        facts.append(fact(prefix+'-'+name,label,d[name],unit,source,basis='estimated',method=d['baseline'],note=note))
+    return facts, []
 
 
 def traffic_context(reference, lon, lat):

@@ -9,7 +9,7 @@ import time
 from copy import deepcopy
 from threading import BoundedSemaphore, Lock
 from agent_activity import Activity
-from discovery import load_discovery, discovery_context, traffic_context
+from discovery import load_discovery, map_discovery, query_area, area_facts, discovery_context, traffic_context
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -386,6 +386,7 @@ class Handler(BaseHTTPRequestHandler):
                 lon=lon, lat=lat, scenario=scenario, activity=activity, discovery=selected_discovery,
                 traffic_context=traffic, analysis_identity=identity, allow_generated_timing=True,
                 ranking_policy="strict-v1",
+                fetch_discovery=lambda: area_facts(workflow, lon, lat),
             )
             if streaming:
                 write_event({"type":"result", "run_id":activity.id, "result":result})
@@ -420,7 +421,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, file.read_bytes(), mime, cache)
             elif path.path == "/api/discovery":
                 workflow = parse_qs(path.query).get("workflow", [""])[0]
-                self.send_json(200, load_discovery(workflow))
+                self.send_json(200, map_discovery(workflow))
+            elif path.path == "/api/discovery-area":
+                query = parse_qs(path.query)
+                if set(query) - {'workflow','bbox','limit'} or any(len(values)!=1 for values in query.values()):
+                    raise ValueError('Invalid discovery area query.')
+                bounds = [float(value) for value in query.get('bbox',[''])[0].split(',')]
+                self.send_json(200, query_area(query.get('workflow',[''])[0], bounds, int(query.get('limit',['12'])[0])))
             elif path.path == "/api/site-view":
                 from site_view import site_view_descriptor, UNAVAILABLE
                 query = parse_qs(path.query)

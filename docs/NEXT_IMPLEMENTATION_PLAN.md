@@ -2,7 +2,7 @@
 
 Prepared November 14, 2026. Product decisions approved; implementation proceeds one authorized checkpoint at a time.
 
-**Current implementation:** [Checkpoint 0 restoration/source readiness](CHECKPOINT_0_READINESS.md) and [Checkpoint 1 workflow/site identity](CHECKPOINT_1_WORKFLOW.md) are complete. TomTom and the replacement HERE API key both authenticated successfully. Stormwater has one analysis path; map points can resolve property context; optional Matterport views follow the selected property and exclude interior-only/unspecified tours. Checkpoint 2A has not started.
+**Current implementation:** Checkpoints 0/1 are committed as `07c57af`. [Checkpoint 2A/2B discovery](CHECKPOINT_2_DISCOVERY.md) is complete and uncommitted on `codex/checkpoint-2-discovery`: TomTom current street flow, grouped slow approaches, expanded native terrain with contribution outlines, rainfall/drainage and sponsor context, and bounded agent neighborhood queries. Checkpoint 3 has not started.
 
 Sustainability Map will help Los Angeles urban planners and traffic engineers discover environmental improvement opportunities, choose a location, and develop an inspectable physical concept through conversation. The primary workflow begins with a goal and a map area. The agent investigates that area, presents up to three supported locations, and waits for the user to choose one before developing and evaluating designs.
 
@@ -340,6 +340,8 @@ Remove the standalone placement UI and second stormwater request branch while pr
 
 ### Checkpoint 2A Deliver useful traffic discovery
 
+**Status: complete.** See the [implementation and verification report](CHECKPOINT_2_DISCOVERY.md).
+
 **Outcome:** A planner can locate and interpret a real traffic slowdown in the pilot area.
 
 Implement the TomTom flow adapter, starting with the verified Orbis v2 tile endpoint for area/map coverage. Validate decoded geometry/direction association, units, source/retrieval timestamps, unavailable-confidence states, display layer and structured area-query tool. Any v4 point-detail enrichment needs explicit version attribution and verified association; v4 confidence must not be assumed to exist on Orbis records. Add an interpretable corridor/approach grouping. Correct count labels and retain turning-count references for simulation. Document the exact comparison baseline for any travel-time penalty.
@@ -347,6 +349,8 @@ Implement the TomTom flow adapter, starting with the verified Orbis v2 tile endp
 **Acceptance:** A real surface-street response renders with correct units and time; a gap/outage is shown honestly; structured records match the map; historical counts remain available; a single snapshot is never labeled recurring congestion or measured emissions.
 
 ### Checkpoint 2B Expand stormwater discovery
+
+**Status: complete.** See the [implementation and verification report](CHECKPOINT_2_DISCOVERY.md).
 
 **Outcome:** The map supports investigation beyond the original Kipling terrain window.
 

@@ -1,8 +1,8 @@
 # Sustainability Map
 
-A local planning workspace for Los Angeles, using a Python server, bundled Leaflet, Vexcel aerial imagery and CoStar site evidence. **Traffic & Emissions** opens with dated historical traffic counts. **Stormwater** opens with terrain screening around Kipling Apartments, with optional county rainfall and drainage-context layers.
+A local planning workspace for Los Angeles, using a Python server, bundled Leaflet, Vexcel aerial imagery and CoStar site evidence. **Traffic & Emissions** opens with current surface-street estimates alongside separate dated counts. **Stormwater** opens with terrain screening across the western pilot, with rainfall, drainage, property-use and sampled parcel/building layers.
 
-**Current work: [Checkpoint 1 of the revised plan](docs/CHECKPOINT_1_WORKFLOW.md), complete for review.** Stormwater now has one analysis path. Map selections can resolve a unique CoStar property through Vexcel parcels, and optional exterior tours follow the selected property. The current suite passes 138 Python tests and six JavaScript test files. Live zero-drawing draft and keep-clear revision checks passed. Both TomTom and HERE have verified source access; map integration remains Checkpoint 2A. Read the [handoff](docs/CONVERSATION_HANDOFF.md) and [approved plan](docs/NEXT_IMPLEMENTATION_PLAN.md).
+**Current work: [Checkpoint 2 discovery](docs/CHECKPOINT_2_DISCOVERY.md), complete for review.** TomTom current street flow and grouped slow approaches now complement dated counts. Stormwater covers the western pilot with 159 terrain signals, visible contribution areas, 244 rainfall display cells, 106 CoStar locations and sampled Vexcel outlines. The current suite passes 148 Python tests and six JavaScript test files, and a real agent run used 18 neighborhood facts. Checkpoints 0/1 are committed as `07c57af`; Checkpoint 2 is uncommitted on `codex/checkpoint-2-discovery`. Read the [handoff](docs/CONVERSATION_HANDOFF.md) and [approved plan](docs/NEXT_IMPLEMENTATION_PLAN.md).
 
 **Stormwater starts with a map draft.** Select a supported site and ask for a rain garden. The draft uses mapped outlines and avoids known constraints. It labels ponding depth as an assumption and leaves runoff capture unassessed until contributing area and coefficient support a scenario. Add optional keep-clear markings or revise the brief, then analyze again. The old manual placement-comparison workflow has been retired.
 
@@ -14,7 +14,7 @@ The [codebase audit](docs/CODEBASE_AUDIT.md) records correctness fixes and remai
 
 ## Run locally
 
-Keep `VEXCEL_API_KEY`, `GROK_API_KEY` and the absolute `COSTAR_KIT_DIR` in the ignored `.env`. The CoStar kit needs `data/commercial-property.jsonl` and `schemas/enums.json`; the exterior walkthrough also requires `commercial-properties.csv` to validate its property-to-model association. Credentials and raw sponsor data stay local.
+Keep `VEXCEL_API_KEY`, `GROK_API_KEY`, `TOMTOM_API_KEY` and the absolute `COSTAR_KIT_DIR` in the ignored `.env`. The CoStar kit needs `data/commercial-property.jsonl` and `schemas/enums.json`; the exterior walkthrough also requires `commercial-properties.csv` to validate its property-to-model association. Credentials and raw sponsor data stay local.
 
 ```sh
 python3 -m venv .venv
@@ -32,10 +32,10 @@ The existing workspace has the source snapshots under ignored `private/discovery
 
 ```sh
 .venv/bin/python -m pip install -r requirements-discovery.txt
-.venv/bin/python scripts/build_discovery.py
+.venv/bin/python scripts/build_discovery.py --sponsors
 ```
 
-Use `--refresh` to download public sources again. The build is deterministic given its inputs, apart from build timestamp/version. It makes no agent calls and runs no traffic simulation. It records source hashes, source dates where supplied, retrieval timestamps and method limitations. Details, exclusions and spot checks are in [Checkpoint 3](docs/CHECKPOINT_3.md).
+Use `--refresh` to download public sources again. Use `--workflow street` or `--workflow water` to rebuild one inventory. `--sponsors` permits the three bounded Vexcel site samples; cached samples are reused unless `--refresh` is also set. Current TomTom flow is fetched separately at runtime and is not archived. The build is deterministic given its inputs, apart from build timestamp/version. It makes no agent calls and runs no traffic simulation. It records source hashes, source dates where supplied, retrieval timestamps and method limitations. Details, exclusions and spot checks are in [Checkpoint 3](docs/CHECKPOINT_3.md).
 
 For a fresh checkout without `sim/dtla.net.xml`, prepare the OSM topology first. This only converts sourced road geometry and names; it does not generate traffic demand or run SUMO:
 
@@ -43,7 +43,7 @@ For a fresh checkout without `sim/dtla.net.xml`, prepare the OSM topology first.
 .venv/bin/python -m pip install -r requirements-sim.txt
 .venv/bin/python scripts/fetch_osm.py
 .venv/bin/python scripts/build_road_network.py
-.venv/bin/python scripts/build_discovery.py
+.venv/bin/python scripts/build_discovery.py --sponsors
 ```
 
 A different OSM extract may produce different matches; network hashes identify the exact inputs. Generated network signal settings are not treated as observed signal plans. Public raw downloads and generated discovery artifacts stay local rather than being redistributed in Git. Runtime rendering does not import Rasterio or execute the build.
@@ -65,7 +65,7 @@ The network builder keeps original OSM identifiers, checks the converted connect
 7. Under **Site evidence & adjustments → Optional exterior view**, choose **Check exterior view**. Only tours associated with the selected property and described as relevant exterior/site context can open. Multiple eligible tours have a selector. No match leaves the map usable; no substitute warehouse opens. Matterport loads only on request, with retry/close controls. **Proposed** remains disabled.
 8. In Stormwater, select **Normandie — 229 S Normandie Ave** and choose **Analyze site** with no drawings. Revise it through the brief or mark a keep-clear area under **Adjust or add map markings**. Optional runoff/treatment markings and rainfall scenarios remain available. Storage reserves room for direct rain before screening externally supplied runoff. A tour is not required.
 
-All site work is held for the current page session. The labeled **Development preview** uses test geometry. At verified turning-count sites, expand a traffic alternative and choose **Show footprint on map** to inspect the tested layout and its verdict. The optional stormwater terrain screening currently uses the cached Kipling 1 m USGS raster.
+All site work is held for the current page session. The labeled **Development preview** uses test geometry. At verified turning-count sites, expand a traffic alternative and choose **Show footprint on map** to inspect the tested layout and its verdict. Stormwater terrain screening uses the expanded four-tile, native 1 m USGS mosaic. Current traffic expires after at most one minute and refreshes only on request.
 
 ## Measurement and sharing boundaries
 

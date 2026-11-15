@@ -768,13 +768,23 @@
     const {feature, layer, source} = selected;
     const p = feature.properties;
     $("discovery-feature-title").textContent = p.label;
-    $("discovery-feature-value").textContent = `${typeof p.value === "number" ? p.value.toLocaleString() : p.value} ${layer.unit}`;
+    $("discovery-feature-value").textContent = ['flow','approaches'].includes(layer.id)
+      ? (p.scalar_detail?.road_closure ? 'Road closed' : `${p.scalar_detail?.speed_kmh} km/h · ${p.value}% of free flow`)
+      : `${typeof p.value === "number" ? p.value.toLocaleString() : p.value} ${layer.unit}`;
     $("discovery-feature-period").textContent = p.period || layer.period;
     const details = $("discovery-feature-details"); details.replaceChildren();
     const link = document.createElement("a"); link.textContent = source.label; link.href = source.url; link.target = "_blank"; link.rel = "noopener"; details.append(link);
     const date = `Source date: ${(layer.id === "counts" && p.period) || source.observed_at || source.published_at || "not supplied"}${source.published_at && !source.observed_at ? " (publication, not acquisition)" : ""}. Retrieved: ${source.retrieved_at || "not recorded"}.`;
     const detail=p.scalar_detail ?? {}, rows=[];
-    if (detail.count_type) rows.push(`Count method: automated (${detail.count_type}).`);
+    if (p.summary) rows.push(p.summary);
+    if (detail.count_type) rows.push(`Count method: ${detail.count_type==='MAN'?'manual turning movements':'automated'} (${detail.count_type}).`);
+    if (['flow','approaches'].includes(layer.id)) {
+      if (layer.id === 'approaches') rows.push(`${detail.member_count} connected portions; speeds range from ${detail.speed_min_kmh} to ${detail.speed_max_kmh} km/h. No unobserved connectors are included.`);
+      rows.push(`Direction: ${detail.direction_verified ? detail.direction+'bound; checked against OpenLR anchors' : 'unresolved; no direction inferred'}.`);
+      rows.push(`Displayed road length: ${detail.length_m} m. Estimated speed: ${detail.speed_kmh} km/h. Derived free-flow reference: ${detail.free_flow_kmh ?? 'unavailable'} km/h.`);
+      rows.push(detail.time_penalty_s == null ? 'Travel-time penalty unavailable for this stopped, closed or unsupported segment.' : `Screened travel-time penalty: ${detail.time_penalty_s} seconds over this displayed length (${detail.travel_time_s} seconds versus ${detail.free_flow_time_s} seconds at derived free flow).`);
+      rows.push(detail.baseline, detail.speed_basis, 'Per-segment confidence and observation time: not supplied. '+detail.road_name_method+'.');
+    }
     if (detail.directional_reported_counts) rows.push('Reported directions: '+Object.entries(detail.directional_reported_counts).map(([key,value])=>`${({w_b:'Westbound',e_b:'Eastbound',n_b:'Northbound',s_b:'Southbound'})[key] || key} ${value.toLocaleString()}`).join(' · '));
     if (detail.interval) rows.push(`Reporting interval: ${detail.interval}`);
     for (const [key,label] of [['upstream_elevation_m','Terrain elevation at path start'],['downstream_elevation_m','Terrain elevation at path end'],['elevation_m','Terrain elevation'],['drop_m','Elevation drop along path'],['path_length_m','Mapped path length']]) {
@@ -802,11 +812,20 @@
       ? "Use the selected discovery evidence to screen a rain garden. Map a draft where the site evidence supports it and explain what still needs verification."
       : selected.reference?.layer === "turning"
         ? "Compare at least two physical lane-reallocation layouts using this sourced historical turning count and measured site evidence. Preserve access, disclose missing inputs and simulation assumptions, and recommend a layout only if the comparison supports it. Do not present historical demand as current traffic."
-        : "Investigate the selected historical count with current site evidence. Identify the measurements needed before evaluating a physical redesign. Do not extrapolate current demand or claim emissions benefits.";
+        : ['flow','approaches'].includes(selected.reference?.layer)
+          ? "Investigate this current surface-street slowdown and nearby source evidence. Explain estimated speed versus free flow and identify physical opportunities to investigate. Keep historical turning demand, recurring congestion and modeled emissions separate from this snapshot."
+          : "Investigate the selected historical count with current site evidence. Identify the measurements needed before evaluating a physical redesign. Do not extrapolate current demand or claim emissions benefits.";
     inputsChanged(site[workflow]);
     $("planning-brief").value = site[workflow].brief;
     renderDiscoveryContext(selected);
     setStatus("Discovery evidence added to this site's brief. Analyze when ready.");
+  });
+  map.on('discoveryexpired', ({version}) => {
+    const selected = site?.street?.discovery;
+    if (workflow === 'street' && ['flow','approaches'].includes(selected?.reference?.layer) && selected.reference.version === version) {
+      $("discovery-feature-period").textContent = 'Snapshot expired. Refresh current traffic and select a road before analyzing.';
+      setStatus('Traffic snapshot expired; refresh and select a current road.');
+    }
   });
   map.on("plannerproperty", ({ property, searched }) => {
     if (!$("planner").hidden && (searched || (!picking && !draft))) {

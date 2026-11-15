@@ -154,20 +154,21 @@ class DiscoveryTest(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):discovery.load_discovery('water')
             with self.assertRaises(ValueError):discovery.load_discovery('../private')
         with tempfile.TemporaryDirectory() as folder, patch.object(builder,'DATA',Path(folder)):
-            def cached(name,fetch,refresh):
-                if name=='county-catchments.json':raise OSError('County unavailable')
-                (Path(folder)/name).write_text('[]')
-                return []
-            with patch.object(builder,'cached_json',side_effect=cached), \
-                 patch.object(builder,'download_terrain',side_effect=OSError('DEM unavailable')), \
-                 patch.object(builder,'rainfall_at',return_value={'inches':1.01,'method':'test interpolation','depth_range':[1,1.1]}):
+            def cached(directory,name,fetch,refresh):
+                if name=='western-catchments.json':raise OSError('County unavailable')
+                return [], {'retrieved_at':'2026-11-15','input_sha256':'test'}
+            with patch('water_discovery.cached',side_effect=cached), \
+                 patch('water_discovery.download_mosaic',side_effect=OSError('DEM unavailable')), \
+                 patch('server.property_catalog',side_effect=OSError('Kit unavailable')), \
+                 patch('hydrology.rainfall_at',return_value={'inches':1.01,'method':'test interpolation','depth_range':[1,1.1]}):
                 data=builder.build_water()
-            terrain,rain,catch=data['layers']
-            self.assertEqual(terrain['status'],'unavailable')
-            self.assertEqual(terrain['features'],[])
-            self.assertEqual(catch['status'],'unavailable')
-            self.assertEqual(rain['status'],'ready')
-            self.assertEqual(len(rain['features']),64)
+            layers={layer['id']:layer for layer in data['layers']}
+            self.assertEqual(layers['terrain']['status'],'unavailable')
+            self.assertEqual(layers['terrain']['features'],[])
+            self.assertEqual(layers['catchments']['status'],'unavailable')
+            self.assertEqual(layers['rainfall']['status'],'ready')
+            self.assertGreater(len(layers['rainfall']['features']),64)
+
 
 
 class LocalSourceSpotCheck(unittest.TestCase):
@@ -183,13 +184,13 @@ class LocalSourceSpotCheck(unittest.TestCase):
         self.assertIn(row['type'],('AUTO','AUT'))
         self.assertEqual(row['dir'],'AT')
 
-    @unittest.skipUnless((builder.DATA/'kipling-dem.tif').exists(),'Local DEM not downloaded')
+    @unittest.skipUnless((builder.DATA/'western-dem.tif').exists(),'Western DEM not downloaded')
     def test_exported_flow_follows_real_dem_cells_and_accumulation(self):
         import rasterio
         from pyproj import Transformer
         data=discovery.load_discovery('water')
         feature=next(f for f in data['layers'][0]['features'] if f['properties']['kind']=='flow')
-        with rasterio.open(builder.DATA/'kipling-dem.tif') as src:
+        with rasterio.open(builder.DATA/'western-dem.tif') as src:
             z=src.read(1).astype(float)
             inverse=~src.transform
         project=Transformer.from_crs(4326,26911,always_xy=True)
