@@ -195,6 +195,9 @@ def rank(results: dict, checks: dict, keep_clear: list | None = None, *, policy=
             reasons.append("crosses a planner keep-clear area")
         if check.get("marked_crossing_conflict"):
             reasons.append("crosses a planner-marked crossing")
+        if (check.get("detection_status") not in ("ready", "empty")
+                or any(check.get(field) is None for field in ("candidate_crosswalk_overlaps", "candidate_driveway_overlaps"))):
+            reasons.append("crossing and driveway candidate checks remain unassessed")
         for field, label in (("candidate_crosswalk_overlaps", "crosswalk"), ("candidate_driveway_overlaps", "driveway")):
             if check.get(field):
                 reasons.append(f"overlaps an unverified {label} candidate; verify its location and access before recommending")

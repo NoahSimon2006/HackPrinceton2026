@@ -30,6 +30,7 @@ ACTIVE_ANALYSES = {}
 ANALYSIS_LOCK = Lock()
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
           "/discovery.js": "discovery.js", "/analysis-stream.js": "analysis-stream.js", "/planner.js": "planner.js", "/proposal.js": "proposal.js",
+          "/site-view.js": "site-view.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
           "/vendor/leaflet.css": "vendor/leaflet.css"}
 
@@ -340,6 +341,14 @@ class Handler(BaseHTTPRequestHandler):
             elif path.path == "/api/discovery":
                 workflow = parse_qs(path.query).get("workflow", [""])[0]
                 self.send_json(200, load_discovery(workflow))
+            elif path.path == "/api/site-view":
+                from site_view import site_view_descriptor, UNAVAILABLE
+                try:
+                    result = site_view_descriptor(os.getenv("COSTAR_KIT_DIR", ""), property_catalog()[0])
+                except (OSError, ValueError, KeyError, TypeError):
+                    self.send_json(503, {"error": UNAVAILABLE})
+                    return
+                self.send_json(200, result)
             elif path.path == "/api/proposal-fixture":
                 from proposal import fixture
                 qs = parse_qs(path.query)

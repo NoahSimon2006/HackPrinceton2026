@@ -217,21 +217,30 @@ def crossing_checks(design, detections, crossings):
     """Candidate boxes flag uncertainty; they never become confirmed crosswalks/driveways."""
     from site_measurements import projected
     result = {"candidate_crosswalk_overlaps": 0, "candidate_driveway_overlaps": 0,
-              "candidate_evidence": [], "marked_crossing_conflict": False}
-    for feature in detections or []:
-        label = str(feature.get("properties", {}).get("label", "")).lower()
+              "candidate_evidence": [], "marked_crossing_conflict": False,
+              "detection_status": "empty" if detections == [] else "ready"}
+    unavailable = not isinstance(detections, list)
+    for feature in detections if isinstance(detections, list) else []:
+        if not isinstance(feature, dict) or not isinstance(feature.get("properties"), dict):
+            unavailable = True
+            continue
+        label = str(feature["properties"].get("label", "")).lower()
         kind = "crosswalk" if "crosswalk" in label else "driveway" if "driveway" in label else None
         if not kind:
             continue
         try:
             geometry = projected(feature["geometry"], ("Polygon", "MultiPolygon"))
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError):
+            unavailable = True
             continue
         if design.intersects(geometry):
             result[f"candidate_{kind}_overlaps"] += 1
             identifier = feature.get("properties", {}).get("evidenceId")
             if identifier:
                 result["candidate_evidence"].append(identifier)
+    if unavailable:
+        result.update(candidate_crosswalk_overlaps=None, candidate_driveway_overlaps=None,
+                      detection_status="unavailable")
     for geometry in crossings or []:
         try:
             if design.intersects(projected(geometry, ("LineString",))):
@@ -286,9 +295,13 @@ def comparison_facts(comparison):
         for kind in ("crosswalk", "driveway"):
             key = f"candidate_{kind}_overlaps"
             if key in check:
-                facts.append(fact(f"traffic-{name}-{key}", f"{name}: overlapping {kind} candidate boxes", check[key], "candidates",
-                    source("Vexcel detection"), basis="candidate", method="Local intersection test between proposed footprint and returned detector boxes.",
-                    note="Boxes are unconfirmed candidates, not traced objects. An overlap requires verification before this design can be recommended; zero returned overlaps does not establish absence.",
+                available = check[key] is not None
+                facts.append(fact(f"traffic-{name}-{key}", f"{name}: overlapping {kind} candidate boxes",
+                    check[key] if available else "Unassessed: detection source unavailable or candidate geometry invalid.",
+                    "candidates" if available else "", source("Vexcel detection"),
+                    basis="candidate" if available else "availability", method="Local intersection test between proposed footprint and returned detector boxes.",
+                    note=("Boxes are unconfirmed candidates, not traced objects. An overlap requires verification before this design can be recommended; zero returned overlaps does not establish absence."
+                          if available else "Missing or invalid candidate evidence is not zero overlap. This layout cannot be recommended until the crossing and driveway checks are available."),
                     feature_ids=check.get("candidate_evidence", [])))
         if check.get("marked_crossing_conflict"):
             facts.append(fact(f"traffic-{name}-marked-crossing", f"{name}: marked crossing conflict", "The footprint intersects a planner-marked crossing.", "",

@@ -5,12 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=16">
+  <link rel="stylesheet" href="/styles.css?v=18">
   <script defer src="/vendor/leaflet.js"></script>
   <script defer src="/app.js?v=17"></script>
-  <script defer src="/proposal.js?v=3"></script>
+  <script defer src="/proposal.js?v=4"></script>
   <script defer src="/analysis-stream.js?v=1"></script>
-  <script defer src="/planner.js?v=13"></script>
+  <script defer src="/site-view.js?v=1"></script>
+  <script defer src="/planner.js?v=14"></script>
   <script defer src="/discovery.js?v=2"></script>
 </head>
 <body>
@@ -29,9 +30,20 @@
           <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" autocomplete="off" placeholder="Property name or address"></div>
           <div id="results" class="results" role="listbox" aria-label="Property search results" hidden></div>
         </div>
+        <section class="site-view-entry" aria-labelledby="site-view-entry-title">
+          <div class="site-view-entry-heading"><span aria-hidden="true">◈</span><span class="section-label">EXTERIOR WALKTHROUGH</span></div>
+          <h2 id="site-view-entry-title">510 E Olympic Blvd</h2>
+          <p>Explore the linked building exterior and loading docks.</p>
+          <button id="open-site-view" type="button" aria-haspopup="dialog" aria-controls="site-view-dialog">Open existing view <span aria-hidden="true">↗</span></button>
+          <p class="site-view-entry-note">Opening this view selects 510 E Olympic Blvd on the map.</p>
+          <p id="site-view-entry-status" class="site-view-entry-note" role="status">Linked CoStar exterior walkthrough · existing conditions only.</p>
+          <button id="site-view-entry-retry" type="button" hidden>Retry walkthrough</button>
+        </section>
         <section id="planner" class="planner" aria-labelledby="planner-title" hidden>
           <p id="traffic-design-guide" class="traffic-design-guide">To compare street layouts, choose <strong>Turning-movement counts</strong> in Map evidence, select a counted intersection, then choose <strong>Analyze site</strong>.</p>
           <button id="pick-site" type="button" class="planner-action" aria-pressed="false">Pick a site on the map</button>
+          <button id="use-map-center" type="button" class="planner-action">Use map center as site</button>
+          <p class="keyboard-map-help">Keyboard: focus the map and use arrow keys to pan, then use its center as your site.</p>
           <p id="planner-status" class="planner-status" role="status">Search for a property or pick any covered location.</p>
           <div id="site-card" class="planner-card" hidden>
             <strong id="site-name"></strong>
@@ -138,6 +150,13 @@
               <summary>Adjust or add map markings</summary>
               <div id="mark-actions" class="mark-actions"></div>
               <ul id="shape-list" class="shape-list" aria-label="Saved map markings"></ul>
+              <div id="keyboard-marking-editor" class="keyboard-marking-editor" hidden>
+                <p>Place points by clicking the map, or add its center and edit each point below. Focus the map and use arrow keys to pan between points.</p>
+                <button id="draw-add-center" type="button">Add point at map center</button>
+                <p id="draw-coordinate-error" role="status" hidden></p>
+                <div id="draw-coordinates" aria-label="Marking point coordinates"></div>
+                <p>Use Save marking on the map when the outline is ready.</p>
+              </div>
             </details>
           </details>
         </section>
@@ -199,5 +218,22 @@
       <div class="map-bottom"><span>Drag to pan · scroll to zoom</span><button id="reset" type="button">↗ &nbsp; Back to Los Angeles</button></div>
     </main>
   </div>
+  <dialog id="site-view-dialog" class="site-view-dialog" aria-labelledby="site-view-title" aria-describedby="site-view-description">
+    <header class="site-view-header">
+      <div><span class="section-label">EXTERIOR WALKTHROUGH · MATTERPORT</span><h2 id="site-view-title">510 E Olympic Blvd</h2><p id="site-view-tour-title">Building exterior and loading docks</p></div>
+      <button id="site-view-close" type="button" class="site-view-close" aria-label="Close existing-site walkthrough" autofocus>Close <span aria-hidden="true">×</span></button>
+    </header>
+    <div class="site-view-toolbar">
+      <div class="site-view-modes" role="group" aria-label="Walkthrough view">
+        <button type="button" id="site-view-existing" aria-pressed="true">Existing</button>
+        <button type="button" id="site-view-proposed" aria-pressed="false" aria-describedby="site-view-description" disabled>Proposed · unavailable</button>
+      </div>
+      <a id="site-view-external" target="_blank" rel="noopener noreferrer">Open Matterport in a new tab ↗</a>
+    </div>
+    <p id="site-view-description" class="site-view-description">Existing-site walkthrough only. A proposed view requires a supported 2D design and verified alignment to this scan. No proposed geometry is displayed.</p>
+    <div class="site-view-load-state"><p id="site-view-status" role="status">The viewer opens only when requested.</p><button id="site-view-retry" type="button" disabled>Retry viewer</button></div>
+    <div id="site-view-stage" class="site-view-stage" aria-label="Existing-site Matterport walkthrough"></div>
+    <footer class="site-view-footer"><p id="site-view-source"></p><details><summary>Coverage &amp; source limits</summary><ul id="site-view-limitations"></ul><p>Property association does not verify intervention coverage, a usable comparison viewpoint, or alignment with the map.</p></details></footer>
+  </dialog>
 </body>
 </html>
