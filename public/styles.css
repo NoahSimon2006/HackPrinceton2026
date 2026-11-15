@@ -347,11 +347,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .scout-number { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 13px; }
 .scout-card h4 { margin: 10px 0 3px; font-size: 13px; }
 .scout-card p { margin: 0 0 6px; font-size: 13.5px; color: var(--ink-2); }
-.scouting .scout-stage { margin: 0 0 10px; font-size: 11px; letter-spacing: .06em; color: var(--ink-3); }
+.scouting .scout-feedback-title { margin: 8px 0 4px; font-size: 14px; font-weight: 600; color: var(--accent-deep); }
+.scouting .scout-metric { font-size: 14px; color: var(--ink); }
+.scouting .scout-goal-context { overflow-wrap: anywhere; color: var(--ink); font-weight: 500; }
+.scouting .scout-snapshot { font-size: 12px; color: var(--ink-3); }
 .scouting .scout-basis { font-size: 12px; color: var(--ink-3); }
 .scouting .scout-reason { color: var(--ink); }
-.scout-readiness { margin: 10px 0; padding: 8px 10px; border-left: 3px solid var(--rule-strong); border-radius: 0 8px 8px 0; background: var(--paper-2); }
-.scout-readiness h4 { margin-top: 0; }
+.scout-readiness, .scout-next-step { margin: 10px 0; padding: 8px 10px; border-left: 3px solid var(--rule-strong); border-radius: 0 8px 8px 0; background: var(--paper-2); }
+.scout-readiness h4, .scout-next-step h4 { margin-top: 0; }
+.scout-next-step { border-left-color: var(--accent); }
 .scout-investigation, .scout-method { margin: 8px 0; }
 .scout-considerations { margin: 10px 0; font-size: 13px; }
 .scout-considerations dt { margin-top: 6px; font-weight: 600; }

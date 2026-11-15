@@ -39,7 +39,8 @@
     if (view === 'place') {
       if (method === 'scout') return {back:true, skip:site ? 'Keep current site' : '',
         hint:shown('scout-cancel') ? 'The agent is investigating this area. Locations appear above.'
-          : $('scout-results').children.length ? 'Choose a location to continue.'
+          : Number($('scout-results').getAttribute('data-selectable-count')) > 0 ? 'Choose a location to continue.'
+          : $('scout-results').children.length ? 'Find locations again, or pick a spot directly.'
           : 'Describe a goal, frame the map, then find locations.'};
       // The planner's own status line already says how to set a site; don't repeat it.
       if (method === 'direct') return {back:true, next:'Continue', enabled:site,
@@ -198,7 +199,7 @@
     for (const id of ['site-card', 'site-name', 'cancel-site-analysis', 'run-site-analysis', 'agent-assessment', 'activity-list',
       'road-concept-review', 'proposal-review', 'water-design-review', 'traffic-comparison', 'proposal-result-message',
       'scout-cancel', 'scout-results', 'planner-status', 'shape-list', 'saved-projects'])
-      observer.observe($(id), {attributes:true, attributeFilter:['hidden', 'disabled', 'aria-pressed'], childList:true});
+      observer.observe($(id), {attributes:true, attributeFilter:['hidden', 'disabled', 'aria-pressed', 'data-selectable-count'], childList:true});
   }
 
   // Synthetic test fixtures are a developer tool, reachable only with ?dev in the address.

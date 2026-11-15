@@ -32,7 +32,7 @@
     const flow=data.layers.find(layer=>['flow','approaches'].includes(layer.id));
     if(!flow || !data.flow_expires_epoch || Date.now()/1000<data.flow_expires_epoch)return;
     const version=flow.version;
-    for(const layer of data.layers.filter(x=>['flow','approaches'].includes(x.id))) {layer.status='expired';layer.features=[];layer.error='This snapshot expired. Refresh current traffic.';}
+    for(const layer of data.layers.filter(x=>['flow','approaches'].includes(x.id))) {layer.status='expired';layer.features=[];layer.error='This map traffic layer expired. Refresh the map to check current conditions.';}
     // One expiry message, in the status line; the freshness note no longer applies.
     $('discovery-freshness').hidden=true;
     for(const [option,layer] of options)option.textContent=optionText(layer);
@@ -113,7 +113,7 @@
     paintLegend(layer);
     $('discovery-limit').textContent=['flow','approaches'].includes(layer.id)?'Colour is current speed as a share of free-flow speed: red under 40%, amber 40–70%, yellow 70–90%, green 90% or more; purple is a closed road. One snapshot of surface-street conditions. Gaps are unknown; traffic volume and emissions are not measured. Select a road for its speed and free-flow comparison.':layer.id==='terrain'?'Select a path or collection point to see the terrain area feeding it. Actual drains, flooding and runoff capture remain unverified.':layer.limitations;
     $('discovery-status').textContent=usable(layer)?`${layer.id==='terrain'?'Terrain estimate · ':''}${shortTime(layer.period)}${layer.status==='partial'?' · Partial coverage':''}`
-      :layer.status==='expired'?'Traffic expired. Refresh to update.'
+      :layer.status==='expired'?'Map traffic layer expired. Refresh to update the map; saved place research stays available.'
       :layer.status==='empty'?'No source features returned for this pilot.':`${layer.label} unavailable. ${layer.error || 'Rebuild the source snapshot.'}`;
     $('discovery-count').textContent=usable(layer)?`${layer.features.length} ${layer.features.length===1?'feature':'features'} · ${layer.period}${layer.status==='partial'?' · Partial coverage; some records could not be validated.':''}`:'';
     featurePicker.disabled=!usable(layer);

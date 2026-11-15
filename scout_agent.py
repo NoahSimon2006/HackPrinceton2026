@@ -1,6 +1,7 @@
 """Native, bounded area investigation. Local geometry never enters model context."""
 import json
 import logging
+import re
 from threading import RLock
 from agent_activity import Activity, RunCancelled
 from agent_workspace import WorkspaceBackend, FILESYSTEM_TOOLS, skill_files, permissions, tool_guard, serializable_response
@@ -21,8 +22,26 @@ from xai_runtime import invoke_model
 class ScoutFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
     candidate_id: str = Field(min_length=1, max_length=160)
-    text: str = Field(min_length=1, max_length=700)
+    summary: str | None = Field(default=None, min_length=1, max_length=220,
+        description="One or two short sentences: why this place fits the goal and the next useful check. No measurement inventory.")
+    text: str = Field(min_length=1, max_length=500,
+        description="Supporting explanation for expanded details; at most three short sentences.")
     fact_ids: list[str] = Field(min_length=1, max_length=6)
+
+
+def _only_placeholder(text):
+    """Reject empty status copy without rejecting limits paired with an action."""
+    placeholders = {
+        'impact unassessed', 'environmental impact unassessed', 'impact is unassessed',
+        'impact remains to be established', 'benefit unverified', 'benefits unverified',
+        'impact unknown', 'impact is unknown', 'benefit is unknown', 'benefits are unknown',
+        'evidence unavailable', 'insufficient evidence', 'not enough information',
+        'further investigation is needed', 'further investigation needed',
+        'more research is needed', 'more information is needed',
+        'not yet established', 'requires site investigation',
+    }
+    sentences = [sentence.strip() for sentence in re.split(r'[.!?;]+', text.lower()) if sentence.strip()]
+    return not sentences or all(sentence in placeholders for sentence in sentences)
 
 
 def review_scout(key, model_name, goal, workflow, research, activity=None, persist_artifact=None):
@@ -35,7 +54,7 @@ def review_scout(key, model_name, goal, workflow, research, activity=None, persi
     """
     activity = activity or Activity(seconds=240)
     lock, bundle = RLock(), None
-    reports, evidence = {}, {}
+    reports, evidence, validated_reports = {}, {}, {}
     names = ("lead", "site-evidence", "domain-analysis")
     skills, reads = ({name:set() for name in names} for _ in range(2))
     source_reads, assignments = set(), {"lock":lock,"started":set()}
@@ -89,6 +108,10 @@ def review_scout(key, model_name, goal, workflow, research, activity=None, persi
                    "review":report,"candidate_ids":list(evidence)}
         with lock:
             reports[name] = payload
+            if not partial and report is not None:
+                # A failed lead response must not throw away already checked
+                # specialist findings. Only validated structured reports enter.
+                validated_reports[name] = report
         save(f"/project/reports/{name}.json",payload)
         activity.event(name,"artifact-write","completed",f"Saved /project/reports/{name}.json.")
         activity.event(name,"investigation","partial" if partial else "completed",
@@ -103,8 +126,34 @@ Readiness never adds priority points. Terrain accumulation is not verified drain
 runoff capture or flooding. Live slowdown is not recurring congestion, measured
 emissions or a redesign benefit. Use CoStar operating context and Vexcel spatial
 facts to motivate practical next checks; do not invent a sponsor contribution.
-Missing evidence does not prove no opportunity. Explain what can be done next.
-Return concise ScoutReview findings with candidate_id and supporting fact_ids.
+Missing evidence does not prove no opportunity. Return at least one concise
+ScoutReview finding for EVERY candidate that has source facts, with candidate_id
+and supporting fact_ids. Always supply summary: at most 35 words and 220 characters,
+in one or two short sentences. Lead with why this location suits the goal and the
+next useful check. The card already displays a key source measurement: do not
+repeat a list of speeds, lengths, dates or percentages. For example: 'A focused
+place to check delivery queues. Observe loading activity before adjusting signals.'
+Use everyday terms such as 'past traffic counts' and 'property boundaries', not
+specialist shorthand such as 'turning sheet' or 'screened excess time'.
+Use text only for supporting detail: at most three short sentences and 500
+characters. Select the most useful insight instead of listing every caveat or
+restating all the source facts. In each finding explain what the candidate's specific
+evidence means for the user's stated goal, then give a concrete next action or
+practical tradeoff. Use plain language the planner can act on. Do not merely
+repeat a measurement, say 'impact unassessed', or list missing data. Pair each
+uncertainty with the useful check it calls for. A suggested check is not a
+promise of benefit. If the goal asks for something the facts cannot establish,
+say so and identify what the available evidence does help the user decide.
+Differentiate the locations using their actual road extent, excess travel time,
+nearby property uses, parcel space or linked demand evidence. Equal speed ratios
+do not imply identical places. Explain which investigation each location is best
+suited to and what would change the planner's decision. Do not repeat the same
+generic next steps for every location. Treat traffic values as observations at
+search time; these notes remain useful after the live map updates.
+Lead with the useful choice-specific advice, then give one brief limitation if
+needed. Do not narrate internal policies about screening order, readiness points,
+sponsor contributions or whether a site has been selected. Those are rules for
+your work, not feedback the planner needs to read.
 Use only exact numbers from those facts. Do not invent thresholds, dimensions,
 benefits, source identifiers or URLs. Do not move, reorder or select candidates,
 produce a proposal, call simulations or recommend construction. Wait for explicit
@@ -135,7 +184,13 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
                         raise ValueError("Write the investigation plan to /project/plan.md first.")
                 elif name not in source_reads:
                     raise ValueError("Call read_candidate_evidence before completing the assessment.")
+                required = {candidate_id for candidate_id, facts in evidence.items() if facts}
+                covered = {finding.candidate_id for finding in self.findings}
+                if required - covered:
+                    raise ValueError("Give at least one useful, cited finding for every candidate with source facts; explain its relevance to the goal and a concrete next check.")
                 for finding in self.findings:
+                    if _only_placeholder(finding.text) or (finding.summary is not None and _only_placeholder(finding.summary)):
+                        raise ValueError("A status such as 'impact unassessed' is not feedback. Explain what the cited evidence means for the goal and give a concrete next check.")
                     facts = evidence.get(finding.candidate_id)
                     if facts is None or not set(finding.fact_ids) <= facts.keys():
                         raise ValueError("Cite only returned fact IDs for that candidate.")
@@ -143,7 +198,7 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
                     for identifier in finding.fact_ids:
                         item = facts[identifier]
                         supported |= numeric_tokens(" ".join(str(item.get(key,"")) for key in ("label","display","value","method","note")))
-                    if numeric_tokens(finding.text)-supported:
+                    if numeric_tokens(finding.text + ' ' + (finding.summary or ''))-supported:
                         raise ValueError("Use only exact numbers present in the cited candidate facts.")
                 return self
 
@@ -164,7 +219,10 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
         review_correction = (
             "Your candidate investigation is complete, but plain text did not save a report. "
             "Finish now with the ScoutReview tool, using only the candidate facts already returned and their exact cited values. "
-            "Do not call source or filesystem tools. Omit unsupported conclusions; an empty findings list is allowed.")
+            "Do not call source or filesystem tools. Give every candidate with source facts a useful cited finding connecting the goal, "
+            "the evidence and a concrete next check. Do not invent benefits or return only missing-evidence disclaimers. "
+            "Include a summary of at most 35 words and 220 characters; put supporting detail in text, at most 500 characters. "
+            "An empty findings list is allowed only when no candidate has source facts.")
 
         def correct_review():
             nonlocal review_repair_used, review_repair_pending
@@ -173,11 +231,18 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
                            "Saving the collected candidate findings in the required cited report format.")
             return {"messages": [HumanMessage(content=review_correction)], "jump_to": "model"}
 
+        def ready_for_review():
+            if bundle is None or "/skills/opportunity-scouting/SKILL.md" not in skills[name]:
+                return False
+            if name == "lead":
+                return ({"site-evidence", "domain-analysis"} <= reports.keys()
+                        and {f"/project/reports/{specialist}.json" for specialist in names[1:]} <= reads[name]
+                        and "/project/plan.md" in backend.saved)
+            return name in source_reads
+
         @after_model(can_jump_to=["model", "end"])
         def repair_specialist_review(state, runtime):
             nonlocal review_repair_used, review_repair_pending, source_repair_used, source_repair_pending
-            if name == "lead":
-                return None
             activity.check()
             if state.get("structured_response") is not None:
                 return None
@@ -191,6 +256,8 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
             if (review_repair_used or last is None or last.tool_calls
                     or "/skills/opportunity-scouting/SKILL.md" not in skills[name]):
                 return None
+            if name == "lead":
+                return correct_review() if ready_for_review() else None
             if name not in source_reads:
                 if source_repair_used:
                     return {"jump_to": "end"}
@@ -208,10 +275,10 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
             # A mixed normal-tool + invalid ScoutReview response can end the
             # native tool loop after the normal tools finish. Reuse the same
             # one-shot correction, after every tool call has been answered.
-            if name == "lead" or state.get("structured_response") is not None or review_repair_used or source_repair_pending:
+            if state.get("structured_response") is not None or review_repair_used or source_repair_pending:
                 return None
             activity.check()
-            if name not in source_reads or "/skills/opportunity-scouting/SKILL.md" not in skills[name]:
+            if not ready_for_review():
                 return None
             last = next((item for item in reversed(state["messages"]) if isinstance(item, AIMessage)), None)
             review_ids = {call["id"] for call in last.tool_calls if call["name"] == "ScoutReview"} if last else set()
@@ -286,7 +353,7 @@ inputs and leave selection to the user; missing inputs do not erase a useful sho
         return {"name":name,"description":"Assess sponsor constraints and separate readiness." if name=="site-evidence" else "Assess environmental opportunity and uncertainty.",
                 "runnable":build(name,[read_candidate_evidence]) | RunnableLambda(own_artifacts)}
 
-    review, status = None, "complete"
+    review, status, review_source = None, "complete", "lead"
     try:
         if not key: raise ValueError("Model not configured.")
         subagents = [specialist(name) for name in names[1:]]
@@ -307,9 +374,24 @@ inputs and leave selection to the user; missing inputs do not erase a useful sho
         research_once(in_graph=False)
         activity.event("lead","review","partial","Source research is available. Agent synthesis was incomplete; the shortlist uses the documented screening method.")
     activity.check()
+    if review is None:
+        findings, seen = [], set()
+        for candidate in (bundle or {}).get("candidates", []):
+            for name in ("domain-analysis", "site-evidence"):
+                report = validated_reports.get(name, {})
+                for finding in report.get("findings", []):
+                    signature = (finding["candidate_id"], finding["text"])
+                    if finding["candidate_id"] == candidate["id"] and signature not in seen:
+                        findings.append(finding); seen.add(signature)
+                        break
+        if findings:
+            review = {"findings": findings}
+            review_source = "specialists"
+        else:
+            review_source = "source-guidance"
     if review is not None: save("/project/scouting/review.json",review,in_graph=False)
     result = dict(bundle or {})
-    result.update({"review":review,"agentStatus":status,
+    result.update({"review":review,"agentStatus":status,"reviewSource":review_source,"reviewStale":False,
         "summary":"Choose a researched location to continue. Detailed design begins after selection."
                   if (bundle or {}).get("candidates") else "No supported locations were found in this bounded area. Try another area or select a site directly.",
         "skillsUsed":{name:sorted(paths) for name,paths in skills.items()},

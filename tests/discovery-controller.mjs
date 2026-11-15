@@ -114,6 +114,7 @@ console.log('PASS: fresh traffic request on page load and browser restoration wi
   h.clock.now+=61000;h.timers[0]();
   assert.equal(h.rendered.length,0,'expired flow must disappear');
   assert.match(h.$('discovery-status').textContent,/expired/);
+  assert.match(h.$('discovery-status').textContent,/Map traffic layer expired.*saved place research stays available/);
   assert.equal(h.requests.length,1,'expiry must not create automatic provider polling');
   h.$('discovery-layer').value='approaches';h.$('discovery-layer').events.change();
   assert.equal(h.rendered.length,0,'both current-traffic layers expire without historical fallback');

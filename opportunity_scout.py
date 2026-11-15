@@ -296,14 +296,19 @@ def research_candidates(workflow, bounds, exclude_ids=(), *, check=lambda: None,
         candidates.append(_candidate(workflow, signal, sponsor, expires))
     check(); warnings = []
     if query['coverage'] != 'inside_pilot':
-        warnings.append('The search overlaps only part of the supported pilot.' if query['coverage'] == 'partial_pilot' else 'This area is outside the supported discovery pilot.')
+        if workflow == 'street':
+            warnings.append('Some of this area lacks detailed intersection data; current traffic can still identify places to investigate.')
+        else:
+            warnings.append('Terrain data covers only part of your selected area. Move or shrink the search to compare locations within the mapped terrain area.'
+                            if query['coverage'] == 'partial_pilot' else
+                            'Terrain data is not available in this area. Move the search into the mapped terrain area, or choose a site directly.')
     for layer in query['layers']:
         if layer.get('error'): warnings.append(layer['error'])
     truncated = any(layer['truncated'] for layer in query['layers'])
     if truncated:
-        warnings.append('The bounded screen reached its source-feature limit; a smaller search area can reveal additional local opportunities.')
+        warnings.append('This search checked the strongest 50 mapped features in each relevant layer. Zoom into a smaller area to investigate more local options.')
     if not candidates:
-        warnings.append('No additional supported, distinct opportunities were found in this bounded area. Try another area or select a site directly.')
+        warnings.append('No additional locations could be confirmed in this area. Move the search area or choose a site on the map to investigate it directly.')
     methodology = ('Ordered by larger terrain-inferred contributing raster area within the same terrain method. '
                    if workflow == 'water' else 'Ordered by lower current speed relative to the provider free-flow reference. ')
     methodology += ('This is an environmental screening order, not a ranking of evaluated intervention benefits. '
@@ -335,8 +340,9 @@ def refresh_traffic_candidates(bundle, bounds, *, check=lambda: None):
         if signal is None:
             changed = True; continue
         prefix = candidate['id'] + '-'
+        refreshed_keys = {'signal', 'speed_kmh', 'free_flow_kmh', 'length_m', 'time_penalty_s', 'historical-demand-date'}
         facts = [deepcopy(item) for item in candidate['evidence']
-                 if 'TomTom' not in json.dumps(item.get('source', {})) and not item['id'].endswith('-historical-demand-date')]
+                 if 'TomTom' not in json.dumps(item.get('source', {})) and item['id'].removeprefix(prefix) not in refreshed_keys]
         for item in facts: item['id'] = item['id'].removeprefix(prefix)
         sponsor = {'facts': facts, 'warnings': candidate['warnings'], 'vexcel': candidate['readiness']['sponsors']['vexcel'],
                    'costar': candidate['readiness']['sponsors']['costar'], 'association': candidate['provenance']['association'],
@@ -344,9 +350,13 @@ def refresh_traffic_candidates(bundle, bounds, *, check=lambda: None):
                    'nearbyUses': [], 'nearbyCount': 0}
         updated = _candidate('street', signal, sponsor, data.get('flow_expires_epoch'))
         updated['disruption'] = candidate['disruption']; updated['modelContext']['disruption'] = candidate['disruption']
-        changed |= updated['provenance']['version'] != candidate['provenance']['version']
+        # A provider can correct values without changing its snapshot version.
+        # Never retain a review that cites the previous scalar values or extent.
+        changed |= (updated['provenance']['version'] != candidate['provenance']['version']
+                    or updated['geometry'] != candidate['geometry']
+                    or [(f['id'], f['value']) for f in updated['evidence']] != [(f['id'], f['value']) for f in candidate['evidence']])
         refreshed.append(updated)
     refreshed.sort(key=lambda candidate: (candidate['environmental']['metrics'][0]['value'], candidate['id']))
     result['candidates'] = refreshed; result['expiresAt'] = data.get('flow_expires_epoch'); result['reviewStale'] = changed
-    if changed: result['warnings'].append('Current traffic changed during investigation. Cards use refreshed evidence; earlier agent commentary must be refreshed.')
+    if changed: result['warnings'].append('Traffic changed during the search. The locations below use the latest available speeds.')
     check(); return result
