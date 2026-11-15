@@ -1,0 +1,455 @@
+/* Sustainability Map: landing page
+ *
+ * Same identity as the app (styles.css): drafting-paper sheets and ink text on
+ * dark asphalt, road-sign colours, DIN for display type. The tokens below are
+ * copied from styles.css so the two pages stay one product; change them there
+ * first. The hero is an elevation drawing of downtown Los Angeles that builds
+ * once on load, above a street plan that lights up in the two workflow colours.
+ */
+:root {
+  --paper: #f3f4ee;
+  --sheet: #fbfbf8;
+  --paper-2: #e8eae2;
+  --rule: #d0d4c8;
+  --rule-strong: #a3a99c;
+  --ink: #17211e;
+  --ink-2: #44504b;
+  --ink-3: #5f6963;
+  --asphalt: #151918;
+
+  --guide: #0b6b4c;
+  --guide-deep: #08543c;
+  --guide-tint: #dcece4;
+  --guide-on-dark: #86d6b3;
+  --blue: #1a5e9e;
+  --blue-deep: #144b80;
+  --blue-tint: #dde9f4;
+  --blue-on-dark: #8fc6f2;
+  --caution: #e5b31f;
+
+  --glass-line: #465250;
+  --on-dark: #eef0ea;
+  --on-dark-2: #b3bbb5;
+
+  --display: "DIN Alternate", "Bahnschrift", "DIN Condensed", "Roboto Condensed", "Arial Narrow", sans-serif;
+  --body: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  /* Page rhythm */
+  --nav: 72px;
+  --gut: 80px;
+  --edge: max(var(--gut), calc((100vw - 1280px) / 2));
+  --btn-h: 44px;
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --focus: var(--guide);
+}
+@media (max-width: 1023px) { :root { --gut: 48px; } }
+@media (max-width: 639px) { :root { --nav: 56px; --gut: 24px; --btn-h: 48px; } }
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+html { scroll-padding-top: 0; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--body);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--asphalt);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+h1, h2, h3, p { margin: 0; }
+a { color: inherit; }
+.wrap { width: min(100% - 2 * var(--gut), 1280px); margin-inline: auto; }
+.on-dark { color: var(--on-dark); --focus: var(--on-dark); }
+
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 4px; }
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: var(--btn-h);
+  padding: 0 22px;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .16s, transform .16s var(--ease-out);
+}
+.btn--primary { background: var(--guide); color: #fff; }
+.btn--primary:hover { background: var(--guide-deep); transform: translateY(-1px); }
+/* On asphalt the action takes the lit-street green, as the app's accent does on dark glass. */
+.on-dark .btn--primary { background: var(--guide-on-dark); color: var(--ink); }
+.on-dark .btn--primary:hover { background: #a3e3c6; }
+.btn:active { transform: translateY(1px) scale(.985); transition-duration: .05s; }
+.btn .arrow { width: 16px; height: 16px; flex: none; transition: transform .2s var(--ease-out); }
+.btn:hover .arrow { transform: translateX(3px); }
+.btn-row { display: flex; flex-wrap: wrap; gap: 12px; }
+
+/* ---------- Header ---------- */
+.nav {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 10;
+  height: var(--nav);
+  background: var(--asphalt);
+  border-bottom: 1px solid #2a3231;
+}
+.nav__bar { position: relative; height: 100%; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.nav__logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.mark {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--guide);
+  color: #fff;
+  font-family: var(--body);
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 28px;
+  text-align: center;
+  transition: transform .3s var(--ease-out);
+}
+.nav__logo:hover .mark { transform: rotate(90deg); }
+.skip-link {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  z-index: 2;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-50%);
+  --focus: var(--on-dark);
+}
+.skip-link:not(:focus) { clip-path: inset(50%); width: 1px; height: 1px; padding: 0; overflow: hidden; white-space: nowrap; }
+
+.nav__links { display: flex; gap: 4px; margin-left: auto; }
+.nav__links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--on-dark-2);
+  text-decoration: none;
+  background: linear-gradient(currentColor, currentColor) no-repeat 12px calc(50% + 13px) / 0 1px;
+  transition: color .16s, background-size .25s var(--ease-out);
+}
+.nav__links a:hover { color: var(--on-dark); background-size: calc(100% - 24px) 1px; }
+@media (max-width: 899px) { .nav__links { display: none; } }
+
+/* ---------- Sections: one per screen ---------- */
+.section, .closing {
+  min-height: 100svh;
+  padding: calc(var(--nav) + 48px) 0 72px;
+  background: var(--paper);
+}
+.section--sheet { background: var(--sheet); }
+.section--dark, .closing { background: var(--asphalt); }
+.water { --accent: var(--blue); --accent-tint: var(--blue-tint); }
+h2 {
+  max-width: 16em;
+  font-family: var(--display);
+  font-size: clamp(30px, 3.4vw, 48px);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -.01em;
+  text-wrap: balance;
+}
+h3 { font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.2; }
+.lead { max-width: 36em; margin-top: 18px; font-size: 19px; line-height: 1.55; color: var(--ink-2); }
+.on-dark .lead { color: var(--on-dark-2); }
+.tag {
+  margin-bottom: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.tag--guide { color: var(--guide); }
+.tag--blue { color: var(--blue); }
+
+.split { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 24px; align-items: start; }
+.split__text { grid-column: 1 / 6; }
+.shot { grid-column: 6 / 13; }
+.points { margin: 28px 0 0; padding: 0; list-style: none; }
+.points li { padding: 16px 0; border-top: 2px solid var(--accent, var(--guide)); font-size: 16px; line-height: 1.5; }
+.shot {
+  display: block;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--asphalt);
+  box-shadow: 0 0 0 1px #0003, 0 18px 44px #0004;
+  transition: transform .25s var(--ease-out), box-shadow .25s;
+}
+.shot img { display: block; width: 100%; height: auto; transition: transform .5s var(--ease-out); }
+.shot:hover { transform: translateY(-2px); box-shadow: 0 0 0 1px #0003, 0 24px 54px #0005; }
+.shot:hover img { transform: scale(1.02); }
+
+.steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; margin: 48px 0 0; padding: 0; list-style: none; }
+.steps li { min-height: 340px; padding: 24px 22px 28px; border-radius: 14px; background: var(--paper); color: var(--ink); }
+.steps p { margin-top: 10px; font-size: 16px; line-height: 1.5; color: var(--ink-2); }
+.dot {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 112px;
+  border-radius: 50%;
+  background: var(--guide);
+  color: #fff;
+  font-family: var(--display);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.ledger { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 48px; }
+.ledger > :first-child { padding-right: 40px; }
+.rows { margin: 16px 0 0; padding: 0; list-style: none; }
+.rows > * { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 16px; padding: 24px 0; border-top: 1px solid var(--rule); font-size: 17px; line-height: 1.5; }
+.rows > :last-child { border-bottom: 1px solid var(--rule); }
+.rows dt { font-family: var(--display); font-size: 18px; font-weight: 700; }
+.rows dd { margin: 0; color: var(--ink-2); }
+.rows--plain > * { display: block; color: var(--ink-2); }
+
+.closing { display: flex; padding-bottom: 32px; }
+.closing > .wrap { display: flex; flex-direction: column; justify-content: space-between; gap: 64px; }
+.close h2 { font-size: clamp(34px, 5vw, 72px); }
+.btn--xl { height: 56px; margin-top: 36px; padding: 0 30px; font-size: 18px; }
+.legal { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 32px; padding-top: 24px; border-top: 1px solid #2a3231; }
+.legal p { font-size: 13px; line-height: 1.5; color: var(--on-dark-2); }
+
+@media (max-width: 1023px) {
+  .split, .ledger { grid-template-columns: minmax(0, 1fr); gap: 40px; }
+  .split__text, .shot { grid-column: auto; }
+  .ledger > :first-child { padding-right: 0; }
+  .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .steps li { min-height: 0; }
+  .steps li:last-child { grid-column: 1 / -1; }
+  .dot { margin-bottom: 20px; }
+  .rows > * { padding: 16px 0; }
+}
+@media (max-width: 639px) {
+  .section, .closing { min-height: 0; padding: 72px 0 56px; }
+  .closing { min-height: 100svh; padding-bottom: 28px; }
+  .lead { font-size: 17px; }
+  .steps { grid-template-columns: minmax(0, 1fr); margin-top: 32px; }
+  .ledger { margin-top: 32px; }
+  .rows > * { grid-template-columns: 6em minmax(0, 1fr); }
+  .btn--xl { width: 100%; }
+}
+
+/* ---------- Hero ---------- */
+.hero {
+  /* --text-b: where the words end. The drawing is sized by height so the towers
+     never climb into them: left of City Hall nothing is taller than City Hall. */
+  --hero-h: max(100svh, 600px);
+  --text-b: 484px;
+  --sky-h: clamp(240px, calc((var(--hero-h) - var(--text-b)) * 1.75), calc(var(--hero-h) * .78));
+  --sky-shift: 0px;
+  position: relative;
+  height: var(--hero-h);
+  padding-top: calc(var(--nav) + 48px);
+  overflow: hidden;
+  background: var(--asphalt);
+}
+.hero > .wrap { position: relative; z-index: 1; }
+.hero-text { max-width: min(780px, calc(50vw + var(--sky-h) * .265 - var(--edge) - 24px)); }
+.hero h1 {
+  overflow: hidden;
+  padding-bottom: .08em;
+  font-family: var(--display);
+  font-size: clamp(50px, 5vw, 72px);
+  font-weight: 700;
+  line-height: 1.03;
+  letter-spacing: -.012em;
+  text-wrap: balance;
+}
+.hero h1 .rise { display: block; }
+.hero__lead { max-width: 35em; margin-top: 18px; font-size: 20px; line-height: 1.5; color: var(--on-dark-2); }
+.hero .btn-row { margin-top: 28px; }
+
+@media (max-width: 1023px) {
+  /* Stacked: the words take the full width, the towers stand under them, and the
+     view moves right so City Hall, the US Bank Tower and the Wilshire Grand stay in. */
+  .hero {
+    --text-b: 452px;
+    --sky-h: clamp(220px, calc((var(--hero-h) - var(--text-b)) * 1.1), calc(var(--hero-h) * .7));
+    --sky-shift: calc(var(--sky-h) * -.407);
+  }
+  .hero-text { max-width: 640px; }
+  .hero h1 { font-size: clamp(34px, 7.2vw, 56px); }
+}
+@media (max-width: 639px) {
+  .hero { --text-b: 428px; padding-top: calc(var(--nav) + 40px); }
+  .hero__lead { margin-top: 14px; font-size: 17px; line-height: 1.53; }
+  .hero .btn-row { margin-top: 24px; }
+  .hero .btn { width: 100%; }
+  .nav .btn { height: 40px; padding: 0 16px; font-size: 15px; }
+}
+
+/* ---------- The skyline drawing ---------- */
+.sky {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  height: var(--sky-h);
+  width: auto;
+  max-width: none;
+  overflow: visible;
+  transform: translateX(calc(-50% + var(--sky-shift)));
+  pointer-events: none;
+}
+/* The moving layer sits on its own compositor layer, so its lights never
+   make the browser repaint the city under them. */
+.sky--life { will-change: transform; }
+.sky path, .sky rect, .sky circle { vector-effect: non-scaling-stroke; }
+.sky .edge { fill: none; stroke: rgb(238 240 234 / .13); }
+.sky .ln { fill: none; stroke: rgb(238 240 234 / .34); stroke-linecap: round; stroke-linejoin: round; }
+.sky .ln--soft { stroke: rgb(238 240 234 / .12); }
+.sky .ln--bright { stroke: rgb(255 244 214 / .9); }
+.sky .ln--dark { stroke: rgb(23 33 30 / .42); }
+.sky .ln--dark2 { stroke: #101615; stroke-width: 1.4; }
+.sky .ln--ink { stroke: rgb(23 33 30 / .45); }
+.sky .ln--gold { stroke: rgb(229 179 31 / .6); }
+.sky .spire { fill: none; stroke: rgb(255 244 214 / .92); stroke-width: 1.5; }
+.sky .crown { fill: #fff4d6; }
+.sky .trunk, .sky .palm-trunk, .sky .palm { fill: none; stroke: #0d1312; stroke-linecap: round; vector-effect: none; }
+.sky .trunk { stroke-width: 2; }
+.sky .palm-trunk { stroke-width: 2.6; }
+.sky .palm { stroke-width: 2.2; }
+.sky .sk-ground { fill: none; stroke: var(--on-dark); stroke-width: 1.5; }
+
+/* Streets: deep green for the grid, bright for the wide streets; blue for water. */
+.sky .st { fill: none; stroke: var(--guide); }
+.sky .st--0, .sky .st--1 { stroke: color-mix(in srgb, var(--guide) 58%, var(--guide-on-dark)); }
+.sky .st--0 { stroke-opacity: .62; }
+.sky .st--1 { stroke-opacity: .8; }
+.sky .st--2 { stroke: var(--guide-on-dark); stroke-opacity: .5; }
+.sky .st--3 { stroke: var(--guide-on-dark); stroke-opacity: .62; stroke-width: 1.2; }
+.sky .ar, .sky .ar-glow, .sky .wt, .sky .flow { fill: none; vector-effect: none; stroke-linecap: round; stroke-linejoin: round; }
+.sky .ar { stroke: var(--guide-on-dark); stroke-width: 2.2; }
+.sky .ar--fw { stroke-width: 1.3; }
+.sky .ar-glow { stroke: var(--guide); stroke-width: 9; stroke-opacity: .62; }
+.sky .fw-body { fill: var(--guide); stroke: none; }
+.sky .wt-body { fill: var(--blue); stroke: none; }
+.sky .wt { stroke: var(--blue-on-dark); stroke-width: 1.9; }
+.sky .wt--small { stroke-width: 1.3; }
+
+/* The moving layer at rest: beacons lit, everything else off. */
+.sky .flow, .sky .twinkle { opacity: 0; }
+.sky .twinkle { fill: #ffe9b8; }
+.sky .beacon { fill: #e8621a; }
+.sky .beacon--white { fill: #fff; }
+.sky .plane { display: none; }
+
+.motion {
+  position: absolute;
+  right: var(--edge);
+  bottom: 20px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--glass-line);
+  border-radius: 8px;
+  background: rgb(21 25 24 / .78);
+  color: var(--on-dark);
+  cursor: pointer;
+  transition: background-color .16s, transform .16s var(--ease-out);
+}
+.motion:hover { background: #26302e; transform: translateY(-1px); }
+.motion:active { transform: translateY(1px) scale(.97); }
+.motion svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.motion__play, .motion[aria-pressed="true"] .motion__pause { display: none; }
+.motion[aria-pressed="true"] .motion__play { display: inline; fill: currentColor; }
+@media (prefers-reduced-motion: reduce) { .motion { display: none; } }
+
+/* ---------- The entrance: once on load ----------
+ * Everything above is the finished picture. With motion allowed, each piece
+ * starts from its hidden state and arrives at its --d (seconds): the ground
+ * line, the sky warming, the buildings one after another, the streets, then
+ * the words. welcome.js adds .sky-skip on the first key, click or scroll,
+ * which drops the rest of the entrance and shows the finished page at once. */
+@media (prefers-reduced-motion: no-preference) {
+  html:not(.sky-skip) .sky .sk-ground { transform-origin: 200px 0; animation: sky-line .9s var(--ease-out) .1s both; }
+  html:not(.sky-skip) .sky .sk-dusk,
+  html:not(.sky-skip) .sky .sk-haze { animation: sky-on 3.2s ease-in-out .5s both; }
+  html:not(.sky-skip) .sky .b { animation: sky-rise var(--dur, 1s) var(--ease-out) calc(var(--d) * 1s) both; }
+  html:not(.sky-skip) .sky .b .w,
+  html:not(.sky-skip) .sky .b .lit { animation: sky-on .7s ease-out calc(var(--d) * 1s + .75s) both; }
+
+  html:not(.sky-skip) .sky .st { animation: sky-on .7s ease-out both; }
+  html:not(.sky-skip) .sky .st--3 { animation-delay: 4s; }
+  html:not(.sky-skip) .sky .st--2 { animation-delay: 4.14s; }
+  html:not(.sky-skip) .sky .st--1 { animation-delay: 4.28s; }
+  html:not(.sky-skip) .sky .st--0 { animation-delay: 4.42s; }
+  html:not(.sky-skip) .sky .ar,
+  html:not(.sky-skip) .sky .ar-glow { stroke-dasharray: 1; animation: sky-draw 1.1s cubic-bezier(.3, 0, .2, 1) calc(4.1s + var(--i) * .06s) both; }
+  html:not(.sky-skip) .sky .wt { stroke-dasharray: 1; animation: sky-draw 1.4s cubic-bezier(.3, 0, .2, 1) calc(4.4s + var(--i) * .1s) both; }
+  html:not(.sky-skip) .sky .wt-body,
+  html:not(.sky-skip) .sky .fw-body { animation: sky-on 1.2s ease-out 4.7s both; }
+  html:not(.sky-skip) .sky--life { animation: sky-on 1.2s ease-out 5.5s both; }
+
+  html:not(.sky-skip) .nav[data-in],
+  html:not(.sky-skip) .motion[data-in] { animation: sky-on .7s ease-out calc(var(--d) * 1s) both; }
+  html:not(.sky-skip) .hero h1 [data-in] { animation: txt-rise .8s var(--ease-out) calc(var(--d) * 1s) both; }
+  html:not(.sky-skip) .hero-text > [data-in] { animation: txt-up .6s var(--ease-out) calc(var(--d) * 1s) both; }
+
+  /* ---------- Life: after the entrance, until paused ----------
+   * Only with welcome.js (it adds .has-life and shows the pause button):
+   * headlights run along the wide streets, water runs down the channels, a
+   * few windows switch on and off, the roof beacons blink, a plane passes. */
+  html.has-life .sky .flow--cars { --p: -.142; stroke: #eafff5; stroke-width: 2.4; stroke-dasharray: .012 .13; opacity: .9; }
+  html.has-life .sky .flow--water { --p: -.15; stroke: #d6ecff; stroke-width: 1.9; stroke-dasharray: .03 .12; opacity: .7; }
+  html.has-life .sky .flow--small { stroke-width: 1.3; }
+  html.has-life .sky .flow { animation: life-flow var(--t) linear var(--w) infinite; }
+  html.has-life .sky .twinkle { animation: life-twinkle var(--t) linear var(--w) infinite; }
+  html.has-life .sky .beacon { animation: life-blink 2.6s linear var(--w) infinite; }
+  html.has-life .sky .beacon--white { animation-duration: 4.2s; }
+  html.life-paused .sky--life * { animation-play-state: paused !important; }
+}
+@media (prefers-reduced-motion: no-preference) and (min-width: 1024px) {
+  html.has-life .sky .plane { display: inline; animation: life-plane 48s linear 9s infinite both; }
+}
+@keyframes sky-line { from { transform: scaleX(0); } }
+@keyframes sky-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes sky-rise { from { transform: translateY(calc(var(--h) * -1px)); } }
+@keyframes sky-on { from { opacity: 0; } }
+@keyframes txt-rise { from { transform: translateY(105%); } }
+@keyframes txt-up { from { opacity: 0; transform: translateY(12px); } }
+@keyframes life-flow { to { stroke-dashoffset: var(--p); } }
+@keyframes life-twinkle { 0%, 40% { opacity: 0; } 45%, 92% { opacity: .95; } 97%, 100% { opacity: 0; } }
+@keyframes life-blink { 0%, 62% { opacity: .12; } 68%, 90% { opacity: 1; } 100% { opacity: .12; } }
+@keyframes life-plane {
+  0% { transform: translate(1340px, 552px); opacity: 0; }
+  4% { opacity: 1; }
+  56% { opacity: 1; }
+  62%, 100% { transform: translate(170px, 470px); opacity: 0; }
+}
+
+@media (max-width: 359px) { .nav .btn { display: none; } }
