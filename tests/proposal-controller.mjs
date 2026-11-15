@@ -138,7 +138,12 @@ const draft={...response(1,'water','water'),development_fixture:false,status:'dr
   assumptions:['Ponding depth is a screening assumption.'],access:{text:'Keep-clear checked'},overlap:{text:'Mapped buildings avoided'}};
 draft.metrics.push({id:'storage_volume',unit:'m³',proposed:1.2,revision:1,input_hash:draft.input_hash});
 map.fire('plannerresult',{siteId:'water',workflow:'water',inputRevision:0,revision:1,proposal:draft});
-assert.equal($('proposal-kind').textContent,'Draft concept');
+assert.equal($('proposal-kind').textContent,'Concept');
+assert.equal($('proposal-summary').hidden,true,'show the recommendation in the expandable calculation');
+assert.equal($('proposal-calculation').open,false);
+assert.equal($('proposal-overview-metrics').hidden,true);
+assert.match(text($('water-design-highlights')),/Planted area 260 sq ft Temporary storage About 320 gal/);
+assert.match($('water-design-runoff').textContent,/Runoff capture is unknown/);
 assert.match(text($('proposal-water-metrics')),/Ponding storage 1.2 m³/);
 assert.match(text($('proposal-water-metrics')),/Capture Not assessed/);
 assert.match(text($('proposal-checks')),/Keep-clear checked/);
@@ -154,12 +159,13 @@ console.log('PASS: draft screening metrics, unknown capture and specific placeme
 select('water','water',1);
 const waterProposal=(revision,input_revision=1,area=30)=>({...response(revision,'water','water'),
   development_fixture:false,status:'conditional',input_revision,design:{kind:'bioretention'},
-  proposed_geometry_ids:['bed'],geometry:[{id:'bed',properties:{revision},geometry:{type:'Polygon',coordinates:[]}}],
+  proposed_geometry_ids:['bed'],geometry:[{id:'bed',properties:{revision,layout:'compact'},geometry:{type:'Polygon',coordinates:[]}}],
   metrics:[{id:'footprint_area',proposed:area,unit:'m²',revision,input_hash:'hash'+revision},
     {id:'storage_volume',proposed:area*.15,unit:'m³',revision,input_hash:'hash'+revision},
     {id:'captured_volume',proposed:null,unit:'m³',status:'unassessed',revision,input_hash:'hash'+revision}],
   recommendation:'Mapped planting area; drainage remains unverified.',assumptions:['No verified drainage connection.'],access:{text:'Mapped access avoided'},overlap:{text:'Mapped buildings avoided'}});
 const previous=waterProposal(1,0,12),current=waterProposal(2,1,30),alternative=waterProposal(2,1,20);
+alternative.geometry[0].properties.layout='linear';
 const study={siteId:'water',workflow:'water',inputRevision:1,revision:2,proposal:current,alternatives:{compact:current,linear:alternative},
   waterPlan:{settings:{drainageAssumption:'unknown'},comparison:{selected:'compact',selectionBasis:'Comparable impact is unknown; this footprint avoids mapped operational constraints.',
     scenario:{name:'County rainfall screen',drainageAssumption:'unknown'},results:[{id:'compact',label:'Compact garden',status:'selected',reason:'Fits mapped open space.'},{id:'linear',label:'Linear strip',status:'eligible',reason:'Preserves the entrance.',
@@ -171,7 +177,7 @@ assert.equal(activeLayer().options.renderer.pane,'proposal');
 assert.equal(activeLayer().options.style(current.geometry[0]).className,'rain-garden-footprint');
 assert.equal(activeLayer().options.style({id:'roof',properties:{role:'contributing'}}).className,undefined);
 assert.equal($('water-design-review').hidden,false);
-assert.equal($('proposal-title').textContent,'Bioretention concept');
+assert.equal($('proposal-title').textContent,'Compact rain garden');
 assert.match(text($('proposal-water-metrics')),/Capture Not assessed/);
 assert.match($('water-design-scenario').textContent,/Drainage connection is unknown/);
 assert.match(text($('water-design-decisions')),/CoStar frontage: Preserved/);
@@ -179,6 +185,7 @@ assert.match(text($('water-design-decisions')),/frontage-1/);
 assert.doesNotMatch($('proposal-revision').textContent,/Saved result/,'new live results are not labeled as replay');
 $('water-design-alternatives').children[1].children.find(c=>c.textContent==='Inspect this footprint').events.click();
 assert.equal(activeLayer().options.style(alternative.geometry[0]).className,'rain-garden-footprint');
+assert.equal($('proposal-title').textContent,'Linear rain garden');
 assert.equal($('proposal-area').textContent,'20.0 m²');
 assert.match($('proposal-map-caption').textContent,/Alternative preview/);
 assert.match(text($('water-design-decisions')),/CoStar loading: The linear footprint/);
@@ -205,6 +212,7 @@ const scenarioProposal=waterProposal(3,2,40);scenarioProposal.metrics[2]={...sce
 map.fire('plannerresult',{...study,revision:3,inputRevision:2,proposal:scenarioProposal,alternatives:{},waterPlan:{settings:{drainageAssumption:'marked_connected'},comparison:{scenario:{name:'One-inch explicit scenario'}}}});
 assert.match($('water-design-scenario').textContent,/What-if: marked runoff areas are assumed connected/);
 assert.match(text($('proposal-water-metrics')),/Capture 1.2 m³/);
+assert.match($('water-design-runoff').textContent,/What-if:.*320 gal.*if the marked area drains into it/);
 select('other','water');assert.equal($('water-design-review').hidden,true);
 console.log('PASS: stormwater alternatives, separate unknown/assumed capture, source decisions, read-only history and revision isolation');
 
@@ -233,6 +241,7 @@ assert.doesNotMatch($('proposal-revision').textContent,/Saved result/,'a success
 assert.doesNotMatch($('water-design-scenario').textContent,/Saved result/);
 $('water-design-alternatives').children[1].children.find(c=>c.textContent==='Inspect this footprint').events.click();
 assert.match($('proposal-kind').textContent,/rejected/);
+assert.equal($('proposal-summary').hidden,false,'rejection reason stays visible');
 assert.match($('proposal-summary').textContent,/Rejected: Overlaps the protected loading entrance/);
 assert.equal(activeLayer().options.style.color,'#ffaf98');
 assert.match(text($('water-design-decisions')),/No separate decisions were recorded for this option/);

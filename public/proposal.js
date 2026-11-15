@@ -21,6 +21,7 @@
   };
   const number = (value, unit = "", digits = 1) => finite(value)
     ? `${value.toLocaleString(undefined, {maximumFractionDigits:digits})}${unit ? ` ${unit}` : ""}` : "Not assessed";
+  const approximate = value => value.toLocaleString(undefined, {maximumSignificantDigits:2});
   function savedNotice(study) {
     if(!study?.restored && !study?.savedAt)return '';
     const timestamp=typeof study.savedAt==='string'?Date.parse(study.savedAt):NaN;
@@ -35,7 +36,8 @@
   }
   function caption(stale = false) {
     if (!published) return "No published proposal";
-    return `${statuses[published.status]} · revision ${published.revision}${stale ? " · stale inputs" : ""}`;
+    const kind = ["draft","conditional"].includes(published.status) ? "Rain garden concept" : statuses[published.status];
+    return `${kind} · revision ${published.revision}${stale ? " · stale inputs" : ""}`;
   }
   function removeProposal() {
     map.fire("proposaldisplay", {proposal:null});
@@ -99,22 +101,50 @@
   }
   function publish(p, area, site, replacement = prepareLayer(p), study = null) {
     const fixture = p.development_fixture, draft = !fixture && site.workflow === 'water';
+    const rejected = study?.displayStatus === 'rejected';
     // Publish geometry, measurements and identity together after validation.
     layer?.remove(); layer = replacement; published = p;
     show.disabled = false; show.checked = true; visible();
     $("proposal-review").hidden = false;
     $("proposal-review").setAttribute("data-fixture", String(fixture));
     $("proposal-review").setAttribute("data-status", p.status);
-    $("proposal-kind").textContent = statuses[p.status];
+    $("proposal-review").setAttribute("data-stormwater", String(draft));
+    $("proposal-kind").textContent = draft ? (study?.restored ? "Saved concept" : "Concept") : statuses[p.status];
+    const layout = p.geometry.find(feature => p.proposed_geometry_ids?.includes(feature.id))?.properties?.layout;
     $("proposal-title").textContent = fixture ? (site.workflow === "street" ? "Test island footprint" : "Test treatment footprint")
-      : draft ? (p.design?.kind==='bioretention'?'Bioretention concept':'Rain garden') : label(p.geometry[0].properties.layout);
+      : draft ? ({compact:"Compact rain garden",linear:"Linear rain garden"}[layout] || "Rain garden") : label(p.geometry[0].properties.layout);
     $("proposal-summary").textContent = p.recommendation;
+    $("proposal-summary").hidden = draft && !rejected;
+    $("proposal-overview-metrics").hidden = draft;
+    $("proposal-calculation").open = !draft;
+    $("proposal-calculation-label").hidden = !draft;
+    $("proposal-water-rationale").hidden = !draft;
+    $("proposal-water-rationale").textContent = draft ? p.recommendation : "";
     $("proposal-area-label").textContent = "Footprint";
     $("proposal-area").textContent = `${area.proposed.toFixed(1)} ${area.unit}`;
-    $("proposal-impact").textContent = fixture ? "Unassessed" : draft ? "Screening estimate" : "Simulated · see comparison";
+    $("proposal-impact").textContent = fixture ? "Unassessed" : "Simulated · see comparison";
+    const highlights = $("water-design-highlights");
+    highlights.hidden = !draft;
+    highlights.replaceChildren();
+    const runoff = $("water-design-runoff");
+    runoff.hidden = !draft || rejected;
+    runoff.textContent = "";
+    if (draft) {
+      const storage = p.metrics.find(metric => metric.id === "storage_volume")?.proposed;
+      highlights.append(
+        element("dt","Planted area"),element("dd",`${approximate(area.proposed / .09290304)} sq ft`),
+        element("dt","Temporary storage"),element("dd",finite(storage) ? `About ${approximate(storage / .003785411784)} gal` : "Unknown"));
+      const capture = p.metrics.find(metric => metric.id === "captured_volume")?.proposed;
+      const depth = p.design?.storage_depth_m;
+      const connection = finite(capture)
+        ? `What-if: the garden could hold about ${approximate(capture / .003785411784)} gal of runoff if the marked area drains into it.`
+        : "Runoff capture is unknown.";
+      runoff.textContent = finite(depth) && finite(storage)
+        ? `${connection} The storage estimate assumes about ${Math.round(depth / .0254)} inches of ponding.` : connection;
+    }
     $("proposal-water-metrics").hidden = !draft;
     $("proposal-water-metrics").replaceChildren();
-    if (draft) for (const [id, title] of [["storage_volume","Ponding storage"],["direct_rain_volume","Rain onto treatment"],
+    if (draft) for (const [id, title] of [["footprint_area","Measured footprint"],["storage_volume","Ponding storage"],["direct_rain_volume","Rain onto treatment"],
       ["contributing_area","Marked contributing area (union)"],
       ["runoff_volume","Contributing runoff"],["captured_volume","Capture"],["overflow_volume","Excess contributing runoff"],
       ["direct_overflow_volume","Excess direct rain"]]) {
@@ -198,7 +228,7 @@
             $('proposal-kind').textContent=`Study alternative · ${entry.status || 'concept'}`;
             if(entry.status==='rejected') {
               $('proposal-review').setAttribute('data-status','rejected');
-              $('proposal-summary').textContent=`Rejected: ${entry.reason || 'This footprint failed the siting checks.'} ${alternative.recommendation}`;
+              $('proposal-summary').textContent=`Rejected: ${entry.reason || 'This footprint failed the siting checks.'}`;
             }
             $('proposal-map-caption').textContent=`${entry.status==='rejected'?'Rejected alternative':'Alternative'} preview · revision ${study.revision}${study.inputRevision!==selected.inputRevision || study.historicalReference?' · stale inputs':''}`;
             $('water-return-current').hidden=false;
@@ -430,7 +460,7 @@
           focus();
         } else {
           if(published) {$("proposal-stale").hidden=false;$("proposal-map-caption").textContent=`${caption(true)} · previous result`;}
-          $("proposal-result-message").textContent = `${event.draftQuestion ?? "No draft is available for this revision."}${published?' The previous footprint remains visible for reference; it is not the new result.':''}`;
+          $("proposal-result-message").textContent = `${event.draftQuestion ?? "No rain garden was placed."}${published?' The map shows the earlier design.':''}`;
         }
         renderWaterStudy(currentWater);
         $("load-proposal-fixture").disabled = false;

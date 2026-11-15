@@ -5,16 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=27">
+  <link rel="stylesheet" href="/styles.css?v=28">
   <script defer src="/vendor/leaflet.js"></script>
   <script defer src="/vector-zoom.js?v=1"></script>
   <script defer src="/app.js?v=20"></script>
-  <script defer src="/proposal.js?v=10"></script>
+  <script defer src="/proposal.js?v=11"></script>
   <script defer src="/concept-scene.js?v=2"></script>
   <script defer src="/analysis-stream.js?v=2"></script>
   <script defer src="/site-view.js?v=4"></script>
   <script defer src="/projects.js?v=1"></script>
-  <script defer src="/planner.js?v=21"></script>
+  <script defer src="/planner.js?v=22"></script>
   <script defer src="/discovery.js?v=5"></script>
   <script defer src="/scouting.js?v=2"></script>
   <script defer src="/guide.js?v=2"></script>
@@ -231,10 +231,10 @@
             </div>
 
             <div class="tab" data-tab="assessment">
+              <div id="agent-assessment" class="site-review" aria-live="polite" hidden></div>
               <details id="agent-activity" class="agent-activity"><summary>Agent activity <span id="activity-count"></span></summary>
                 <ol id="activity-list"></ol>
               </details>
-              <div id="agent-assessment" class="site-review" aria-live="polite" hidden></div>
               <p class="empty-note empty-assessment">No assessment yet. Refine the brief and analyze the site to see what the agent finds.</p>
             </div>
 
@@ -243,25 +243,37 @@
               <section id="proposal-review" class="card proposal-review" hidden aria-live="polite">
                 <span id="proposal-kind" class="fixture-tag">Development fixture</span>
                 <h3 id="proposal-title"></h3><p id="proposal-summary"></p>
-                <dl class="proposal-metrics"><dt id="proposal-area-label">Footprint</dt><dd id="proposal-area"></dd><dt>Impact</dt><dd id="proposal-impact">Unassessed</dd></dl>
-                <dl id="proposal-water-metrics" class="proposal-metrics" hidden></dl>
-                <p class="fine-print water-planting-note">Planting shown within the treatment footprint is illustrative.</p>
-                <div id="proposal-checks"></div>
-                <ul id="proposal-assumptions" hidden></ul>
-                <div class="proposal-view-actions"><button id="focus-proposal" type="button">Zoom to footprint</button>
-              <button id="open-concept-scene" type="button" disabled aria-haspopup="dialog" aria-controls="concept-scene-dialog">Explore in 3D <span aria-hidden="true">↗</span></button></div>
-            <p id="concept-scene-entry" class="concept-scene-entry" role="status">A published footprint enables its conceptual 3D view.</p>
-                <p id="proposal-revision" class="fine-print"></p><p id="proposal-stale" class="analysis-stale" hidden>Inputs changed. Analyze again to update this proposal.</p>
+                <dl id="proposal-overview-metrics" class="proposal-metrics">
+                  <dt id="proposal-area-label">Footprint</dt><dd id="proposal-area"></dd>
+                  <dt>Impact</dt><dd id="proposal-impact">Unassessed</dd>
+                </dl>
+                <dl id="water-design-highlights" class="water-design-highlights" hidden></dl>
+                <div class="proposal-view-actions">
+                  <button id="open-concept-scene" type="button" disabled aria-haspopup="dialog" aria-controls="concept-scene-dialog">Explore in 3D <span aria-hidden="true">↗</span></button>
+                  <button id="focus-proposal" type="button">Zoom to footprint</button>
+                </div>
+                <p id="concept-scene-entry" class="concept-scene-entry" role="status">A published footprint enables its conceptual 3D view.</p>
+                <p id="proposal-stale" class="analysis-stale" hidden>Inputs changed. Analyze again to update this proposal.</p>
+                <p id="water-design-runoff" class="water-design-runoff" hidden></p>
+                <details id="proposal-calculation" open>
+                  <summary id="proposal-calculation-label" hidden>Calculation and assumptions</summary>
+                  <p id="proposal-water-rationale" hidden></p>
+                  <dl id="proposal-water-metrics" class="proposal-metrics" hidden></dl>
+                  <p class="fine-print water-planting-note">Planting shown within the treatment footprint is illustrative.</p>
+                  <div id="proposal-checks"></div>
+                  <ul id="proposal-assumptions" hidden></ul>
+                  <p id="proposal-revision" class="fine-print"></p>
+                </details>
               </section>
               <section id="water-design-review" class="card water-design-review" hidden>
-                <span class="card-kicker">Stormwater concept study</span>
-                <h3>Why this footprint</h3><p id="water-design-selection"></p>
-                <p id="water-design-scenario" class="water-scenario-note"></p>
                 <p id="water-design-stale" class="analysis-stale" hidden>Inputs changed. These alternatives and calculations belong to the earlier design revision.</p>
-                <details><summary>Evidence &amp; siting decisions</summary><ul id="water-design-decisions"></ul></details>
+                <button id="water-return-current" type="button" hidden>Return to current concept</button>
+                <details><summary>Why this location</summary>
+                  <p id="water-design-selection"></p><p id="water-design-scenario" class="water-scenario-note"></p>
+                  <ul id="water-design-decisions"></ul>
+                </details>
                 <details id="water-design-alternatives-box"><summary>Other design options</summary><p>Preview only; your saved design stays unchanged.</p><div id="water-design-alternatives"></div></details>
                 <details id="water-design-history-box"><summary>Earlier design revisions</summary><div id="water-design-history"></div></details>
-                <button id="water-return-current" type="button" hidden>Return to current concept</button>
               </section>
               <section id="traffic-comparison" class="card traffic-comparison" hidden aria-live="polite">
                 <span class="card-kicker">Historical count simulation</span>
@@ -293,9 +305,13 @@
               <div id="site-tools" class="site-details" hidden>
                 <section id="site-facts" class="card" aria-labelledby="site-facts-title" hidden>
                   <h3 id="site-facts-title">Measurements &amp; sources</h3>
-                  <div id="site-source-status" class="source-status"></div>
-                  <ol id="site-facts-list" class="site-facts-list"></ol>
-                  <ul id="site-source-warnings" class="source-warnings"></ul>
+                  <dl id="water-evidence-summary" class="water-evidence-summary" hidden></dl>
+                  <details id="all-site-facts" open>
+                    <summary id="all-site-facts-label" hidden>All measurements and sources</summary>
+                    <div id="site-source-status" class="source-status"></div>
+                    <ol id="site-facts-list" class="site-facts-list"></ol>
+                    <ul id="site-source-warnings" class="source-warnings"></ul>
+                  </details>
                 </section>
                 <section class="card" aria-labelledby="evidence-title">
                   <h3 id="evidence-title">Site evidence on the map</h3>
