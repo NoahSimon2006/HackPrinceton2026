@@ -1,4 +1,7 @@
 import json
+from collections import deque
+from email.message import Message
+from urllib.error import HTTPError
 import time
 import unittest
 from unittest.mock import patch
@@ -34,6 +37,8 @@ def response(features):
 class FlowTest(unittest.TestCase):
     def setUp(self):
         self.names=patch('traffic_flow.named_roads',return_value=([],None,None));self.names.start();self.addCleanup(self.names.stop)
+        state=patch.multiple(flow,_snapshot=None,_attempted_at=0.,_request_batches=deque(),_provider_retry_at=0.)
+        state.start();self.addCleanup(state.stop)
 
     def test_tile_decode_units_direction_and_duplicate_conservation(self):
         r=response([feature()]);features,audit=flow.decode_tiles([r,r])
@@ -75,7 +80,7 @@ class FlowTest(unittest.TestCase):
 
     def test_live_cache_is_short_lived_bounded_and_never_falls_back_to_expired_data(self):
         r=response([feature()])
-        with patch.dict('os.environ',{'TOMTOM_API_KEY':'test-secret'}),patch.multiple(flow,_snapshot=None,_attempted_at=0.,_requests=0), \
+        with patch.dict('os.environ',{'TOMTOM_API_KEY':'test-secret'}), \
              patch('traffic_flow.tiles_for',return_value=[(X,Y)]),patch('traffic_flow.fetch_tile',return_value=r) as fetch:
             first=flow.get_snapshot();second=flow.get_snapshot()
             self.assertEqual(first['version'],second['version']);self.assertEqual(fetch.call_count,1)
@@ -88,8 +93,76 @@ class FlowTest(unittest.TestCase):
                 failed=flow.get_snapshot()
                 self.assertEqual(failed['layers'][0]['status'],'unavailable')
                 self.assertEqual(failed['layers'][0]['features'],[])
-        with patch.dict('os.environ',{'TOMTOM_API_KEY':'test-secret'}),patch.multiple(flow,_snapshot=None,_attempted_at=0.,_requests=256),patch('traffic_flow.fetch_tile') as fetch:
-            self.assertEqual(flow.get_snapshot()['layers'][0]['status'],'unavailable');fetch.assert_not_called()
+
+    def test_rolling_budget_recovers_without_restart_and_reports_exact_retry(self):
+        now=10000.
+        # One old batch expires first, but only the second expiry frees enough
+        # room for the next complete two-tile refresh.
+        batches=deque([(now-890,1),(now-880,255)])
+        with patch.dict('os.environ',{'TOMTOM_API_KEY':'test-secret'}), \
+             patch.multiple(flow,_request_batches=batches), \
+             patch('traffic_flow.time.time',return_value=now) as clock, \
+             patch('traffic_flow.tiles_for',return_value=[(X,Y),(X+1,Y)]), \
+             patch('traffic_flow.fetch_tile') as fetch:
+            blocked=flow.get_snapshot()
+            self.assertEqual(blocked['retry_after_seconds'],20)
+            self.assertEqual(blocked['retry_at'],flow.utc(now+20))
+            self.assertEqual(blocked['audit']['window_tile_requests'],256)
+            self.assertIsNone(blocked['sources']['tomtom']['retrieved_at'])
+            fetch.assert_not_called()
+            clock.return_value=now+10
+            self.assertEqual(flow.get_snapshot()['retry_after_seconds'],10)
+            fetch.assert_not_called()
+            clock.return_value=now+20
+            fetch.return_value=response([feature()])
+            recovered=flow.get_snapshot()
+            self.assertEqual(recovered['layers'][0]['status'],'ready')
+            self.assertEqual(fetch.call_count,2)
+            self.assertEqual(recovered['audit']['window_tile_requests'],2)
+            self.assertEqual(flow.get_snapshot()['version'],recovered['version'])
+            self.assertEqual(fetch.call_count,2,'valid cached snapshots are shared')
+
+    def test_provider_retry_after_blocks_requests_then_recovers(self):
+        now=10000.;headers=Message();headers['Retry-After']='180'
+        error=HTTPError('https://example.test',429,'Too many requests',headers,None)
+        with patch.dict('os.environ',{'TOMTOM_API_KEY':'test-secret'}), \
+             patch('traffic_flow.time.time',return_value=now) as clock, \
+             patch('traffic_flow.tiles_for',return_value=[(X,Y)]), \
+             patch('traffic_flow.urlopen',side_effect=error) as provider:
+            result=flow.get_snapshot()
+            self.assertEqual(result['retry_after_seconds'],180)
+            self.assertIn('TomTom rate limit',result['layers'][0]['error'])
+            self.assertNotIn('test-secret',json.dumps(result))
+            clock.return_value=now+61
+            self.assertEqual(flow.get_snapshot()['retry_after_seconds'],119)
+            self.assertEqual(provider.call_count,1)
+            clock.return_value=now+180
+            with patch('traffic_flow.fetch_tile',return_value=response([feature()])) as fetch:
+                self.assertEqual(flow.get_snapshot()['layers'][0]['status'],'ready')
+                fetch.assert_called_once()
+
+    def test_retry_after_http_dates_and_malformed_values_are_bounded(self):
+        from email.utils import formatdate
+        now=10000.
+        self.assertEqual(flow.retry_after_seconds(formatdate(now+300,usegmt=True),now),300)
+        for value in [None,'garbage','-1','nan','999'*100]:
+            self.assertEqual(flow.retry_after_seconds(value,now),60)
+        self.assertEqual(flow.retry_after_seconds('999999999',now),86400)
+        self.assertEqual(flow.retry_after_seconds(formatdate(now-300,usegmt=True),now),60)
+
+    def test_provider_timeout_is_unavailable_and_does_not_retry_automatically(self):
+        with patch.dict('os.environ',{'TOMTOM_API_KEY':'test-secret'}), \
+             patch('traffic_flow.time.time',return_value=10000.) as clock, \
+             patch('traffic_flow.tiles_for',return_value=[(X,Y)]), \
+             patch('traffic_flow.urlopen',side_effect=TimeoutError('private connection detail')) as provider:
+            result=flow.get_snapshot()
+            self.assertEqual(result['layers'][0]['status'],'unavailable')
+            self.assertIn('could not be reached',result['layers'][0]['error'])
+            self.assertNotIn('private connection detail',json.dumps(result))
+            self.assertEqual(result['retry_after_seconds'],60)
+            clock.return_value=10001.
+            self.assertEqual(flow.get_snapshot()['retry_after_seconds'],59)
+            self.assertEqual(provider.call_count,1)
 
     def test_map_reference_uses_its_own_version_and_rejects_relocation(self):
         features,_=flow.decode_tiles([response([feature()])]);p=features[0]['properties']

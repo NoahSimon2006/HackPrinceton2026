@@ -116,7 +116,8 @@ def area_facts(workflow, lon, lat, *, data=None):
         origin=layer['source']
         source={'provider':origin['label'],'url':origin['url'],'observed_at':origin.get('observed_at'),
                 'retrieved_at':origin.get('retrieved_at'),'collection':origin.get('product')}
-        note=f"{layer['period']}. {layer['limitations']}"
+        note=' '.join(part for part in (layer.get('error'), f"{layer['period']}. {layer['limitations']}")
+                      if isinstance(part, str) and part)
         facts.append(fact('area-'+layer['layer']+'-coverage','Neighborhood '+layer['layer']+' coverage',
                           layer['status']+'; '+result['coverage']+'; '+str(layer['total'])+' intersecting features',
                           '',source,basis='availability',method='Local intersection within a bounded 350 m neighborhood.',note=note))

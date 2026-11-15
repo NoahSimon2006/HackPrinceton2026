@@ -92,6 +92,28 @@ def snapshot():
 
 
 class DiscoveryTest(unittest.TestCase):
+    def test_unavailable_flow_preserves_retry_reason_and_other_sourced_evidence(self):
+        from traffic_flow import empty_snapshot
+        message='Traffic request limit reached. Retry after 2026-11-15T09:00:00Z.'
+        data=empty_snapshot(message)
+        historical=snapshot()
+        historical['layers'][0]['features'][0]['geometry']['type']='Point'
+        data['layers'].extend(historical['layers'])
+        data['sources'].update(historical['sources'])
+        facts,warnings=discovery.area_facts('street',-118.25,34.05,data=data)
+        indexed={item['id']:item for item in facts}
+        unavailable=indexed['area-flow-coverage']
+        self.assertEqual(unavailable['basis'],'availability')
+        self.assertTrue(unavailable['value'].startswith('unavailable;'))
+        self.assertIn(message,unavailable['note'])
+        self.assertIsNone(unavailable['source']['retrieved_at'])
+        self.assertNotIn('area-flow-1',indexed,'missing traffic must not become a measured zero')
+        self.assertEqual(indexed['area-counts-1']['value'],18102)
+        self.assertEqual(indexed['area-counts-1']['basis'],'reported')
+        self.assertNotIn(message,indexed['area-counts-1']['note'])
+        self.assertEqual(warnings,[])
+        self.assertNotIn('PRIVATE',json.dumps(facts))
+
     def test_cached_snapshot_changes_require_a_new_content_version(self):
         from hashlib import sha256
         data=snapshot();data.pop('version')

@@ -4,9 +4,11 @@ No historical feed archive, automatic polling, v4 enrichment, or emissions
 inference. Map geometry and agent summaries use the same versioned snapshot.
 """
 from __future__ import annotations
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from hashlib import sha256
 import json
 import math
@@ -22,7 +24,9 @@ from urllib.request import Request, urlopen
 PILOT = (-118.268, 34.034, -118.219, 34.070)
 ZOOM = 15
 MAX_TILES = 30
-SESSION_REQUEST_BUDGET = 256
+REQUEST_BUDGET = 256
+REQUEST_WINDOW_SECONDS = 15 * 60
+REFRESH_INTERVAL_SECONDS = 60
 DOC = 'https://docs.tomtom.com/traffic-api/documentation/tomtom-orbis-maps/v2/traffic-flow/vector-flow-tiles'
 LIMITS = ('One current traffic estimate, not recurring congestion or measured emissions. '
           'Coverage includes returned surface streets only; an absent road is unknown. '
@@ -31,12 +35,35 @@ LIMITS = ('One current traffic estimate, not recurring congestion or measured em
 _lock = Lock()
 _snapshot = None
 _attempted_at = 0.0
-_requests = 0
+_request_batches = deque()
+_provider_retry_at = 0.0
 _roads = None
 
 
 def utc(epoch=None):
     return datetime.fromtimestamp(time.time() if epoch is None else epoch, timezone.utc).isoformat(timespec='seconds')
+
+
+class TrafficRateLimited(ValueError):
+    def __init__(self, retry_at):
+        super().__init__('TomTom rate limit reached; current flow is temporarily unavailable.')
+        self.retry_at = retry_at
+
+
+def retry_after_seconds(value, now):
+    """Accept standard seconds or HTTP dates, with a bounded fallback for bad headers."""
+    seconds = REFRESH_INTERVAL_SECONDS
+    if isinstance(value, str) and len(value) <= 128:
+        try:
+            seconds = int(value) if value.strip().isdigit() else parsedate_to_datetime(value).timestamp() - now
+        except (ValueError, TypeError, OverflowError):
+            pass
+    return min(86400, max(REFRESH_INTERVAL_SECONDS, math.ceil(seconds)))
+
+
+def request_audit():
+    return {'window_tile_requests': sum(count for _, count in _request_batches),
+            'window_tile_limit': REQUEST_BUDGET, 'window_seconds': REQUEST_WINDOW_SECONDS}
 
 
 def tiles_for(bounds):
@@ -75,8 +102,10 @@ def fetch_tile(x, y, key):
                     'http_date':response.headers.get('Date'),
                     'data_ids':response.headers.get('TomTom-Traffic-Data-IDs')}
     except HTTPError as error:
+        if error.code == 429:
+            now = time.time()
+            raise TrafficRateLimited(now + retry_after_seconds(error.headers.get('Retry-After') if error.headers else None, now)) from None
         message = ('TomTom rejected the key or traffic entitlement.' if error.code in (401,403) else
-                   'TomTom rate limit reached; wait before refreshing.' if error.code == 429 else
                    f'TomTom tile request failed ({error.code}).')
         raise ValueError(message) from None
     except (URLError, TimeoutError, OSError):
@@ -324,36 +353,58 @@ def group_approaches(features):
     return sorted(groups,key=lambda f:(f['properties']['value'],f['id']))
 
 
-def empty_snapshot(message, status='unavailable'):
+def empty_snapshot(message, status='unavailable', *, retry_at=None):
+    retry = {} if retry_at is None else {'retry_at': utc(retry_at),
+                                       'retry_after_seconds': max(0, math.ceil(retry_at-time.time()))}
+    if retry:
+        message += f" Try again at {retry['retry_at']} (in {retry['retry_after_seconds']} seconds)."
     return {'schema':1,'workflow':'street','version':'flow-unavailable','bbox':list(PILOT),
+            **retry,
             'sources':{'tomtom':{'label':'TomTom Traffic · Orbis v2','url':DOC,'retrieved_at':None,'observed_at':None}},
             'layers':[{'id':'flow','label':'Current street flow','status':status,'error':message,'source':'tomtom',
                        'classification':'estimated','unit':'% of free-flow speed','period':'Current estimate unavailable',
-                       'method':'Bounded Orbis v2 flow tiles.','limitations':LIMITS,'features':[]}],
-            'audit':{'session_tile_requests':_requests,'session_tile_limit':SESSION_REQUEST_BUDGET}}
+                       'method':'Bounded Orbis v2 flow tiles.','limitations':LIMITS,'features':[],**retry}],
+            'audit':request_audit()}
 
 
 def get_snapshot():
-    global _snapshot,_attempted_at,_requests
+    global _snapshot,_attempted_at,_provider_retry_at
     with _lock:
         now=time.time()
+        while _request_batches and _request_batches[0][0] <= now-REQUEST_WINDOW_SECONDS:
+            _request_batches.popleft()
         if _snapshot and now<_snapshot.get('expires_epoch',0):
             return deepcopy(_snapshot)
-        if now-_attempted_at<60:
-            return empty_snapshot('Refresh is available once a minute; no expired traffic is displayed.')
+        if now < _provider_retry_at:
+            return empty_snapshot('TomTom rate limit reached; current flow is temporarily unavailable.', retry_at=_provider_retry_at)
+        if now-_attempted_at<REFRESH_INTERVAL_SECONDS:
+            return empty_snapshot('Refresh is available once a minute; no expired traffic is displayed.',
+                                  retry_at=_attempted_at+REFRESH_INTERVAL_SECONDS)
         key=os.getenv('TOMTOM_API_KEY','').strip()
         if not key:return empty_snapshot('Configure TOMTOM_API_KEY locally to show current street flow.')
         tiles=tiles_for(PILOT)
-        if _requests+len(tiles)>SESSION_REQUEST_BUDGET:
-            return empty_snapshot('The local session traffic request budget is exhausted. Historical counts remain available.')
-        _attempted_at=now;_snapshot=None;_requests+=len(tiles)
+        used = sum(count for _, count in _request_batches)
+        if used+len(tiles)>REQUEST_BUDGET:
+            for requested_at, count in _request_batches:
+                used -= count
+                if used+len(tiles)<=REQUEST_BUDGET:
+                    return empty_snapshot('The local traffic request limit is temporarily reached. Historical counts remain available.',
+                                          retry_at=requested_at+REQUEST_WINDOW_SECONDS)
+        _attempted_at=now;_snapshot=None;_request_batches.append((now,len(tiles)))
         def fetch(tile):
             try:return fetch_tile(*tile,key),None
-            except ValueError as error:return None,str(error)
+            except ValueError as error:return None,error
         with ThreadPoolExecutor(max_workers=4) as executor:
             results=list(executor.map(fetch,tiles))
-        responses=[r for r,e in results if r is not None]; errors=[e for r,e in results if e]
-        if not responses:return empty_snapshot(errors[0])
+        responses=[r for r,e in results if r is not None]; failures=[e for r,e in results if e]
+        errors=[str(error) for error in failures]
+        for error in failures:
+            if isinstance(error,TrafficRateLimited):
+                _provider_retry_at=max(_provider_retry_at,error.retry_at)
+        if not responses:
+            retry_at=max(_attempted_at+REFRESH_INTERVAL_SECONDS,_provider_retry_at)
+            message = str(TrafficRateLimited(retry_at)) if _provider_retry_at>now else errors[0]
+            return empty_snapshot(message, retry_at=retry_at)
         try:
             features,audit=decode_tiles(responses)
         except (ValueError,TypeError,KeyError,IndexError,ImportError,OverflowError):
@@ -375,8 +426,8 @@ def get_snapshot():
                    'sources':{'tomtom':{'label':'TomTom Traffic · Orbis v2','url':DOC,'retrieved_at':utc(received),
                               'observed_at':None,'data_ids':data_ids,'http_dates':sorted({r['http_date'] for r in responses if r['http_date']}),
                               'attribution':'© '+str(datetime.now(timezone.utc).year)+' TomTom'}},'layers':[layer,grouped],
-                   'audit':{**audit,'approach_groups':len(approaches),'requested_tiles':len(tiles),'failed_tiles':len(errors),'session_tile_requests':_requests,
-                            'session_tile_limit':SESSION_REQUEST_BUDGET,'storage':'Memory only; expires with provider cache lifetime, at most 60 seconds.'}}
+                   'audit':{**audit,**request_audit(),'approach_groups':len(approaches),'requested_tiles':len(tiles),'failed_tiles':len(errors),
+                            'storage':'Memory only; expires with provider cache lifetime, at most 60 seconds.'}}
         return deepcopy(_snapshot)
 
 

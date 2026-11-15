@@ -262,13 +262,27 @@
     layer.bindTooltip(label).addTo(evidenceLayer);
   }
 
+  function renderSafely(record, render) {
+    try { render(); }
+    catch (error) {
+      // Presentation failures must not cancel the stream or strand its controls.
+      record.displayWarning = "Some evidence could not be displayed. The remaining assessment is still available.";
+      $("analysis-message").hidden = false;
+      $("analysis-message").textContent = record.evidenceError || record.displayWarning;
+    }
+  }
+
   function showReview(record) {
-    const facts = record.facts ?? [];
+    renderSafely(record, () => renderReview(record));
+  }
+
+  function renderReview(record) {
+    const facts = Array.isArray(record.facts) ? record.facts : [];
     const output = $("agent-assessment");
     output.replaceChildren();
     output.hidden = !record.report;
-    $("analysis-message").hidden = !record.evidencePending && !record.evidenceError;
-    $("analysis-message").textContent = record.evidencePending ? (record.activitySummary || "Starting site investigation…") : record.evidenceError || "";
+    $("analysis-message").hidden = !record.evidencePending && !record.evidenceError && !record.displayWarning;
+    $("analysis-message").textContent = record.evidencePending ? (record.activitySummary || "Starting site investigation…") : record.evidenceError || record.displayWarning || "";
     $('analysis-synthesis-warning').hidden=!record.synthesisWarning || record.evidencePending;
     $('analysis-synthesis-warning').textContent=record.synthesisWarning ? `Agent summary incomplete. ${record.synthesisWarning}`:'';
     $("cancel-site-analysis").hidden = !record.evidencePending;
@@ -285,7 +299,7 @@
           const paragraph = document.createElement("p");
           paragraph.textContent = typeof entry === "string" ? entry : entry.text;
           for (const id of entry.fact_ids ?? []) {
-            const index = facts.findIndex((fact) => fact.id === id);
+            const index = facts.findIndex((fact) => fact?.id === id);
             if (index < 0) continue;
             const link = document.createElement("button");
             link.type = "button";
@@ -313,39 +327,51 @@
     const labels = { measured: "Measured", reported: "Reported", estimated: "Estimated", candidate: "Candidate", user_marked: "User marked", assumption: "Assumption", availability: "Source status" };
     facts.forEach((fact, index) => {
       const row = document.createElement("li");
-      const detail = document.createElement("details");
-      detail.id = `fact-${fact.id}`;
-      detail.tabIndex = -1;
-      detail.open = expanded.has(detail.id);
-      const summary = document.createElement("summary");
-      const name = document.createElement("span");
-      name.textContent = `${index + 1}. ${fact.label}`;
-      const value = document.createElement("strong");
-      value.textContent = fact.display;
-      const badge = document.createElement("small");
-      badge.className = `fact-basis ${fact.basis}`;
-      badge.textContent = labels[fact.basis] || fact.basis;
-      summary.append(name, value, badge);
-      detail.append(summary);
-      for (const text of [fact.method, fact.note]) {
-        if (!text) continue;
-        const paragraph = document.createElement("p");
-        paragraph.textContent = text;
-        detail.append(paragraph);
+      try {
+        if (!fact || typeof fact !== "object" || typeof fact.id !== "string") throw new Error("Invalid evidence item.");
+        const detail = document.createElement("details");
+        detail.id = `fact-${fact.id}`;
+        detail.tabIndex = -1;
+        detail.open = expanded.has(detail.id);
+        const summary = document.createElement("summary");
+        const name = document.createElement("span");
+        name.textContent = `${index + 1}. ${fact.label}`;
+        const value = document.createElement("strong");
+        value.textContent = fact.display;
+        const badge = document.createElement("small");
+        badge.className = `fact-basis ${fact.basis}`;
+        badge.textContent = labels[fact.basis] || fact.basis;
+        summary.append(name, value, badge);
+        detail.append(summary);
+        for (const text of [fact.method, fact.note]) {
+          if (!text) continue;
+          const paragraph = document.createElement("p");
+          paragraph.textContent = text;
+          detail.append(paragraph);
+        }
+        const source = fact.source && typeof fact.source === "object" ? fact.source : {};
+        const sourceUrl = typeof source.url === "string" && /^https?:\/\//i.test(source.url) ? source.url : null;
+        const origin = document.createElement(sourceUrl ? "a" : "span");
+        origin.textContent = typeof source.provider === "string" ? source.provider : "Source unavailable";
+        if (sourceUrl) { origin.href = sourceUrl; origin.target = "_blank"; origin.rel = "noopener"; }
+        detail.append(origin);
+        const metadata = document.createElement("p");
+        metadata.className = "fact-metadata";
+        const retrieved = typeof source.retrieved_at === "string" && Number.isFinite(Date.parse(source.retrieved_at))
+          ? `Retrieved ${source.retrieved_at.slice(0, 10)}` : "Retrieval date unavailable";
+        const references = Array.isArray(fact.feature_ids) ? fact.feature_ids.filter(id => typeof id === "string") : [];
+        metadata.textContent = [typeof source.observed_at === "string" && source.observed_at ? `Observed ${source.observed_at}` : "Observation date unavailable",
+          retrieved, typeof source.collection === "string" && source.collection ? `Collection ${source.collection}` : null,
+          references.length ? `Map references: ${references.join(", ")}` : null].filter(Boolean).join(" · ");
+        detail.append(metadata);
+        row.append(detail);
+        list.append(row);
+        if (focused === detail.id) detail.focus({preventScroll:true});
+      } catch (error) {
+        row.replaceChildren();
+        row.textContent = "Evidence item unavailable; the remaining assessment is still available.";
+        if (!list.children || !Array.from(list.children).includes(row)) list.append(row);
       }
-      const origin = document.createElement(fact.source.url ? "a" : "span");
-      origin.textContent = fact.source.provider;
-      if (fact.source.url) { origin.href = fact.source.url; origin.target = "_blank"; origin.rel = "noopener"; }
-      detail.append(origin);
-      const metadata = document.createElement("p");
-      metadata.className = "fact-metadata";
-      metadata.textContent = [fact.source.observed_at ? `Observed ${fact.source.observed_at}` : "Observation date unavailable",
-        `Retrieved ${fact.source.retrieved_at.slice(0, 10)}`, fact.source.collection ? `Collection ${fact.source.collection}` : null,
-        fact.feature_ids.length ? `Map references: ${fact.feature_ids.join(", ")}` : null].filter(Boolean).join(" · ");
-      detail.append(metadata);
-      row.append(detail);
-      list.append(row);
-      if (focused === detail.id) detail.focus({preventScroll:true});
     });
     const statuses = { outlines: "Parcel & buildings", detections: "Feature detection", property: "CoStar", hydrology: "County hydrology", search: "Imagery search" };
     $("site-source-status").textContent = Object.entries(record.sourceStatus ?? {})
@@ -501,6 +527,7 @@
     record.evidencePending = true;
     record.proposalRevision = proposalRevision;
     record.evidenceError = "";
+    record.displayWarning = "";
     // Keep retrieved evidence visible while the new run is in flight.
     record.report = null;
     record.synthesisWarning = '';
@@ -509,8 +536,8 @@
     record.stale = Boolean(record.facts?.length);
     const controller = new AbortController();
     const run = {record, controller}; activeAnalysis = run;
-    showEvidence();
     try {
+      renderSafely(record, showEvidence);
       const saved = await saveProject(selected,mode);
       if(activeAnalysis !== run || controller.signal.aborted) return;
       const result = await streamSiteAnalysis({ projectId:saved.id, projectVersion:saved.version,
@@ -529,9 +556,9 @@
           }
           record.activity.push(event);
           record.activitySummary = event.summary;
-          if (event.facts?.length) {
-            const ledger = new Map((record.facts ?? []).map(f => [f.id,f]));
-            for (const fact of event.facts) ledger.set(fact.id,fact);
+          if (Array.isArray(event.facts) && event.facts.length) {
+            const ledger = new Map((Array.isArray(record.facts) ? record.facts : []).filter(f => f && typeof f.id === "string").map(f => [f.id,f]));
+            for (const fact of event.facts) if (fact && typeof fact.id === "string") ledger.set(fact.id,fact);
             record.facts = [...ledger.values()];
           }
           if (site?.[workflow] === record) showReview(record);
@@ -570,8 +597,10 @@
       record.evidencePending = false;
       record.stale = (record.revision ?? 0) !== revision || Boolean(record.evidenceError);
       if (site?.[workflow] === record) {
-        showEvidence();
-        showRainfall();
+        $("run-site-analysis").disabled = Boolean(site.identityPending);
+        $("cancel-site-analysis").hidden = true;
+        renderSafely(record, showEvidence);
+        renderSafely(record, showRainfall);
       }
       if (record.project?.value?.id) {
         const id=record.project.value.id;

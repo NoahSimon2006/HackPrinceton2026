@@ -20,3 +20,14 @@ await assert.rejects(run([event,result,result]),/after its terminal result/);
 await assert.rejects(run([event,result,{...event,sequence:2}]),/after its terminal result/);
 await assert.rejects(run([event,{...result,result:null}]),/Result identity mismatch/);
 console.log('PASS: chunked UTF-8 stream, run identity, event sequence, partial failure and missing terminal result');
+
+// Missing source dates are valid unavailable-source evidence, not a transport
+// error. Keep the partial fact intact through fragmented NDJSON decoding.
+const unavailableFact={id:'area-flow-coverage',basis:'availability',display:'unavailable',
+  source:{provider:'TomTom Traffic',retrieved_at:null,observed_at:null},feature_ids:[]};
+const partial=await run([{...event,facts:[unavailableFact]},
+  {...result,result:{runId:'a',facts:[unavailableFact],report:{findings:[],recommendations:[],questions:[]},analysisError:null}}],1);
+assert.equal(partial.received[0].facts[0].source.retrieved_at,null);
+assert.equal(partial.result.facts[0].display,'unavailable');
+assert.equal(partial.result.analysisError,null);
+console.log('PASS: unavailable-source facts survive fragmented streaming without invented metadata');

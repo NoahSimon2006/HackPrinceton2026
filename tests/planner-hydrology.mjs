@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
 const source = await readFile(new URL('../public/planner.js', import.meta.url), 'utf8');
+const transportSource = await readFile(new URL('../public/analysis-stream.js', import.meta.url), 'utf8');
 function harness(mode = 'water', options = {}) {
   const elements = new Map();
   const element = () => ({ hidden: false, checked: false, disabled: false, value: '', textContent: '',
@@ -38,10 +39,22 @@ function harness(mode = 'water', options = {}) {
     }
     return new Promise((resolve, reject) => requests.push({ url, options:requestOptions, resolve, reject }));
   };
-  vm.runInNewContext(source, { $, map, json, planningMode: mode, coverage: options.coverage ?? null,
+  vm.runInNewContext((options.streamResponses ? transportSource + '\n' : '') + source, { $, map, json, planningMode: mode, coverage: options.coverage ?? null,
     insideCoverage: options.insideCoverage ?? (()=>true),
     cancelSiteAnalysis: () => {},
     streamSiteAnalysis: (payload, options) => json("/api/site-analysis", {body:JSON.stringify(payload), ...options}),
+    TextDecoder, fetch: async (url, requestOptions) => {
+      requests.push({url, options:requestOptions});
+      const events = options.streamResponses.shift();
+      assert.ok(events, 'every analysis request has an explicit test response');
+      if (events instanceof Error) throw events;
+      const bytes = new TextEncoder().encode(events.map(event => JSON.stringify(event)).join('\n') + '\n');
+      let position = 0;
+      return {ok:true, headers:{get:()=> 'application/x-ndjson'}, body:new ReadableStream({pull(controller) {
+        if (position >= bytes.length) {controller.close();return;}
+        controller.enqueue(bytes.slice(position, position + 13));position += 13;
+      }})};
+    },
     URLSearchParams, AbortController, setTimeout:()=>1,clearTimeout(){},window:{addEventListener(){}},
     localStorage:{getItem:()=>null,setItem(){}}, SavedProject:class{constructor(value=null){this.value=value;}async save(snapshot){saves.push(snapshot);return this.value={id:'a'.repeat(32),version:1,snapshot,artifacts:[],status:'ready'};}}, document: { createElement: element },
     L: { latLng: (lat,lng) => {if(!Number.isFinite(lat)||!Number.isFinite(lng))throw Error('Invalid LatLng');return {lat,lng};}, layerGroup: layer, geoJSON: layer, circleMarker: layer,
@@ -411,3 +424,131 @@ console.log('PASS: single stormwater analysis path, optional constraints, guarde
   assert.equal(h.$('analysis-stale').hidden,true,'incomplete narrative alone does not invalidate local design evidence');
 }
 console.log('PASS: stormwater settings persistence, explicit what-if guards, marked sources and stale-run cancellation');
+
+// Exercise the actual NDJSON reader and planner together. Unavailable traffic
+// is valid partial evidence, and must not interrupt unrelated source findings.
+const trafficGap = {id:'area-flow-coverage',label:'Neighborhood flow coverage',value:'unavailable',display:'unavailable',
+  basis:'availability',method:'Bounded neighborhood lookup',note:'Current traffic unavailable.',feature_ids:[],
+  source:{provider:'TomTom Traffic',url:'https://example.org/traffic',retrieved_at:null,observed_at:null}};
+const propertyFact = {id:'property-units',label:'Reported units',value:51,display:'51 units',basis:'reported',feature_ids:[],
+  source:{provider:'CoStar',retrieved_at:'2026-11-15T08:10:00Z'}};
+const partialFacts = [trafficGap, propertyFact];
+const partialReport = {findings:[{text:'Property evidence remains available. Current traffic is unavailable.',fact_ids:['property-units','area-flow-coverage']}],recommendations:[],questions:[]};
+const activity = (facts, run = 'partial-run') => ({type:'activity',run_id:run,sequence:1,specialist:'domain-analysis',stage:'discovery',
+  status:'ready',summary:'Neighborhood evidence retrieved.',facts});
+const terminal = (facts, run = 'partial-run') => ({type:'result',run_id:run,result:{runId:run,facts,report:partialReport,
+  sourceStatus:{traffic:'unavailable',property:'ready'},sourceWarnings:['Current traffic unavailable.'],analysisError:null}});
+const descendantsText = element => [element.textContent,...element.children.map(descendantsText)].join(' ');
+{
+  const h=harness('street',{streamResponses:[[activity(partialFacts),terminal(partialFacts)]]});
+  h.select(34.04670,-118.25249);await flush();
+  await assert.doesNotReject(h.$('site-analysis').events.submit({preventDefault(){}}));
+  assert.equal(h.requests.filter(r=>r.url==='/api/site-analysis').length,1);
+  assert.equal(h.$('analysis-message').textContent,'');
+  assert.equal(h.$('analysis-stale').hidden,true,'missing live traffic alone does not make the review stale');
+  assert.equal(h.$('run-site-analysis').disabled,false);
+  assert.equal(h.$('cancel-site-analysis').hidden,true);
+  assert.match(descendantsText(h.$('site-facts-list')),/Retrieval date unavailable/);
+  assert.match(descendantsText(h.$('site-facts-list')),/Retrieved 2026-11-15/);
+  assert.match(descendantsText(h.$('agent-assessment')),/Property evidence remains available/);
+  assert.match(h.$('site-source-status').textContent,/traffic: unavailable/);
+  assert.match(descendantsText(h.$('site-source-warnings')),/Current traffic unavailable/);
+}
+{
+  const malformed = [
+    null,
+    {...trafficGap,id:'source-missing',source:null,feature_ids:null},
+    {...trafficGap,id:'metadata-malformed',source:{provider:'TomTom',retrieved_at:42},feature_ids:{unexpected:true}},
+    propertyFact,
+  ];
+  const h=harness('street',{streamResponses:[[activity(malformed),terminal(malformed)]]});
+  h.select(34.04670,-118.25249);await flush();
+  await assert.doesNotReject(h.$('site-analysis').events.submit({preventDefault(){}}));
+  assert.equal(h.$('analysis-stale').hidden,true);
+  assert.match(descendantsText(h.$('site-facts-list')),/Source unavailable/);
+  assert.match(descendantsText(h.$('site-facts-list')),/51 units/,'valid evidence remains rendered after malformed metadata');
+  assert.equal(h.$('run-site-analysis').disabled,false);
+}
+{
+  const h=harness('street',{streamResponses:[
+    [activity(partialFacts),{type:'error',run_id:'partial-run',error:'Analysis service temporarily offline.'}],
+    [activity(partialFacts,'retry-run'),terminal(partialFacts,'retry-run')],
+  ]});
+  h.select(34.04670,-118.25249);await flush();
+  await assert.doesNotReject(h.$('site-analysis').events.submit({preventDefault(){}}));
+  assert.match(h.$('analysis-message').textContent,/Analysis service temporarily offline/);
+  assert.equal(h.$('analysis-stale').hidden,false,'a real interrupted assessment remains incomplete');
+  assert.equal(h.$('run-site-analysis').disabled,false,'failure releases the analysis button');
+  assert.match(descendantsText(h.$('site-facts-list')),/Retrieval date unavailable/,'partial evidence survives failure');
+  await assert.doesNotReject(h.$('site-analysis').events.submit({preventDefault(){}}));
+  assert.equal(h.requests.filter(r=>r.url==='/api/site-analysis').length,2,'retry reaches the server despite the retained null-date fact');
+  assert.equal(h.$('analysis-message').textContent,'');
+  assert.equal(h.$('analysis-stale').hidden,true);
+  assert.equal(h.$('run-site-analysis').disabled,false);
+}
+{
+  const saved={id:'a'.repeat(32),version:1,resultVersion:1,status:'ready',artifacts:[],events:[],
+    snapshot:{workflow:'street',siteId:'saved-null-date',lon:-118.25249,lat:34.04670,propertyId:null,
+      question:'Inspect crossings while preserving access.',markings:[],rainfallScenario:null,inputRevision:0,proposalRevision:1},
+    result:terminal(partialFacts).result};
+  const h=harness('street',{savedProject:saved});
+  h.map.fire('scoutselect',{project:saved});await flush();await flush();
+  assert.match(descendantsText(h.$('site-facts-list')),/Retrieval date unavailable/);
+  assert.match(descendantsText(h.$('agent-assessment')),/Property evidence remains available/);
+  assert.equal(h.$('analysis-stale').hidden,true);
+  assert.equal(h.$('run-site-analysis').disabled,false);
+  assert.equal(h.requests.filter(r=>r.url==='/api/site-analysis').length,0,'restoration does not call the agent');
+}
+console.log('PASS: real streamed partial evidence, nullable metadata, interrupted-run retry and saved-result restoration');
+
+{
+  const h=harness('street',{streamResponses:[new TypeError('Failed to fetch'),[activity(partialFacts),terminal(partialFacts)]]});
+  h.select(34.04670,-118.25249);await flush();
+  await assert.doesNotReject(h.$('site-analysis').events.submit({preventDefault(){}}));
+  assert.match(h.$('analysis-message').textContent,/Failed to fetch/);
+  assert.equal(h.$('run-site-analysis').disabled,false);
+  assert.equal(h.$('cancel-site-analysis').hidden,true);
+  await assert.doesNotReject(h.$('site-analysis').events.submit({preventDefault(){}}));
+  assert.equal(h.$('analysis-message').textContent,'');
+  assert.equal(h.$('analysis-stale').hidden,true);
+}
+console.log('PASS: network-offline analysis releases controls and permits a successful retry');
+
+// A presentation exception must not discard the terminal result or strand a
+// pending analysis. Inject failures only into the DOM mock, not the transport.
+{
+  const h=harness('street',{streamResponses:[
+    [activity(partialFacts),terminal(partialFacts)],
+    [activity(partialFacts,'display-retry'),terminal(partialFacts,'display-retry')],
+  ]});
+  h.select(34.04670,-118.25249);await flush();
+  const factsList=h.$('site-facts-list'), originalAppend=factsList.append;
+  let failAppend=true, fallbackShown=false;
+  factsList.append=function(...rows) {
+    if (failAppend) {failAppend=false;throw new Error('Injected evidence-row DOM failure');}
+    fallbackShown ||= rows.some(row=>/Evidence item unavailable/.test(row.textContent));
+    return originalAppend.apply(this,rows);
+  };
+  await assert.doesNotReject(h.$('site-analysis').events.submit({preventDefault(){}}));
+  assert.equal(fallbackShown,true,'failed row has a visible fallback during activity');
+  assert.match(descendantsText(h.$('agent-assessment')),/Property evidence remains available/,'terminal review is still consumed');
+  assert.match(descendantsText(factsList),/51 units/,'other evidence survives the display failure');
+  assert.equal(h.$('analysis-stale').hidden,true);
+  assert.equal(h.$('run-site-analysis').disabled,false);
+  assert.equal(h.$('cancel-site-analysis').hidden,true);
+
+  const evidenceList=h.$('site-evidence-list'), originalReplace=evidenceList.replaceChildren;
+  let failInitialRender=true;
+  evidenceList.replaceChildren=function(...rows) {
+    if (failInitialRender) {failInitialRender=false;throw new Error('Injected initial evidence render failure');}
+    return originalReplace.apply(this,rows);
+  };
+  await assert.doesNotReject(h.$('site-analysis').events.submit({preventDefault(){}}));
+  assert.equal(failInitialRender,false,'initial evidence render failure was exercised with retained facts');
+  assert.equal(h.requests.filter(r=>r.url==='/api/site-analysis').length,2,'presentation failure does not prevent the next request');
+  assert.match(descendantsText(h.$('agent-assessment')),/Property evidence remains available/);
+  assert.equal(h.$('analysis-stale').hidden,true);
+  assert.equal(h.$('run-site-analysis').disabled,false);
+  assert.equal(h.$('cancel-site-analysis').hidden,true);
+}
+console.log('PASS: evidence-row and initial-render failures preserve stream completion and release controls');
