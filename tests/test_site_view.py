@@ -119,7 +119,12 @@ class SiteViewTest(unittest.TestCase):
                 self.assertEqual(self.descriptor()["status"], "unavailable")
         self.rows = original + [{**original[0], "PropertyId": "4483806"}]
         self.write()
-        self.assertEqual(self.descriptor()["status"], "ambiguous")
+        # A model also listed under another property still opens when this
+        # property's own address row and attachment confirm it; the overlap is disclosed.
+        shared = self.descriptor()
+        self.assertEqual(shared["status"], "linked")
+        self.assertTrue(shared["scan"]["sharedWithOtherProperty"])
+        self.assertIn("also listed under another property", shared["limitations"][0])
 
     def test_attachment_confirms_membership_and_interior_tours_are_included(self):
         original = deepcopy(self.record["attachments"][0])

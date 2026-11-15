@@ -41,7 +41,6 @@
     cleanupFrame();
     open.disabled = !selectedProperty;
     $("site-view-retry").disabled = true;
-    $("site-view-proposed").disabled = true;
     $("site-view-external").removeAttribute("href");
   }
   function closeView() {
@@ -68,14 +67,15 @@
     current.addEventListener("load", () => {
       if (frame !== current || token !== request || !dialog.open) return;
       clearTimeout(loadTimer); loadTimer = null;
-      status("Explore the linked tour. If it is blank or unavailable, retry or open it in a new tab.");
+      // A loaded frame is not proof the tour plays, so the fallbacks stay in view.
+      status("If the tour is blank or unavailable, retry or open it in a new tab.");
     });
     current.addEventListener("error", () => {
       if (frame !== current || token !== request || !dialog.open) return;
       cleanupFrame();
       status("The embedded view could not be opened. Retry, or open Matterport in a new tab.", true);
     });
-    status("Opening Matterport… If the view stays blank or shows an error, retry or open it in a new tab.");
+    status("Opening tour…");
     $("site-view-retry").disabled = false;
     current.src = descriptor.scan.url;
     $("site-view-stage").append(current);
@@ -87,12 +87,20 @@
   function fill(value) {
     $("site-view-title").textContent = value.property.address;
     const context = ["Exterior", "Interior", "Amenity", "Unspecified"].includes(value.scan.contextLabel) ? value.scan.contextLabel : "Unspecified";
-    $("site-view-tour-title").textContent = `${value.scan.title} · ${context === "Unspecified" ? "Coverage unspecified" : context + " · title hint"}`;
+    // With several tours the selector names the current one; don't repeat it in the header.
+    $("site-view-tour-title").textContent = value.scans.length > 1 ? "" : value.scan.title;
     $("site-view-tour-label").textContent = `Linked tours (${value.scans.length})`;
+    $("site-view-tour-picker").hidden = value.scans.length < 2;
     const choices = $("site-view-tour-choice"); choices.replaceChildren();
+    // Different tours often share a caption, or have none and get the same fallback.
+    // Number those so the list never reads as duplicates of one tour.
+    const shared = new Map(), used = new Map();
+    for (const scan of value.scans) shared.set(scan.title, (shared.get(scan.title) ?? 0) + 1);
     for (const scan of value.scans) {
       const option = document.createElement("option"); option.value = scan.modelId;
-      option.textContent = scan.title; choices.append(option);
+      const number = (used.get(scan.title) ?? 0) + 1; used.set(scan.title, number);
+      option.textContent = shared.get(scan.title) > 1 ? `${scan.title} ${number}` : scan.title;
+      choices.append(option);
     }
     choices.value = value.scan.modelId;
     choices.disabled = value.scans.length < 2;
@@ -103,6 +111,13 @@
     $("site-view-source").textContent = [typeof source.provider === "string" ? source.provider : "CoStar property attachment",
       dateLabel ? `Attachment date: ${dateLabel}` : null].filter(Boolean).join(" · ");
     $("site-view-limitations").replaceChildren();
+    {
+      // What the tour covers is inferred from its title, so it is a source limit, not a heading.
+      const item = document.createElement("li");
+      item.textContent = context === "Unspecified" ? "Coverage unspecified: the tour title does not say what it shows."
+        : `Coverage inferred from the tour title: ${context.toLowerCase()}.`;
+      $("site-view-limitations").append(item);
+    }
     if (typeof source.association === "string") {
       const item = document.createElement("li"); item.textContent = source.association; $("site-view-limitations").append(item);
     }
@@ -117,7 +132,6 @@
       $("site-view-limitations").append(item);
     }
     $("site-view-external").href = value.scan.url;
-    $("site-view-proposed").disabled = true;
   }
   async function openView() {
     if (pending || dialog.open || !selectedProperty) return;
@@ -179,9 +193,7 @@
   });
   function entry(property = null) {
     $("site-view-entry-title").textContent = property?.address || (selectedProperty ? "Selected property" : "Select a property");
-    $("site-view-entry-status").textContent = selectedProperty
-      ? "View linked apartment, interior, amenity and exterior tours for this property. Coverage varies by tour."
-      : "No property is assigned to this point. Choose a property or use the map evidence.";
+    $("site-view-entry-status").textContent = selectedProperty ? "" : "No property is assigned to this point.";
     open.disabled = !selectedProperty;
     $("site-view-entry-retry").hidden = true;
   }

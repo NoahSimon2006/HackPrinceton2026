@@ -91,9 +91,10 @@
 
   function showProject(record = site?.[workflow]) {
     const value = record?.project?.value;
-    $("project-status").textContent = record?.saveError || (value
-      ? `Saved locally · revision ${value.version} · ${value.status.replaceAll('_',' ')}${record.stale ? ' · inputs changed' : ''}`
-      : "Site, brief and constraints save locally as you work.");
+    $("project-status").textContent = record?.saveError || (value ? `Saved locally${record.stale ? ' · inputs changed' : ''}` : "");
+    // Internal revision and state are project details, not the everyday save status.
+    $("project-detail").textContent = value ? `Project revision ${value.version} · ${value.status.replaceAll('_',' ')}` : "";
+    $("project-files").hidden = !value?.artifacts?.length;
     $("run-site-analysis").textContent = value?.result ? "Continue project" : "Analyze site";
     const list = $("project-file-list"); list.replaceChildren();
     $("project-file-count").textContent = value?.artifacts?.length ? `· ${value.artifacts.length}` : "";
@@ -682,7 +683,7 @@
     picking = enabled;
     const button = $("pick-site");
     button.setAttribute("aria-pressed", String(enabled));
-    button.textContent = enabled ? "Cancel site selection" : site ? "Choose another site on the map" : "Pick a site on the map";
+    button.textContent = enabled ? "Cancel site selection" : site ? "Change site" : "Pick a site on the map";
     mapHint(enabled ? "Click the map to select a site" : "");
   }
 
@@ -937,7 +938,6 @@
     showProject();
     showWaterSettings();
     $("project-file-preview").hidden=true;
-    $("traffic-design-guide").hidden = workflow !== "street";
     $("water-tools").hidden = workflow !== "water";
     renderDiscoveryContext(site?.[workflow]?.discovery);
     $("run-site-analysis").disabled = !site || Boolean(site.identityPending || site[workflow].evidencePending);
@@ -983,10 +983,11 @@
     $("site-card").hidden = false;
     $("site-tools").hidden = false;
     $("site-name").textContent = property?.name ?? "Map location";
-    $("site-location").textContent = [property?.address, `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`].filter(Boolean).join(" · ");
+    $("site-location").textContent = property?.address || `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`;
     $("site-property").textContent = property?.type ?? "";
     $("site-resolution-candidates").replaceChildren();
-    $("site-resolution-status").textContent = site.identity?.message ?? (property ? "Selected CoStar property." : "Checking the mapped parcel and nearby properties…");
+    // The named card is the confirmation of a match; only unresolved states need a message.
+    $("site-resolution-status").textContent = property ? "" : site.identity?.message ?? "Checking the mapped parcel and nearby properties…";
     $("retry-site-resolution").hidden = Boolean(property);
     siteLayer.clearLayers();
     L.circleMarker(center, { radius: 8, weight: 2, color: "#fff", fillColor: "#a7e5a3",
@@ -1046,8 +1047,8 @@
       selected.property = property;
       selected.identity = value;
       $("site-name").textContent = property?.name ?? "Map location";
-      $("site-location").textContent = [property?.address, `${selected.center.lat.toFixed(5)}, ${selected.center.lng.toFixed(5)}`].filter(Boolean).join(" · ");
-      $("site-resolution-status").textContent = value.message;
+      $("site-location").textContent = property?.address || `${selected.center.lat.toFixed(5)}, ${selected.center.lng.toFixed(5)}`;
+      $("site-resolution-status").textContent = property ? "" : value.message;
       $("site-resolution-candidates").replaceChildren();
       for (const candidate of value.candidates ?? []) {
         const button = document.createElement("button"); button.type = "button";
@@ -1181,7 +1182,7 @@
       showWorkflow();
       refreshProjects();
       map.fire("plannersite", site ? { siteId: site.key, center: site.center, workflow, property:site.property, inputRevision: site[workflow].revision ?? 0 } : { workflow });
-      setStatus(site ? "" : "Search for a property or pick any covered location.");
+      setStatus(site ? "" : "Search for a property or select a location on the map.");
       if (site) $("site-card").scrollIntoView({ block: "start" });
     } else {
       overlays.remove();

@@ -110,8 +110,10 @@ assert.deepEqual(JSON.parse(JSON.stringify(activeLayer().data.features)),parity.
 const displayed=$('comparison-table').children[0].children[1].children.map(row=>row.children[1].textContent);
 assert.deepEqual(displayed,['467.1','123.5','157.8','1,233.5','67.2','32','207','76.6']);
 assert.match(text($('comparison-alternatives')),/Crossing\/driveway detection: Unavailable\. Overlapping crosswalk candidates: Not assessed\. Driveway candidates: Not assessed/);
-assert.match($('comparison-revision').textContent,/Revision 5 · inputs 0 · hash5/);
-assert.match($('proposal-revision').textContent,/Revision 5 · inputs 0 · hash5/);
+assert.match($('comparison-identity').textContent,/revision 5 · inputs 0 · hash5/);
+assert.match($('proposal-identity').textContent,/revision 5 · inputs 0 · hash5/);
+assert.equal($('comparison-revision').textContent,'Revision 5','default result copy carries no input hashes');
+assert.equal($('proposal-revision').textContent,'Revision 5');
 console.log('PASS: published metric/geometry parity and unavailable detection display');
 
 const beforeBadLayer=activeLayer(), beforeBadTable=text($('comparison-table'));
@@ -229,7 +231,7 @@ $('water-design-alternatives').children[1].children.find(c=>c.textContent==='Ins
 assert.match($('proposal-kind').textContent,/rejected/);
 assert.match($('proposal-summary').textContent,/Rejected: Overlaps the protected loading entrance/);
 assert.equal(activeLayer().options.style.color,'#ffaf98');
-assert.match(text($('water-design-decisions')),/No separate sponsor decision ledger/);
+assert.match(text($('water-design-decisions')),/No separate decisions were recorded for this option/);
 assert.doesNotMatch(text($('water-design-decisions')),/Preserved the mapped curb-cut frontage buffer/,'missing alternative decisions cannot borrow the selected ledger');
 $('water-return-current').events.click();assert.equal($('proposal-area').textContent,'60.0 m²');
 map.fire('plannerrestore',{...study,siteId:'wrong'});assert.equal($('proposal-area').textContent,'60.0 m²');
@@ -255,7 +257,7 @@ assert.match(text($('comparison-alternatives')),/Feasibility & disruption/);
 assert.match(text($('traffic-design-decisions')),/mapped operational frontage/);
 assert.doesNotMatch($('comparison-revision-summary').textContent,/Saved result/);
 $('traffic-design-history').children[0].events.click();
-assert.match($('comparison-revision').textContent,/Revision 7 · inputs 1 · hash7/);
+assert.match($('comparison-identity').textContent,/revision 7 · inputs 1 · hash7/);
 assert.equal($('proposal-review').hidden,true,'an earlier no-winner evaluation cannot retain the current winner overlay');
 assert.equal($('comparison-stale').hidden,true,'intentional history inspection is read-only, not a request to rerun');
 assert.match($('comparison-revision-summary').textContent,/Earlier evaluation · read-only inspection/);
@@ -266,7 +268,7 @@ assert.match($('proposal-map-caption').textContent,/Earlier evaluation 7 · Test
 assert.match($('proposal-revision').textContent,/Saved result · published 2026-11-14 15:00:00 UTC/);
 assert.equal($('proposal-stale').hidden,true);
 $('traffic-return-current').events.click();
-assert.match($('comparison-revision').textContent,/Revision 8 · inputs 2 · hash8/);
+assert.match($('comparison-identity').textContent,/revision 8 · inputs 2 · hash8/);
 assert.equal($('proposal-kind').textContent,'Recommended');
 assert.doesNotMatch($('comparison-revision-summary').textContent,/Saved result/);
 map.fire('plannerinputs',{inputRevision:3});
