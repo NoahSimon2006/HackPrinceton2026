@@ -18,6 +18,7 @@
   }
   function color(feature,layer) {
     if(layer.id==='counts')return feature.properties.value>=20000?'#ffcd80':feature.properties.value>=10000?'#8ed8a6':'#c4f5d4';
+    if(layer.id==='turning')return '#f08bd2';
     if(layer.id==='rainfall')return '#72bcf5';
     if(layer.id==='catchments')return '#90c7f0';
     return feature.properties.kind==='collection'?'#f2c36b':'#65e3e9';
@@ -36,7 +37,7 @@
     const title=document.createElement('strong');title.textContent=feature.properties.label;
     const value=document.createElement('p');value.textContent=`${typeof feature.properties.value==='number'?feature.properties.value.toLocaleString():feature.properties.value} ${layer.unit}`;
     const period=document.createElement('small');period.textContent=feature.properties.period || layer.period;
-    const note=document.createElement('p');note.textContent=layer.id==='terrain'?'Inferred from bare-earth terrain. Not flood depth.':layer.id==='counts'?'Historical reported count; not an hourly rate.':'Source context added to the site brief.';
+    const note=document.createElement('p');note.textContent=layer.id==='terrain'?'Inferred from bare-earth terrain. Not flood depth.':layer.id==='counts'?'Historical reported count; not an hourly rate.':layer.id==='turning'?'Official LADOT turning-movement sheet; totals checked. Ask the agent to compare redesigns here.':'Source context added to the site brief.';
     const source=document.createElement('small');source.textContent=data.sources[layer.source].label;
     popup.append(title,value,period,note,source);
     L.popup({maxWidth:290}).setLatLng([lat,lng]).setContent(popup).openOn(map);
@@ -52,15 +53,15 @@
       $('discovery-legend').textContent='';$('discovery-limit').textContent='';return;
     }
     choices.set(mode,layer.id);
-    $('discovery-legend').textContent=layer.id==='terrain'?'↘ Cyan · downhill paths   ● Gold · unresolved collection candidates':layer.id==='counts'?'● Green → amber · lower to higher reported count':layer.id==='rainfall'?'▧ Blue · design rainfall depth, inches':'▧ Dashed blue · county catchment context';
-    $('discovery-limit').textContent=layer.id==='terrain'?'1 m USGS DEM · 240 m pilot. Inferred surface routing; no flood depth or verified drain connection.':layer.id==='counts'?'Historical data only. CO₂, NOₓ and delay remain unavailable without verified inputs.':layer.limitations;
+    $('discovery-legend').textContent=layer.id==='terrain'?'↘ Cyan · downhill paths   ● Gold · unresolved collection candidates':layer.id==='counts'?'● Green → amber · lower to higher reported count':layer.id==='turning'?'● Pink · intersections with a checked LADOT turning-movement sheet':layer.id==='rainfall'?'▧ Blue · design rainfall depth, inches':'▧ Dashed blue · county catchment context';
+    $('discovery-limit').textContent=layer.id==='terrain'?'1 m USGS DEM · 240 m pilot. Inferred surface routing; no flood depth or verified drain connection.':layer.id==='counts'?'Historical data only. CO₂, NOₓ and delay remain unavailable without verified inputs.':layer.id==='turning'?'Counted left/through/right movements by approach. Signal timing is not on the sheets; simulations use generated timing.':layer.limitations;
     $('discovery-status').textContent=layer.status==='ready'?`${layer.features.length} ${layer.features.length===1?'feature':'features'} · ${layer.period}`:layer.status==='empty'?'No source features returned for this pilot.':`${layer.label} unavailable. ${layer.error || 'Rebuild the source snapshot.'}`;
     featurePicker.disabled=layer.status!=='ready';
     if(layer.status!=='ready')return;
     L.geoJSON({type:'FeatureCollection',features:layer.features},{pane:'discovery',
       style:f=>({color:color(f,layer),weight:layer.id==='terrain'?3:layer.id==='catchments'?2:1,
         dashArray:layer.id==='catchments'?'7 5':null,fillOpacity:layer.id==='rainfall'?.16:layer.id==='catchments'?.07:.8}),
-      pointToLayer:(f,latlng)=>L.circleMarker(latlng,{pane:'discovery',radius:layer.id==='counts'?6+Math.min(5,Math.log10(1+f.properties.value)):6,
+      pointToLayer:(f,latlng)=>L.circleMarker(latlng,{pane:'discovery',radius:layer.id==='turning'?10:layer.id==='counts'?6+Math.min(5,Math.log10(1+f.properties.value)):6,
         color:'#142824',weight:2,fillColor:color(f,layer),fillOpacity:.9}),
       onEachFeature:(f,leaf)=>{
         const label=document.createElement('span');label.textContent=`${f.properties.label} · ${f.properties.value.toLocaleString()} ${layer.unit}`;

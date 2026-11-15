@@ -35,6 +35,22 @@
   let draft = null;
   let siteRequest;
   let activeAnalysis = null;
+  let workspaceVisible = false;
+  let coordinateInputs = [];
+
+  function pointError(point, marking = false) {
+    if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return "Enter a finite latitude and longitude for every point.";
+    if (point.lat < 33.70 || point.lat > 34.35 || point.lng < -118.67 || point.lng > -118.10) return "Choose coordinates within the Los Angeles map bounds.";
+    if (coverage && !insideCoverage(point)) return "Choose a point inside the imagery coverage.";
+    if (marking && site) {
+      const radians = Math.PI / 180, a = site.center.lat * radians, b = point.lat * radians;
+      const h = Math.sin((b-a)/2)**2 + Math.cos(a)*Math.cos(b)*Math.sin((point.lng-site.center.lng)*radians/2)**2;
+      // Leave a small margin inside the server's projected 1 km polygonal
+      // buffer: spherical browser distances differ slightly from UTM lengths.
+      if (2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h))) > 990) return "Keep marking points within 990 m of the selected site.";
+    }
+    return "";
+  }
 
   function addEvidence(item, color, style = {}) {
     const layer = L.geoJSON(item, { style: { color, weight: 2, fillOpacity: .1, ...style } });
@@ -252,6 +268,7 @@
     const question = record.brief.trim();
     if (!question) return;
     const revision = record.revision ?? 0;
+    const proposalRevision = (record.proposalRevision ?? 0) + 1;
     const markings = record.features.map(({ kind, points }) => {
       const coordinates = points.map(({ lat, lng }) => [lng, lat]);
       return { kind, geometry: kind === "crossing" ? { type: "LineString", coordinates }
@@ -268,6 +285,7 @@
       rainfallScenario = { inches, source: record.source.trim() };
     }
     record.evidencePending = true;
+    record.proposalRevision = proposalRevision;
     record.evidenceError = "";
     // Keep retrieved evidence visible while the new run is in flight.
     record.report = null;
@@ -279,7 +297,9 @@
     showEvidence();
     try {
       const result = await streamSiteAnalysis({ lat:selected.center.lat, lon:selected.center.lng,
-        propertyId:selected.propertyId, workflow:mode, question, markings, rainfallScenario, discoveryReference:record.discovery?.reference ?? null }, {
+        propertyId:selected.propertyId, workflow:mode, question, markings, rainfallScenario,
+        siteId:selected.key, inputRevision:revision, proposalRevision,
+        discoveryReference:record.discovery?.reference ?? null }, {
         signal:controller.signal,
         onEvent(event) {
           if (activeAnalysis !== run || controller.signal.aborted) return;
@@ -302,6 +322,12 @@
       record.sourceStatus = result.sourceStatus;
       record.evidenceError = result.analysisError ?? "";
       if (result.hydrology) applyHydrology(selected.water, result.hydrology);
+      // A changed site or marking must never publish geometry from an older run.
+      if (site === selected && workflow === mode && (record.revision ?? 0) === revision &&
+          (result.proposal || result.comparison)) {
+        map.fire("plannerresult", {siteId:selected.key, workflow:mode, inputRevision:revision,
+          revision:proposalRevision, proposal:result.proposal ?? null, comparison:result.comparison ?? null});
+      }
     } catch (error) {
       if (activeAnalysis !== run) return;
       record.evidenceError = error.name === "AbortError" ? "Analysis canceled. Retrieved evidence is preserved." : error.message;
@@ -396,23 +422,63 @@
     }
   }
 
-  function drawPreview() {
+  function renderCoordinates() {
+    coordinateInputs = [];
+    $("draw-coordinates").replaceChildren();
+    draft.coordinateError = "";
+    for (const [index, point] of draft.points.entries()) {
+      const row = document.createElement("fieldset"); row.className = "vertex-coordinates";
+      const legend = document.createElement("legend"); legend.textContent = `Point ${index + 1}`; row.append(legend);
+      const inputs = {};
+      for (const [axis, title] of [["lat", "Latitude"], ["lng", "Longitude"]]) {
+        const label = document.createElement("label"); label.textContent = title;
+        const input = document.createElement("input"); input.type = "text"; input.inputMode = "decimal";
+        input.value = point[axis].toFixed(7); input.setAttribute("aria-label", `Point ${index + 1} ${title.toLowerCase()}`);
+        input.setAttribute("aria-describedby", "draw-coordinate-error"); input.setAttribute("aria-invalid", "false");
+        input.addEventListener("input", () => {
+          const points = coordinateInputs.map(fields => {
+            const lat = fields.lat.value.trim(), lng = fields.lng.value.trim();
+            return lat && lng ? {lat:Number(lat),lng:Number(lng)} : {lat:NaN,lng:NaN};
+          });
+          const errors = points.map(p => pointError(p, true));
+          coordinateInputs.forEach((fields, i) => Object.values(fields).forEach(field => field.setAttribute("aria-invalid", String(Boolean(errors[i])))));
+          draft.coordinateError = errors.find(Boolean) || "";
+          if (!draft.coordinateError) draft.points = points.map(p => L.latLng(p.lat, p.lng));
+          drawPreview(false);
+        });
+        inputs[axis] = input; label.append(input); row.append(label);
+      }
+      coordinateInputs.push(inputs); $("draw-coordinates").append(row);
+    }
+  }
+
+  function drawPreview(refreshCoordinates = true) {
+    if (refreshCoordinates) renderCoordinates();
     draftLayer.clearLayers();
     featureLayer(draft, { dashArray: "5 4" }).addTo(draftLayer);
     for (const [index, point] of draft.points.entries()) {
       const icon = L.divIcon({ className: "planner-vertex", iconSize: [14, 14] });
-      const handle = L.marker(point, { draggable: true, icon, keyboard: false, zIndexOffset: 1500 }).addTo(draftLayer);
+      const handle = L.marker(point, { draggable: !draft.coordinateError, icon, keyboard: false, zIndexOffset: 1500 }).addTo(draftLayer);
       handle.on("drag", () => {
         draft.points[index] = handle.getLatLng();
         draftLayer.eachLayer((layer) => {
           if (layer instanceof L.Polyline) layer.setLatLngs(draft.points);
         });
       });
+      handle.on("dragend", () => {
+        const error = pointError(draft.points[index], true);
+        if (error) draft.points[index] = point;
+        drawPreview();
+        if (error) mapHint(error);
+      });
     }
     const count = draft.points.length;
     const type = featureTypes[draft.kind];
     const minimum = type.line ? 2 : 3;
-    $("draw-save").disabled = count < minimum;
+    $("draw-save").disabled = count < minimum || Boolean(draft.coordinateError);
+    $("draw-add-center").disabled = Boolean(draft.coordinateError) || (type.line && count >= 2);
+    $("draw-coordinate-error").textContent = draft.coordinateError || "";
+    $("draw-coordinate-error").hidden = !draft.coordinateError;
     $("draw-undo").disabled = count === 0;
     const saveLabel = `Save ${type.label.toLowerCase()}`;
     $("draw-save").textContent = saveLabel;
@@ -431,6 +497,8 @@
     draft = null;
     draftLayer.clearLayers();
     $("draw-controls").hidden = true;
+    $("keyboard-marking-editor").hidden = true;
+    coordinateInputs = [];
     mapHint();
     if (site) {
       showFeatures();
@@ -443,6 +511,7 @@
     map.closePopup();
     draft = { kind, feature, points: feature ? [...feature.points] : [] };
     $("draw-controls").hidden = false;
+    $("keyboard-marking-editor").hidden = false;
     showFeatures();
     showMarkActions();
     drawPreview();
@@ -528,6 +597,7 @@
   }
 
   function showWorkflow() {
+    $("traffic-design-guide").hidden = workflow !== "street";
     $("water-tools").hidden = workflow !== "water";
     renderDiscoveryContext(site?.[workflow]?.discovery);
     $("run-site-analysis").disabled = !site || Boolean(site[workflow].evidencePending);
@@ -596,12 +666,22 @@
     if (picking) map.closePopup();
     setStatus(picking ? "Click any covered location on the map." : "Site selection canceled.");
   });
+  $("use-map-center").addEventListener("click", () => {
+    const center = map.getCenter(), error = pointError(center);
+    if (error) { setStatus(error); return; }
+    finishDrawing(); selectSite(L.latLng(center.lat, center.lng));
+  });
+  $("draw-add-center").addEventListener("click", () => {
+    if (!draft || draft.coordinateError || (featureTypes[draft.kind].line && draft.points.length >= 2)) return;
+    const center = map.getCenter(), error = pointError(center, true);
+    if (error) { mapHint(error); return; }
+    draft.points.push(L.latLng(center.lat, center.lng)); drawPreview();
+  });
   map.on("click", ({ latlng }) => {
     if (!picking && !draft) return;
-    if (coverage && !insideCoverage(latlng)) {
-      setStatus("Choose a point inside the imagery coverage.");
-      return;
-    }
+    const error = pointError(latlng, Boolean(draft));
+    if (error) { setStatus(error); return; }
+    if (draft?.coordinateError) { mapHint("Correct the invalid point coordinates before adding another point."); return; }
     if (picking) {
       selectSite(latlng);
       map.setView(latlng, Math.max(map.getZoom(), 17), { animate: false });
@@ -648,7 +728,9 @@
     site[workflow].discovery = selected;
     site[workflow].brief = workflow === "water"
       ? "Investigate the selected discovery evidence. Verify drainage connections, surface conditions and access before recommending a treatment site. Do not infer flood depth or capture benefits."
-      : "Investigate the selected historical count with current site evidence. Identify the measurements needed before evaluating a physical redesign. Do not extrapolate current demand or claim emissions benefits.";
+      : selected.reference?.layer === "turning"
+        ? "Compare at least two physical lane-reallocation layouts using this sourced historical turning count and measured site evidence. Preserve access, disclose missing inputs and simulation assumptions, and recommend a layout only if the comparison supports it. Do not present historical demand as current traffic."
+        : "Investigate the selected historical count with current site evidence. Identify the measurements needed before evaluating a physical redesign. Do not extrapolate current demand or claim emissions benefits.";
     inputsChanged(site[workflow]);
     $("planning-brief").value = site[workflow].brief;
     renderDiscoveryContext(selected);
@@ -660,6 +742,8 @@
     }
   });
   function showWorkspace({ mode, visible }) {
+    if (visible && workspaceVisible && mode === workflow) return;
+    workspaceVisible = visible;
     if (mode !== workflow || !visible) cancelAnalysis();
     finishDrawing();
     setPicking(false);
@@ -705,13 +789,15 @@
     drawPreview();
   });
   $("draw-save").addEventListener("click", () => {
+    if (!draft || draft.coordinateError) return;
     const distinct = new Set(draft.points.map(({ lat, lng }) => `${lat.toFixed(7)},${lng.toFixed(7)}`));
     if (distinct.size < (featureTypes[draft.kind].line ? 2 : 3)) {
       mapHint("Place each point in a different location before saving.");
       return;
     }
-    if (coverage && draft.points.some((point) => !insideCoverage(point))) {
-      mapHint("Move all points inside the imagery coverage before saving.");
+    const error = draft.points.map(point => pointError(point, true)).find(Boolean);
+    if (error) {
+      mapHint(error);
       return;
     }
     if (draft.feature) draft.feature.points = draft.points;

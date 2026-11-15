@@ -117,6 +117,52 @@ def count_records(records, intersections):
     return features,skipped
 
 
+def turning_records(records, intersections):
+    """Latest manual turning-movement sheet per intersection that downloads and passes its checks."""
+    from traffic_counts import SheetError, find_sheet, peak_hour
+    candidates={}; skipped={}
+    def skip(reason):skipped[reason]=skipped.get(reason,0)+1
+    for row in records:
+        if row.get('type','').strip().upper()!='MAN':continue
+        if row.get('dir','').strip().upper()!='AT':skip('offset_location');continue
+        primary,cross=street_key(row.get('primary_street','')),street_key(row.get('cross_street',''))
+        pair=tuple(sorted((primary,cross)))
+        points=intersections.get(pair,[])
+        if not points:skip('no_network_match');continue
+        if any(math.dist(points[0][:2],p[:2])>60 for p in points):skip('ambiguous_match');continue
+        if 'shift' in (row.get('cross_street','')+row.get('primary_street','')).lower():skip('split_shift_record');continue
+        try:date=datetime.fromisoformat(row['count_date']).date().isoformat()
+        except (KeyError,ValueError):skip('invalid_date');continue
+        candidates.setdefault(pair,[]).append((date,row,points))
+    from concurrent.futures import ThreadPoolExecutor
+    def newest_valid(rows):
+        # Two newest records per intersection; older sheets are not searched.
+        for date,row,points in sorted(rows,key=lambda r:r[0],reverse=True)[:2]:
+            try:return row,points,find_sheet(row['primary_street'],row['cross_street'],row['count_date'],'MAN',DATA/'sheets')
+            except SheetError:continue
+        return None
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        found=list(pool.map(newest_valid,[candidates[k] for k in sorted(candidates)]))
+    features=[]; sheets={}
+    for result in found:
+        if result is None:skip('sheet_unpublished_or_failed_checks');continue
+        row,points,sheet=result
+        if True:
+            point=sorted(points,key=lambda p:p[4])[0];lon,lat=point[2:4]
+            identifier='turning-'+sha256(sheet['sha256'].encode()).hexdigest()[:12]
+            peaks={period:peak_hour(sheet,period) for period in ('am','pm')}
+            approach_totals={period:{a:sum(v[hour].values()) for a,v in sheet['approaches'].items()} for period,hour in peaks.items()}
+            total=sum(approach_totals['pm'].values())
+            sheets[identifier]=sheet
+            features.append({'type':'Feature','id':identifier,'geometry':{'type':'Point','coordinates':[lon,lat]},'properties':{
+                'label':f"{sheet['north_south'].title()} at {sheet['east_west'].title()}",'value':total,'period':sheet['date'],
+                'center':[lon,lat],'network_node':point[4],'sheet_url':sheet['url'],'sheet_sha256':sheet['sha256'],
+                'scalar_detail':{'count_type':'MAN','peak_hours':{'am':peaks['am'],'pm':peaks['pm']},
+                    'peak_hour_approach_vehicles':approach_totals,
+                    'interval':'Peak hour within the counted 7-10 AM and 3-6 PM windows; turning movements are on the linked official sheet.'}}})
+    return features,skipped,sheets
+
+
 def build_traffic(refresh=False):
     import sumolib
     from itertools import combinations
@@ -147,7 +193,19 @@ def build_traffic(refresh=False):
         if not layer['features']:raise ValueError('No unambiguous automated count matches in the pilot.')
     except (OSError,ValueError,KeyError) as e:
         layer.update(status='unavailable',error=str(e),features=[])
-    return save('street',DTLA,sources,[layer],audit)
+    turning=dict(id='turning',label='Turning-movement counts',status='ready',classification='reported',unit='vehicles in the PM peak hour',
+        period='2011–2016 · counted 7–10 AM and 3–6 PM',source='ladot_sheets',
+        method='Official LADOT manual count summaries downloaded from NavigateLA. Each sheet is accepted only when its left/through/right counts reproduce every printed row and column total. The map value is all approaches in the busiest counted PM hour.',
+        limitations='Historical counts on the sheet date, not current traffic. Signal timing is not on the sheet. Locations are OSM junction matches, not surveyed stations.',features=[])
+    sources['ladot_sheets']={'label':'LADOT manual traffic count summaries (NavigateLA)','url':'https://navigatela.lacity.org/','retrieved_at':NOW,'observed_at':None}
+    try:
+        turning['features'],turn_skipped,sheets=turning_records(records,intersections)
+        (DATA/'turning-sheets.json').write_text(json.dumps(sheets))
+        audit['turning_skipped']=turn_skipped
+        if not turning['features']:turning.update(status='empty')
+    except (OSError,ValueError,KeyError,NameError) as e:
+        turning.update(status='unavailable',error=str(e),features=[])
+    return save('street',DTLA,sources,[layer,turning],audit)
 
 
 def download_terrain(refresh=False):

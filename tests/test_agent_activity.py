@@ -26,7 +26,8 @@ class ActivityTest(unittest.TestCase):
         self.assertNotIn('client gone',str(result))
 
     def test_transport_streams_sanitized_events_then_matching_result(self):
-        payload={'lat':LAT,'lon':LON,'workflow':'street','question':'Review'}
+        payload={'lat':LAT,'lon':LON,'workflow':'street','question':'Review',
+                 'siteId':'stream-test-site','inputRevision':0,'proposalRevision':1}
         raw=json.dumps(payload).encode(); h=Handler.__new__(Handler)
         h.path='/api/site-analysis';h.headers=Message()
         h.headers['Content-Type']='application/json';h.headers['Accept']='application/x-ndjson';h.headers['Content-Length']=str(len(raw))
