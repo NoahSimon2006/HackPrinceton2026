@@ -156,6 +156,7 @@ def build_scene(project, revision, input_hash, geometry_id):
             or area.proposed <= 0 or abs(footprint.area - area.proposed) > tolerance):
         raise SceneUnavailable("The saved footprint and its authoritative area do not agree.")
     focus = translate(footprint, xoff=-east, yoff=-north)
+    treatment = {"treatment": mapping(focus)} if proposal.workflow == "water" else {}
     clip = box(*footprint.bounds).buffer(35, join_style=2)
     source_context = record.get("evidence") if is_current else None
     outlines = source_context.get("outlines") if isinstance(source_context, dict) else []
@@ -204,7 +205,7 @@ def build_scene(project, revision, input_hash, geometry_id):
         "status": _scene_status(proposal, record, alternative), "savedAt": record.get("savedAt"),
         "areaM2": area.proposed, "geometryAreaM2": footprint.area,
         "metrics": [m.model_dump(mode="json") for m in proposal.metrics],
-        "bounds": bounds, "focusBounds": list(focus.bounds), "features": features, "context": context,
+        "bounds": bounds, "focusBounds": list(focus.bounds), "features": features, "context": context, **treatment,
         "assumptions": ["Conceptual comparison from the same saved 2D footprint; no new performance evaluation is run.",
             "Flat reference ground, illustrative materials and no surveyed terrain or registered Matterport scan.",
             "Full road-surface geometry is not supplied by this saved design; unspecified surroundings are omitted.",

@@ -2,7 +2,7 @@
 
 Prepared November 14, 2026. Product decisions approved; implementation proceeds one authorized checkpoint at a time.
 
-**Current implementation (November 15, 2026):** Checkpoints 0–8, including the guided interface integration, are pushed to `main` through `4c29229`. [Checkpoint 8 conceptual 3D](CHECKPOINT_8_CONCEPTUAL_3D.md) is implemented and desktop-verified. The subsequently requested [detailed Hancock Terrace demonstration](DEMO_HANCOCK_FRONTAGE.md) is implemented locally and remains separate from saved agent evaluations. Current/historical stormwater and rejected-traffic scenes pass browser checks; focused harnesses cover input and publication invalidation. The viewer derives exact local-meter geometry from saved 2D designs and uses a shared comparison camera; heights and materials remain illustrative. It makes no new model or simulation calls and does not claim Matterport registration. The [desktop walkthrough](DEMO_WALKTHROUGH.md) includes the 3D inspection step. Traffic eligibility and material CoStar access evidence at Main/1st remain open gaps; desktop remains the priority.
+**Current implementation (November 15, 2026):** Checkpoints 0–8, including the guided interface integration, are pushed to `main` through `4c29229`. [Checkpoint 8 conceptual 3D](CHECKPOINT_8_CONCEPTUAL_3D.md) is implemented and desktop-verified. Stormwater proposals now show illustrative planting inside the saved footprint in 2D and 3D. Current/historical stormwater and rejected-traffic scenes pass browser checks; focused harnesses cover input and publication invalidation. The viewer derives exact local-meter geometry from saved 2D designs and uses a shared comparison camera; heights and materials remain illustrative. It makes no new model or simulation calls and does not claim Matterport registration. The [desktop walkthrough](DEMO_WALKTHROUGH.md) includes the 3D inspection step. Traffic eligibility and material CoStar access evidence at Main/1st remain open gaps; desktop remains the priority.
 
 Sustainability Map will help Los Angeles urban planners and traffic engineers discover environmental improvement opportunities, choose a location, and develop an inspectable physical concept through conversation. The primary workflow begins with a goal and a map area. The agent investigates that area, presents up to three supported locations, and waits for the user to choose one before developing and evaluating designs.
 
@@ -412,7 +412,7 @@ Prepare a concise demo: request opportunities, choose a location, inspect the ag
 
 ### Checkpoint 8 Add conceptual 3D
 
-**Current status:** Implemented and pushed with the guided interface as `4c29229`. The subsequent Hancock Terrace demonstration is on the review branch `codex/detailed-demo-scene`. Read the [report](CHECKPOINT_8_CONCEPTUAL_3D.md) for actual browser evidence, focused geometry/lifecycle checks and explicit acceptance boundaries. Matterport remains separate until scan registration is verified.
+**Current status:** Implemented and pushed with the guided interface as `4c29229`. The [walkthrough](DEMO_WALKTHROUGH.md) now uses planted stormwater proposals in the planner. Read the [report](CHECKPOINT_8_CONCEPTUAL_3D.md) for the original browser evidence, focused geometry/lifecycle checks and acceptance boundaries. Matterport remains separate until scan registration is verified.
 
 **Outcome:** The same published design can be inspected in a simple 3D scene.
 

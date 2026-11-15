@@ -7,7 +7,7 @@ const element=()=>({events:{},children:[],hidden:false,checked:false,disabled:fa
   append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;}});
 const $=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
 const map={setView(){},getZoom(){return 17;},handlers:{},createPane(){},getPane(){return{style:{}};},on(n,f){this.handlers[n]=f;},fire(n,e){this.handlers[n]?.(e);}};
-const L={geoJSON(data,options){if(data.features.some(f=>f.geometry?.type==='Bad'))throw new Error('Invalid GeoJSON object.');const l={data,options,attached:false,addTo(){this.attached=true;},remove(){this.attached=false;}};layers.push(l);return l;}};
+const L={svg:options=>options,geoJSON(data,options){if(data.features.some(f=>f.geometry?.type==='Bad'))throw new Error('Invalid GeoJSON object.');const l={data,options,attached:false,addTo(){this.attached=true;},remove(){this.attached=false;}};layers.push(l);return l;}};
 vm.runInNewContext(await readFile(new URL('../public/proposal.js',import.meta.url),'utf8'),{$,map,L,document:{createElement:element},URLSearchParams,AbortController,json:(url,opts)=>new Promise((resolve,reject)=>requests.push({url,opts,resolve,reject}))});
 const select=(siteId='a',workflow='street',inputRevision=0)=>map.fire('plannersite',{siteId,workflow,center:{lat:34.03758,lng:-118.25313},inputRevision});
 const response=(revision=1,site_id='a',workflow='street')=>({schema_version:1,site_id,workflow,revision,input_revision:0,input_hash:'hash'+revision,development_fixture:true,status:'fixture',geometry:[{properties:{revision}}],metrics:[{id:'footprint_area',proposed:revision*24,unit:'m²',revision,input_hash:'hash'+revision}],recommendation:'UI test only'});
@@ -138,7 +138,12 @@ const draft={...response(1,'water','water'),development_fixture:false,status:'dr
   assumptions:['Ponding depth is a screening assumption.'],access:{text:'Keep-clear checked'},overlap:{text:'Mapped buildings avoided'}};
 draft.metrics.push({id:'storage_volume',unit:'m³',proposed:1.2,revision:1,input_hash:draft.input_hash});
 map.fire('plannerresult',{siteId:'water',workflow:'water',inputRevision:0,revision:1,proposal:draft});
-assert.equal($('proposal-kind').textContent,'Draft concept');
+assert.equal($('proposal-kind').textContent,'Concept');
+assert.equal($('proposal-summary').hidden,true,'show the recommendation in the expandable calculation');
+assert.equal($('proposal-calculation').open,false);
+assert.equal($('proposal-overview-metrics').hidden,true);
+assert.match(text($('water-design-highlights')),/Planted area 260 sq ft Temporary storage About 320 gal/);
+assert.match($('water-design-runoff').textContent,/Runoff capture is unknown/);
 assert.match(text($('proposal-water-metrics')),/Ponding storage 1.2 m³/);
 assert.match(text($('proposal-water-metrics')),/Capture Not assessed/);
 assert.match(text($('proposal-checks')),/Keep-clear checked/);
@@ -154,12 +159,13 @@ console.log('PASS: draft screening metrics, unknown capture and specific placeme
 select('water','water',1);
 const waterProposal=(revision,input_revision=1,area=30)=>({...response(revision,'water','water'),
   development_fixture:false,status:'conditional',input_revision,design:{kind:'bioretention'},
-  geometry:[{properties:{revision},geometry:{type:'Polygon',coordinates:[]}}],
+  proposed_geometry_ids:['bed'],geometry:[{id:'bed',properties:{revision,layout:'compact'},geometry:{type:'Polygon',coordinates:[]}}],
   metrics:[{id:'footprint_area',proposed:area,unit:'m²',revision,input_hash:'hash'+revision},
     {id:'storage_volume',proposed:area*.15,unit:'m³',revision,input_hash:'hash'+revision},
     {id:'captured_volume',proposed:null,unit:'m³',status:'unassessed',revision,input_hash:'hash'+revision}],
   recommendation:'Mapped planting area; drainage remains unverified.',assumptions:['No verified drainage connection.'],access:{text:'Mapped access avoided'},overlap:{text:'Mapped buildings avoided'}});
 const previous=waterProposal(1,0,12),current=waterProposal(2,1,30),alternative=waterProposal(2,1,20);
+alternative.geometry[0].properties.layout='linear';
 const study={siteId:'water',workflow:'water',inputRevision:1,revision:2,proposal:current,alternatives:{compact:current,linear:alternative},
   waterPlan:{settings:{drainageAssumption:'unknown'},comparison:{selected:'compact',selectionBasis:'Comparable impact is unknown; this footprint avoids mapped operational constraints.',
     scenario:{name:'County rainfall screen',drainageAssumption:'unknown'},results:[{id:'compact',label:'Compact garden',status:'selected',reason:'Fits mapped open space.'},{id:'linear',label:'Linear strip',status:'eligible',reason:'Preserves the entrance.',
@@ -167,14 +173,19 @@ const study={siteId:'water',workflow:'water',inputRevision:1,revision:2,proposal
     decisions:[{source:'CoStar frontage',decision:'Preserved the mapped curb-cut frontage buffer.',evidence_ids:['frontage-1']}]},
   designHistory:[{revision:1,inputRevision:0,proposal:previous,savedAt:'2026-11-14T14:05:00+00:00'}]};
 map.fire('plannerresult',study);
+assert.equal(activeLayer().options.renderer.pane,'proposal');
+assert.equal(activeLayer().options.style(current.geometry[0]).className,'rain-garden-footprint');
+assert.equal(activeLayer().options.style({id:'roof',properties:{role:'contributing'}}).className,undefined);
 assert.equal($('water-design-review').hidden,false);
-assert.equal($('proposal-title').textContent,'Bioretention concept');
+assert.equal($('proposal-title').textContent,'Compact rain garden');
 assert.match(text($('proposal-water-metrics')),/Capture Not assessed/);
 assert.match($('water-design-scenario').textContent,/Drainage connection is unknown/);
 assert.match(text($('water-design-decisions')),/CoStar frontage: Preserved/);
 assert.match(text($('water-design-decisions')),/frontage-1/);
 assert.doesNotMatch($('proposal-revision').textContent,/Saved result/,'new live results are not labeled as replay');
 $('water-design-alternatives').children[1].children.find(c=>c.textContent==='Inspect this footprint').events.click();
+assert.equal(activeLayer().options.style(alternative.geometry[0]).className,'rain-garden-footprint');
+assert.equal($('proposal-title').textContent,'Linear rain garden');
 assert.equal($('proposal-area').textContent,'20.0 m²');
 assert.match($('proposal-map-caption').textContent,/Alternative preview/);
 assert.match(text($('water-design-decisions')),/CoStar loading: The linear footprint/);
@@ -201,6 +212,7 @@ const scenarioProposal=waterProposal(3,2,40);scenarioProposal.metrics[2]={...sce
 map.fire('plannerresult',{...study,revision:3,inputRevision:2,proposal:scenarioProposal,alternatives:{},waterPlan:{settings:{drainageAssumption:'marked_connected'},comparison:{scenario:{name:'One-inch explicit scenario'}}}});
 assert.match($('water-design-scenario').textContent,/What-if: marked runoff areas are assumed connected/);
 assert.match(text($('proposal-water-metrics')),/Capture 1.2 m³/);
+assert.match($('water-design-runoff').textContent,/What-if:.*320 gal.*if the marked area drains into it/);
 select('other','water');assert.equal($('water-design-review').hidden,true);
 console.log('PASS: stormwater alternatives, separate unknown/assumed capture, source decisions, read-only history and revision isolation');
 
@@ -229,6 +241,7 @@ assert.doesNotMatch($('proposal-revision').textContent,/Saved result/,'a success
 assert.doesNotMatch($('water-design-scenario').textContent,/Saved result/);
 $('water-design-alternatives').children[1].children.find(c=>c.textContent==='Inspect this footprint').events.click();
 assert.match($('proposal-kind').textContent,/rejected/);
+assert.equal($('proposal-summary').hidden,false,'rejection reason stays visible');
 assert.match($('proposal-summary').textContent,/Rejected: Overlaps the protected loading entrance/);
 assert.equal(activeLayer().options.style.color,'#ffaf98');
 assert.match(text($('water-design-decisions')),/No separate decisions were recorded for this option/);

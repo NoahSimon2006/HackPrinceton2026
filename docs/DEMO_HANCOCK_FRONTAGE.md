@@ -1,5 +1,7 @@
 # Hancock Terrace — detailed frontage demonstration
 
+> Historical record. The planner now shows planted stormwater designs in **Results → Design** and **Explore in 3D**. The former demo address redirects to Stormwater. See the [desktop walkthrough](DEMO_WALKTHROUGH.md).
+
 November 15, 2026. Built after Checkpoint 8 and the guided interface were merged and pushed as `4c29229`. This dedicated demo is local work on `codex/detailed-demo-scene`; it is separate from saved agent evaluations.
 
 ## The use case
