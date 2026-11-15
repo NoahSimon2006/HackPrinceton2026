@@ -117,6 +117,29 @@ class OpportunityTests(unittest.TestCase):
         self.assertEqual(result['candidates'][0]['evidence'][0]['value'],45)
         self.assertEqual(result['candidates'][0]['provenance']['version'],'v2')
 
+    def test_traffic_refresh_invalidates_review_when_values_change_without_a_new_version(self):
+        features = [feature('first', -118.30, 20)]
+        old = self.research(features, 'street')
+        changed = deepcopy(features)
+        changed[0]['properties']['value'] = 45
+        changed[0]['properties']['scalar_detail']['speed_kmh'] = 18
+        with patch.object(scout, 'map_discovery', return_value=data(changed, 'street')):
+            result = scout.refresh_traffic_candidates(old, BOUNDS)
+        self.assertTrue(result['reviewStale'])
+        evidence = result['candidates'][0]['evidence']
+        self.assertEqual(len([item for item in evidence if item['id'].endswith('-signal')]), 1)
+        self.assertEqual(next(item['value'] for item in evidence if item['id'].endswith('-speed_kmh')), 18)
+
+    def test_coverage_messages_explain_actual_data_and_recovery(self):
+        for workflow in ('street', 'water'):
+            snapshot = data([feature('one', -118.30, 20)], workflow)
+            snapshot['bbox'] = [-118.305, 34.055, -118.295, 34.07]
+            with patch.object(scout, 'map_discovery', return_value=snapshot), patch.object(scout, '_research_site', return_value=sponsor()):
+                result = scout.research_candidates(workflow, BOUNDS)
+            warnings = ' '.join(result['warnings'])
+            self.assertNotIn('pilot', warnings)
+            self.assertIn('current traffic can still identify' if workflow == 'street' else 'Terrain data covers only part', warnings)
+
     def test_unique_flow_intersection_choice_preserves_priority_extent_and_refresh_identity(self):
         node = {'id': 'verified-node', 'properties': {'center': [-118.301,34.06], 'label': 'Private intersection name'}}
         inventory = {'version': 'counts-v1', 'layers': [{'id':'turning','features':[node]}]}

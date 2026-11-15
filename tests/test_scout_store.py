@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from project_store import ProjectConflict, ProjectStore
-from scout_store import ScoutStore, validate_search
+from scout_store import REFRESH_NOTICE, ScoutStore, validate_search
 from test_project_api import handler
 
 
@@ -76,22 +76,146 @@ class ScoutStoreTest(unittest.TestCase):
         self.assertIsNone(self.store.cancel(search['id'], 'a' * 32))
         self.assertTrue(self.store.is_current(search['id'], 'b' * 32))
 
-    def test_traffic_values_and_geometry_never_reach_sqlite_and_expire(self):
-        item = {**candidate(), 'expiresAt': time.time() + 30, 'label': 'LIVE-ROAD-SECRET',
-                'environmental': {'summary': 'LIVE-SPEED-SECRET'}}
-        search = self.complete(request('street'), item)
-        self.assertTrue(search['batches'][0]['candidates'][0]['center'])
+    def test_traffic_answer_survives_expiry_and_restart_and_can_still_be_selected(self):
+        observed = '2026-11-15T12:32:31+00:00'
+        item = {**candidate(), 'expiresAt': time.time() + 30, 'label': 'Maple Avenue',
+                'feedback': {'observation': 'At search time, speed was 5 km/h.',
+                             'nextStep': 'Compare the loading entrance with the queue before changing curb space.'},
+                'evidence': [{'id': 'speed', 'value': 5,
+                             'source': {'provider': 'TomTom', 'retrieved_at': observed}}]}
+        search = self.store.begin(request('street'), 'a' * 32)
+        review = {'findings': [{'candidate_id': item['id'], 'text': 'Check the loading entrance.', 'fact_ids': ['speed']}]}
+        self.store.finish(search['id'], 'a' * 32, {'candidates': [item], 'review': review, 'summary': 'Three locations to compare.'})
+        current = self.store.get(search['id'])['batches'][0]
+        self.assertEqual(current['evidenceFreshness'], 'current')
+        self.assertEqual(current['snapshotAt'], observed)
         with self.projects.connect() as db:
-            stored = db.execute('SELECT payload FROM scouts').fetchone()[0]
-        self.assertNotIn('LIVE-', stored)
-        self.assertNotIn('coordinates', stored)
-        self.assertNotIn('modelContext', stored)
+            stored = json.loads(db.execute('SELECT payload FROM scouts').fetchone()[0])
+        self.assertEqual(stored['batches'][0]['review'], review)
+        self.assertEqual(stored['batches'][0]['candidates'][0]['feedback'], item['feedback'])
+        self.assertEqual(stored['batches'][0]['candidates'][0]['geometry'], item['geometry'])
+        self.assertNotIn('modelContext', json.dumps(stored))
         with patch('scout_store.time.time', return_value=time.time() + 60):
-            expired = self.store.get(search['id'])['batches'][0]['candidates'][0]
-            self.assertFalse(expired['available'])
-            with self.assertRaises(ProjectConflict):
-                self.store.select(search['id'], item['id'])
-            self.assertFalse(self.store.live)
+            restarted = ScoutStore(self.projects)
+            saved = restarted.get(search['id'])['batches'][0]
+            self.assertEqual(saved['evidenceFreshness'], 'snapshot')
+            self.assertEqual(saved['snapshotAt'], observed)
+            self.assertEqual(saved['review'], review)
+            self.assertEqual(saved['summary'], current['summary'])
+            saved_candidate = saved['candidates'][0]
+            self.assertEqual(saved_candidate['evidenceFreshness'], 'snapshot')
+            for key, original in item['feedback'].items():
+                self.assertEqual(saved_candidate['feedback'][key], original)
+            self.assertEqual(saved_candidate['feedback']['brief'], current['candidates'][0]['feedback']['brief'])
+            for key in ('evidence', 'geometry', 'center', 'label'):
+                self.assertEqual(saved_candidate[key], item[key])
+            self.assertTrue(saved_candidate.get('available', True))
+            selected = restarted.select(search['id'], item['id'])
+            self.assertEqual(selected['project']['snapshot']['lon'], item['center'][0])
+            self.assertEqual(selected['project']['snapshot']['question'], request('street')['goal'])
+            # The saved choice is a location and brief. Site analysis must fetch
+            # its own current evidence, never treat these old speeds as live.
+            origin = json.loads(self.projects.artifact(selected['project']['id'], '/project/scouting-selection.json'))
+            self.assertNotIn('evidence', origin)
+            self.assertNotIn('feedback', origin)
+
+    def test_source_already_expired_before_publication_keeps_the_answer(self):
+        for expiry in (time.time() - 30, None):
+            with self.subTest(expiry=expiry):
+                item = {**candidate(), 'expiresAt': expiry, 'feedback': {'nextStep': 'Inspect the entrance nearest this queue.'}}
+                search = self.complete(request('street'), item)
+                saved = ScoutStore(self.projects).get(search['id'])['batches'][0]
+                self.assertEqual(saved['evidenceFreshness'], 'snapshot')
+                self.assertEqual(saved['candidates'][0]['feedback']['nextStep'], item['feedback']['nextStep'])
+                self.assertEqual(self.store.select(search['id'], item['id'])['candidate']['id'], item['id'])
+
+    def test_old_answers_get_distinct_briefs_without_rewriting_saved_content(self):
+        items = [candidate(1), candidate(2)]
+        for item, length in zip(items, (209, 118)):
+            item['evidence'] = [{'id': item['id'] + '-signal', 'value': 18},
+                                {'id': item['id'] + '-length_m', 'value': length}]
+            item['feedback'] = {'nextStep': 'The original complete recommendation.'}
+        search = self.store.begin(request('street'), 'a' * 32)
+        self.store.finish(search['id'], 'a' * 32, {'candidates': items})
+        with self.projects.connect() as db:
+            before = db.execute('SELECT payload FROM scouts WHERE id=?', (search['id'],)).fetchone()[0]
+        batch = ScoutStore(self.projects).get(search['id'])['batches'][0]
+        first, second = [item['feedback'] for item in batch['candidates']]
+        self.assertIn('Longest', first['brief']['headline'])
+        self.assertIn('Shortest', second['brief']['headline'])
+        self.assertNotEqual(first['brief']['action'], second['brief']['action'])
+        self.assertEqual(first['nextStep'], items[0]['feedback']['nextStep'])
+        with self.projects.connect() as db:
+            after = db.execute('SELECT payload FROM scouts WHERE id=?', (search['id'],)).fetchone()[0]
+        self.assertEqual(before, after)
+
+    def test_cancelled_more_search_preserves_the_previous_saved_answer(self):
+        item = {**candidate(), 'expiresAt': time.time() - 30, 'feedback': {'nextStep': 'Check the first location.'}}
+        first = self.complete(request('street'), item)
+        self.store.begin({**request('street'), 'searchId': first['id']}, 'b' * 32)
+        self.store.cancel(first['id'], 'b' * 32)
+        self.assertFalse(self.store.finish(first['id'], 'b' * 32, {'candidates': [candidate(2)], 'review': {'findings': ['LATE REVIEW']}}))
+        saved = ScoutStore(self.projects).get(first['id'])
+        self.assertEqual(len(saved['batches']), 1)
+        self.assertEqual(saved['batches'][0]['candidates'][0]['feedback']['nextStep'], item['feedback']['nextStep'])
+        self.assertNotIn('LATE REVIEW', json.dumps(saved))
+        self.assertEqual(self.store.select(first['id'], item['id'])['candidate']['id'], item['id'])
+
+    def test_legacy_unavailable_record_is_not_recreated_as_a_selectable_location(self):
+        old = {'id': 'candidate-1', 'label': 'Previous traffic opportunity', 'available': False,
+               'resumeNotice': 'The original version did not retain this location.'}
+        search = self.complete(request('street'), old)
+        saved = ScoutStore(self.projects).get(search['id'])['batches'][0]['candidates'][0]
+        self.assertFalse(saved['available'])
+        self.assertNotIn('center', saved)
+        with self.assertRaises(ProjectConflict):
+            self.store.select(search['id'], old['id'])
+
+    def test_legacy_copy_explains_missing_old_details_and_preserves_selected_project(self):
+        first = self.complete(request('street'), candidate())
+        selected = self.store.select(first['id'], candidate()['id'])
+        old_notice = 'Live traffic evidence expired and is not archived. Run a new search to refresh this area; earlier choices remain in history.'
+        with self.projects.connect() as db:
+            stored = json.loads(db.execute('SELECT payload FROM scouts WHERE id=?', (first['id'],)).fetchone()[0])
+            stored['batches'] = [{'id': 'a' * 32, 'created': stored['updated'], 'summary': old_notice,
+                                 'resumeNotice': old_notice,
+                                 'candidates': [{'id': candidate()['id'], 'label': 'Previous traffic opportunity',
+                                                 'available': False, 'resumeNotice': old_notice}]}]
+            db.execute('UPDATE scouts SET payload=? WHERE id=?', (json.dumps(stored), first['id']))
+        restored = ScoutStore(self.projects).get(first['id'])
+        batch = restored['batches'][0]
+        self.assertEqual(batch['summary'], REFRESH_NOTICE)
+        self.assertEqual(batch['resumeNotice'], REFRESH_NOTICE)
+        self.assertEqual(batch['candidates'][0]['resumeNotice'], REFRESH_NOTICE)
+        self.assertIn('new searches keep their answers', batch['summary'])
+        self.assertFalse(batch['candidates'][0]['available'])
+        self.assertNotIn('center', batch['candidates'][0])
+        self.assertEqual(restored['selected']['projectId'], selected['project']['id'])
+        self.assertEqual(self.projects.get(restored['selected']['projectId'])['id'], selected['project']['id'])
+        # The compatibility copy is a read-time adaptation, not a rewrite of
+        # saved research or an attempt to reconstruct lost locations.
+        with self.projects.connect() as db:
+            unchanged = db.execute('SELECT payload FROM scouts WHERE id=?', (first['id'],)).fetchone()[0]
+        self.assertIn(old_notice, unchanged)
+
+    def test_new_saved_answer_is_not_changed_by_legacy_copy_migration(self):
+        item = {**candidate(), 'expiresAt': time.time() - 30, 'feedback': {
+            'nextStep': 'Check this loading entrance.',
+            'brief': {'headline': 'Check loading access', 'metric': '', 'action': 'Check this loading entrance.'}}}
+        first = self.complete(request('street'), item)
+        restored = ScoutStore(self.projects).get(first['id'])
+        self.assertEqual(restored['batches'], first['batches'])
+        self.assertEqual(restored['batches'][0]['candidates'][0]['feedback'], item['feedback'])
+        self.assertNotIn('resumeNotice', restored['batches'][0])
+
+    def test_empty_traffic_search_preserves_useful_recovery_guidance(self):
+        search = self.store.begin(request('street'), 'a' * 32)
+        summary = 'No additional locations here. Try a smaller area or pick a spot directly.'
+        self.store.finish(search['id'], 'a' * 32, {'candidates': [], 'summary': summary, 'feedbackGoal': request()['goal']})
+        saved = ScoutStore(self.projects).get(search['id'])['batches'][0]
+        self.assertEqual(saved['candidates'], [])
+        self.assertEqual(saved['summary'], summary)
+        self.assertNotIn('resumeNotice', saved)
 
     def test_interruption_and_empty_history(self):
         search = self.store.begin(request(), 'a' * 32)

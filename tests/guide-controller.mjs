@@ -44,6 +44,15 @@ function harness({saved=null}={}) {
   assert.equal(JSON.parse(h.storage.get('planning-guide')).method,'direct');
 }
 
+// Place guidance offers selection only when a saved location can be selected.
+{
+  const h=harness();h.click('guide-next');
+  h.$('scout-results').children.push({});h.$('scout-results').setAttribute('data-selectable-count','0');h.changed();
+  assert.match(h.$('guide-hint').textContent,/Find locations again/,'empty or legacy result cards do not invite an impossible selection');
+  h.$('scout-results').setAttribute('data-selectable-count','2');h.changed();
+  assert.equal(h.$('guide-hint').textContent,'Choose a location to continue.','saved places remain choices regardless of traffic freshness');
+}
+
 // A project restored during page load offers Resume; a site the user picks advances.
 {
   const h=harness();h.site();
