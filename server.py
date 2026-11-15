@@ -9,7 +9,7 @@ import time
 from copy import deepcopy
 from contextlib import nullcontext
 from project_store import ProjectStore, ProjectConflict, validate_snapshot
-from threading import BoundedSemaphore, Lock
+from threading import BoundedSemaphore, Lock, Thread
 from agent_activity import Activity, RunCancelled, TransientSourceError
 from discovery import load_discovery, map_discovery, query_area, area_facts, discovery_context, traffic_context, traffic_context_at_site
 from functools import lru_cache
@@ -34,7 +34,7 @@ ACTIVE_ANALYSES = {}
 ANALYSIS_LOCK = Lock()
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
           "/discovery.js": "discovery.js", "/analysis-stream.js": "analysis-stream.js", "/planner.js": "planner.js", "/proposal.js": "proposal.js",
-          "/site-view.js": "site-view.js", "/projects.js": "projects.js",
+          "/site-view.js": "site-view.js", "/projects.js": "projects.js", "/scouting.js": "scouting.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
           "/vendor/leaflet.css": "vendor/leaflet.css"}
 
@@ -282,6 +282,68 @@ def project_store():
     return store
 
 
+@lru_cache(maxsize=1)
+def scout_store():
+    from scout_store import ScoutStore
+    return ScoutStore(project_store())
+
+
+def start_scout(data):
+    from scout_store import validate_search
+    validate_search(data)
+    key = os.getenv('GROK_API_KEY', '').strip()
+    if not key:
+        raise ValueError('Set GROK_API_KEY to use the planning agent.')
+    if not ANALYSIS_SLOTS.acquire(blocking=False):
+        raise ProjectConflict('Two planning investigations are already running. Try again shortly.')
+    store = scout_store()
+    activity = Activity(seconds=240)
+    try:
+        search = store.begin(data, activity.id)
+    except Exception:
+        ANALYSIS_SLOTS.release()
+        raise
+    search_id = search['id']
+    activity.current = lambda: store.is_current(search_id, activity.id)
+    activity.emit = lambda event: store.event(search_id, event)
+    with ANALYSIS_LOCK:
+        ACTIVE_ANALYSES[activity.id] = activity
+
+    def run():
+        try:
+            from opportunity_scout import research_candidates, refresh_traffic_candidates
+            from scout_agent import review_scout
+            excluded = list({item for batch in search['batches'] for c in batch['candidates']
+                for item in [c['id'], *c.get('provenance', {}).get('groupedCandidateIds', c.get('groupedCandidateIds', []))]})
+            def research():
+                return research_candidates(search['workflow'], search['bounds'], excluded,
+                    check=activity.check, emit=lambda event: activity.event('lead', 'source-screen', 'running',
+                        event.get('summary', event.get('message', 'Researching candidate source evidence.'))))
+            result = review_scout(key, os.getenv('GROK_MODEL', 'grok-4.7'), search['goal'], search['workflow'],
+                research, activity, lambda path, content: store.artifact(search_id, activity.id, path, content))
+            activity.check()
+            if search['workflow'] == 'street':
+                result = refresh_traffic_candidates(result, search['bounds'], check=activity.check)
+                if result.get('reviewStale'):
+                    result['summary'] = 'Current flow was refreshed after investigation. The source screen is current; earlier agent commentary has been discarded.'
+                    result.pop('review', None)
+                    result.pop('agentReview', None)
+            activity.event('lead', 'shortlist', 'completed', 'Location investigation finished. Choose a location to develop it.')
+            store.finish(search_id, activity.id, result)
+        except RunCancelled:
+            store.finish(search_id, activity.id, status='canceled', error='Investigation canceled or time budget reached.')
+        except Exception as error:
+            # Provider messages may contain request URLs/credentials. Never return them.
+            print('Location investigation failed:', type(error).__name__, flush=True)
+            store.finish(search_id, activity.id, status='failed', error='The investigation could not finish. Retry the area search; earlier history is preserved.')
+        finally:
+            with ANALYSIS_LOCK:
+                ACTIVE_ANALYSES.pop(activity.id, None)
+            ANALYSIS_SLOTS.release()
+    Thread(target=run, name='area-scout-' + activity.id[:8], daemon=True).start()
+    return store.get(search_id)
+
+
 class Handler(BaseHTTPRequestHandler):
     def send(self, status, content, mime, cache="no-store"):
         self.send_response(status)
@@ -296,7 +358,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send(status, json.dumps(data, separators=(",", ":")).encode(), "application/json")
 
     def do_POST(self):
-        if urlsplit(self.path).path not in ("/api/site-analysis", "/api/site-analysis/cancel", "/api/projects"):
+        if urlsplit(self.path).path not in ("/api/site-analysis", "/api/site-analysis/cancel", "/api/projects", "/api/scouts", "/api/scouts/cancel", "/api/scouts/select"):
             self.send_json(404, {"error": "Not found."})
             return
         if self.headers.get_content_type() != "application/json" or self.headers.get("Sec-Fetch-Site") == "cross-site":
@@ -307,6 +369,21 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= 32_000:
                 raise ValueError("The site request is too large or empty.")
             data = json.loads(self.rfile.read(length))
+            path = urlsplit(self.path).path
+            if path == '/api/scouts':
+                self.send_json(202, start_scout(data))
+                return
+            if path == '/api/scouts/cancel':
+                run_id = scout_store().cancel(data.get('id'), data.get('runId'))
+                with ANALYSIS_LOCK:
+                    active = ACTIVE_ANALYSES.get(run_id)
+                    if active:
+                        active.cancelled.set()
+                self.send_json(200, scout_store().get(data.get('id')))
+                return
+            if path == '/api/scouts/select':
+                self.send_json(200, scout_store().select(data.get('id'), data.get('candidateId')))
+                return
             if urlsplit(self.path).path == "/api/projects":
                 saved = project_store().save(data.get("snapshot"), data.get("projectId"), data.get("expectedVersion"))
                 self.send_json(200, saved)
@@ -348,6 +425,10 @@ class Handler(BaseHTTPRequestHandler):
                 snapshot = validate_snapshot({key: data.get(key) for key in project["snapshot"]})
                 if data.get("projectVersion") != project["version"] or snapshot != project["snapshot"]:
                     raise ProjectConflict("Project inputs changed. Save the latest inputs before continuing.")
+                try:
+                    project['scouting'] = json.loads(project_store().artifact(project['id'], '/project/scouting-selection.json'))
+                except ValueError:
+                    pass
         except ProjectConflict as error:
             self.send_json(409, {"error": str(error)})
             return
@@ -484,6 +565,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path.path == "/api/projects":
                 query = parse_qs(path.query)
                 self.send_json(200, project_store().get(query["id"][0]) if "id" in query else {"projects":project_store().list()})
+            elif path.path == '/api/scouts':
+                query = parse_qs(path.query)
+                self.send_json(200, scout_store().get(query['id'][0]) if 'id' in query else {'searches': scout_store().list()})
             elif path.path == "/api/project-artifact":
                 query = parse_qs(path.query)
                 self.send_json(200, {"path":query.get("path", [""])[0],
@@ -592,5 +676,8 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
+    # Recover interrupted work before concurrent requests can start new runs.
+    project_store()
+    scout_store()
     print(f"Sustainability Map: http://127.0.0.1:{port}")
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()

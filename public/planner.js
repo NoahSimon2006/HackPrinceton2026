@@ -191,6 +191,11 @@
     },1500);
   }
   $("open-project").addEventListener('click',()=>openProject($("saved-projects").value));
+  // Choosing an opportunity restores its explicit site project; it never starts
+  // design generation. The next site request remains the publication gate.
+  map.on('scoutselect', ({project}) => {
+    if (project?.snapshot?.workflow === workflow) openProject(project.id);
+  });
 
   function pointError(point, marking = false) {
     if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return "Enter a finite latitude and longitude for every point.";

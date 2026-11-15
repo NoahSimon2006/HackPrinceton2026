@@ -572,7 +572,7 @@ function selectPlanningWorkspace(mode, zoom = false) {
   for (const name of ["street", "water"]) $(`workspace-${name}`).setAttribute("aria-pressed", String(name === planningMode));
   for (const id of ["planner", "planner-title", "site-intro"]) $(id).hidden = false;
   $("planner-title").textContent = water ? "Make room for water." : "Better streets start here.";
-  $("site-intro").textContent = water ? "Choose a site to investigate rainfall, drainage and opportunities for greenery." : "Choose an intersection to investigate access, crossings and emissions evidence.";
+  $("site-intro").textContent = water ? "Find promising places to manage stormwater, then develop a site concept." : "Find street improvements worth investigating, then develop and evaluate a concept.";
   $("planner-controls").hidden = true;
   $("emissions-layer-row").hidden = water;
   $("map-workspace").classList.toggle("water-mode", water);

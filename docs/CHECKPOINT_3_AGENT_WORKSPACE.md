@@ -1,6 +1,6 @@
 # Checkpoint 3 — persistent agent workspace
 
-Implemented on `codex/checkpoint-3-agent-workspace`, following Checkpoint 2 commit `e8fed6a` (`Add current traffic and expanded stormwater discovery`). Checkpoint 3 is ready for review and remains uncommitted; nothing was pushed or merged.
+Implemented after Checkpoint 2 commit `e8fed6a`, committed as `3515bd1` (`Build persistent planning agent workspace`) and pushed to `origin/main` on November 15, 2026.
 
 ## What changed
 

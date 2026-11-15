@@ -5,15 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=21">
+  <link rel="stylesheet" href="/styles.css?v=22">
   <script defer src="/vendor/leaflet.js"></script>
   <script defer src="/app.js?v=19"></script>
   <script defer src="/proposal.js?v=7"></script>
   <script defer src="/analysis-stream.js?v=2"></script>
   <script defer src="/site-view.js?v=1"></script>
   <script defer src="/projects.js?v=1"></script>
-  <script defer src="/planner.js?v=18"></script>
+  <script defer src="/planner.js?v=19"></script>
   <script defer src="/discovery.js?v=3"></script>
+  <script defer src="/scouting.js?v=1"></script>
 </head>
 <body>
   <div id="map-workspace" class="shell planner-mode">
@@ -26,6 +27,24 @@
         </nav>
         <h1 id="planner-title" hidden>Plan a site</h1>
         <p id="site-intro" class="site-intro" hidden></p>
+        <details id="scouting" class="scouting" open>
+          <summary id="scout-heading">Find improvement opportunities</summary>
+          <p class="scout-intro">Start with a goal and an area. Investigate up to three locations, then choose where to develop a concept.</p>
+          <form id="scout-form">
+            <label for="scout-goal">What should this area improve?</label>
+            <textarea id="scout-goal" rows="3" maxlength="1500" required></textarea>
+            <div class="scout-actions"><button id="scout-area" type="button">Use current map area</button><button id="scout-view-area" type="button" hidden>View search area</button></div>
+            <p id="scout-area-label">The visible map area will be used when you start.</p>
+            <button id="scout-start" type="submit">Find locations</button>
+            <button id="scout-cancel" type="button" hidden>Cancel search</button>
+          </form>
+          <p id="scout-status" role="status" aria-live="polite"></p>
+          <details id="scout-activity" hidden><summary>Investigation activity</summary><ol id="scout-events"></ol></details>
+          <div id="scout-results" aria-label="Researched locations"></div>
+          <button id="scout-more" type="button" hidden>Show more locations</button>
+          <p class="scout-privacy">The agent receives your goal and measured summaries. Location geometry stays local.</p>
+        </details>
+        <p class="direct-site-label">Or go directly to a site</p>
         <div class="search-block">
           <label for="search">Find a CoStar property</label>
           <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" autocomplete="off" placeholder="Property name or address"></div>

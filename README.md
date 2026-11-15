@@ -2,7 +2,7 @@
 
 A local planning workspace for Los Angeles, using a Python server, bundled Leaflet, Vexcel aerial imagery and CoStar site evidence. **Traffic & Emissions** opens with current surface-street speeds and connected slow approaches. **Stormwater** opens with terrain screening across the western pilot, with rainfall, drainage, property-use and sampled parcel/building layers.
 
-**Current work: [Checkpoint 3 agent workspace](docs/CHECKPOINT_3_AGENT_WORKSPACE.md), complete for review.** Saved projects retain the site, brief, user constraints and native agent thread. The lead uses native specialist delegation, trusted skills and curated virtual files. Desktop controls reopen projects and inspect reports. The dated count layers have been removed; verified sheets remain internal simulation inputs. Checkpoint 2 is committed as `e8fed6a`; Checkpoint 3 is uncommitted on `codex/checkpoint-3-agent-workspace`. Read the [handoff](docs/CONVERSATION_HANDOFF.md) and [approved plan](docs/NEXT_IMPLEMENTATION_PLAN.md).
+**Current work: [Checkpoint 4 researched location selection](docs/CHECKPOINT_4_LOCATION_SELECTION.md), implemented for review.** Start with a goal and a map area, investigate up to three locations, then explicitly choose a saved site project. Environmental screening, practical constraints and data readiness are shown separately. Checkpoint 3 was committed and pushed to `main` as `3515bd1`, including the earlier checkpoints. Checkpoint 4 is uncommitted on `codex/checkpoint-4-location-selection`. Read the [handoff](docs/CONVERSATION_HANDOFF.md) and [approved plan](docs/NEXT_IMPLEMENTATION_PLAN.md).
 
 **Stormwater starts with a map draft.** Select a supported site and ask for a rain garden. The draft uses mapped outlines and avoids known constraints. It labels ponding depth as an assumption and leaves runoff capture unassessed until contributing area and coefficient support a scenario. Add optional keep-clear markings or revise the brief, then analyze again. The old manual placement-comparison workflow has been retired.
 
@@ -86,6 +86,7 @@ node tests/analysis-stream.mjs
 node tests/proposal-controller.mjs
 node tests/site-view-controller.mjs
 node tests/projects.mjs
+node tests/scouting.mjs
 ```
 
 Install `requirements-discovery.txt` for terrain/builder tests. Most tests use explicit test fixtures and make no provider calls. Two local spot checks use downloaded public source artifacts when available; they report skipped if those files are absent. See the checkpoint reports for live verification and remaining limits.

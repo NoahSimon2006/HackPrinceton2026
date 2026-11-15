@@ -2,7 +2,7 @@
 
 Prepared November 14, 2026. Product decisions approved; implementation proceeds one authorized checkpoint at a time.
 
-**Current implementation:** Checkpoints 0/1 are committed as `07c57af`; Checkpoint 2 as `e8fed6a`. [Checkpoint 3 agent workspace](CHECKPOINT_3_AGENT_WORKSPACE.md) is complete and uncommitted on `codex/checkpoint-3-agent-workspace`: native delegation, trusted skills, local project/checkpoint storage, desktop resume/files controls and bounded recovery. Per the latest user direction, historical count layers are removed from the map and desktop is prioritized. Verified historical sheets remain internal simulation inputs. Checkpoint 4 has not started.
+**Current implementation:** Checkpoints 0–3 are pushed to `main` through `3515bd1` (Checkpoint 3), following `07c57af` and `e8fed6a`. [Checkpoint 4 researched location selection](CHECKPOINT_4_LOCATION_SELECTION.md) is implemented and uncommitted on `codex/checkpoint-4-location-selection`. Goal plus area now produces researched choices and waits for selection. Historical count layers remain removed; verified sheets remain internal simulation inputs. Desktop is the priority. Checkpoint 5 has not started.
 
 Sustainability Map will help Los Angeles urban planners and traffic engineers discover environmental improvement opportunities, choose a location, and develop an inspectable physical concept through conversation. The primary workflow begins with a goal and a map area. The agent investigates that area, presents up to three supported locations, and waits for the user to choose one before developing and evaluating designs.
 
@@ -369,6 +369,8 @@ Introduce project state/checkpoints and configured native subagents. Load the tr
 **Acceptance:** Observe independent specialist work overlap; observe a relevant skill being read and used; inspect a saved specialist artifact used by the lead; restart/reload and continue a project with its constraints intact; verify cancellation and that restricted data does not leak through files, messages or events. Importing the SDK alone does not satisfy this checkpoint.
 
 ### Checkpoint 4 Add researched location selection
+
+**Implemented:** see [Checkpoint 4 report](CHECKPOINT_4_LOCATION_SELECTION.md) for live verification, screening limits and partial specialist recovery.
 
 **Outcome:** Goal plus area yields up to three useful choices and waits for selection.
 

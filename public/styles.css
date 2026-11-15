@@ -417,3 +417,29 @@ button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-vi
 #project-file-list { padding: 0; list-style: none; max-height: 190px; overflow: auto; }
 #project-file-list button { font-size: 11px; text-align: left; overflow-wrap: anywhere; padding: 5px 0; border: 0; background: transparent; color: #a7e5a3; }
 #project-file-preview { max-height: 340px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; font-size: 11px; line-height: 1.5; background: #0c1e19; border: 1px solid #39534d; border-radius: 7px; }
+
+/* Area investigation precedes the direct-site shortcut on desktop. */
+.scouting{min-width:0;margin:16px 0 22px;border:1px solid #47634c;border-radius:12px;background:#1b2a20;padding:14px}
+.scouting>summary{cursor:pointer;font-size:15px;font-weight:750;line-height:1.35;color:#d5edca}
+.scouting p{font-size:12px;line-height:1.5;color:#b7c9ba;overflow-wrap:anywhere;margin:7px 0}
+.scouting .scout-intro{margin:12px 0}.scouting label{display:block;font-size:12px;font-weight:700;margin:10px 0 7px}
+.scouting textarea{display:block;width:100%;resize:vertical;min-height:80px;padding:10px;background:#121e17;color:#eef4ef;border:1px solid #4b6751;border-radius:8px;font:inherit;font-size:12px;line-height:1.5}
+.scouting button{padding:8px 10px;background:#2b4231;color:#e6f0e3;border:1px solid #55775c;border-radius:7px;font-size:11px;line-height:1.4;cursor:pointer}
+.scouting button:hover:not(:disabled){background:#3b5b42}.scouting button:disabled{opacity:.5;cursor:default}
+.scouting button:focus-visible,.scouting summary:focus-visible,.scouting textarea:focus-visible{outline:2px solid #b4e6a7;outline-offset:3px}
+#scout-start{background:#b4e6a7;color:#1a2c1d;font-weight:750;font-size:12px;width:100%;margin-top:6px}
+.scout-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.scouting #scout-area-label{font-size:10px;color:#8eab95}.scouting #scout-status{color:#cee7cc;margin-top:13px}
+.scout-batch{min-width:0;border-top:1px solid #46604b;padding-top:10px;margin-top:14px}.scout-batch>summary{font-size:12px;cursor:pointer;color:#b8d8b6}
+.scout-batch-title{font-size:13px;margin:2px 0 10px}.scout-card{border:1px solid #46634e;background:#15231b;border-radius:10px;padding:12px;margin:12px 0}
+.scout-card h3{display:flex;align-items:center;gap:8px;font-size:14px;margin:0 0 8px;overflow-wrap:anywhere}.scout-number{display:inline-grid;place-items:center;flex:none;width:25px;height:25px;border-radius:50%;background:#c4e9b7;color:#183621;font-size:12px}
+.scouting .scout-stage{font-size:9px;letter-spacing:.11em;color:#8fb798;margin:7px 0 13px}.scout-card h4{font-size:11px;color:#c6e2be;margin:9px 0 4px}
+.scouting .scout-basis{font-size:10px;color:#99ada0}.scouting .scout-reason{color:#d1dfcc}.scout-considerations{margin:12px 0;font-size:11px;line-height:1.5}.scout-considerations dt{font-weight:700;color:#cee2c8;margin-top:7px}.scout-considerations dd{margin:2px 0 0;color:#adbfaf}
+.scout-readiness{background:#202e2b;border-left:3px solid #78a9a8;padding:7px 10px;margin:12px 0}.scout-readiness h4{color:#b5d5d3;margin-top:0}.scout-readiness p{font-size:11px}
+.scout-evidence summary,#scout-activity summary{font-size:11px;cursor:pointer;color:#a5cba8}.scout-evidence ol,#scout-events{padding-left:18px;font-size:11px;line-height:1.5;color:#b6cdb9}.scout-evidence li{margin:10px 0}.scout-evidence p{font-size:10px;margin:4px 0}.scout-evidence a{color:#b9ddbc;font-size:10px}
+.scouting .scout-notice{color:#e4c595;font-size:11px}.scouting .scout-privacy{font-size:10px;color:#88a18e;margin:14px 0 0}.direct-site-label{font-size:11px;font-weight:700;color:#94ad9a;margin:10px 0 12px}
+#scout-cancel{margin-top:8px}#scout-more{width:100%;margin-top:12px}.scouting [hidden]{display:none!important}
+.scout-map-number{display:grid;place-items:center;background:#e1f0d3;color:#183321;border:2px solid #49784f;border-radius:50%;font-size:12px;font-weight:800;box-shadow:0 2px 8px #0007}
+.scouting .scout-citation{padding:0 3px;margin-left:3px;border:0;background:transparent;color:#b9ddbc;vertical-align:baseline}
+.scout-assessment{border-top:1px solid #38503e;margin-top:10px;padding-top:4px}
+.scout-investigation>summary,.scout-method>summary{font-size:11px;cursor:pointer;color:#a5cba8;line-height:1.5}
+.scout-investigation{margin:10px 0}.scout-method{margin:8px 0}

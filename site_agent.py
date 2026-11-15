@@ -270,6 +270,11 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     user_instructions = (project or {}).get("instructions", [])
     context["user_instructions"] = user_instructions if len(user_instructions) <= 5 else user_instructions[:1] + user_instructions[-4:]
     context["full_constraints_reference"] = "/project/constraints.json"
+    if (project or {}).get('scouting'):
+        selection = project['scouting']
+        context['selected_opportunity'] = {key: selection[key] for key in
+            ('searchId', 'candidateId', 'goal', 'selection', 'direction', 'readiness') if key in selection}
+        context['selected_opportunity']['next_step'] = 'The user has already chosen this location. Develop the selected site when asked; refresh current evidence rather than searching for other locations.'
     brief = json.dumps(context)
     messages = [{"role": "user", "content": f"Planning context: {brief}\nQuestion: {question}"}]
     if traffic and discovery:
