@@ -1,6 +1,6 @@
 /* Shared browsing layer. Site-analysis evidence remains in its own pane. */
 (() => {
-  const MIN_ZOOM = 17, TILE_ZOOM = 17, MAX_TILES = 128, CACHE_SIZE = 256;
+  const MIN_ZOOM = 16, TILE_ZOOM = 17, MAX_TILES = 128, CACHE_SIZE = 256;
   const LA = [-118.67, 33.70, -118.10, 34.35];
   const toggle = document.getElementById("parcels");
   const status = document.getElementById("parcel-status");
@@ -112,7 +112,7 @@
       for (const request of pending.values()) request.abort();
       outlines.clearLayers();
       outlines.remove();
-      status.textContent = "Zoom in to level 17 to see outlines.";
+      status.textContent = "Zoom in to level 16 to see outlines.";
       return;
     }
     for (const [key, at] of failures) if (Date.now() - at > 30_000) failures.delete(key);

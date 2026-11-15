@@ -4,7 +4,7 @@ import vm from 'node:vm';
 const source = await readFile(new URL('../public/parcels.js', import.meta.url), 'utf8');
 const flush = async () => { for (let i=0;i<5;i++) await new Promise(setImmediate); };
 const feature = (id, date='2026-01-01') => ({type:'Feature',id,properties:{label:'Parcel boundary',date},geometry:{type:'Polygon',coordinates:[]}});
-function harness({zoom=16, saved=null}={}) {
+function harness({zoom=15, saved=null}={}) {
   const elements = new Map(), requests = [], events = {}, timers = new Map(), storage = new Map();
   let timerID=0;
   const el = id => {
@@ -24,35 +24,35 @@ function harness({zoom=16, saved=null}={}) {
   return {map,el,layer,requests,move,events,storage};
 }
 {
-  const h=harness(); assert.equal(h.requests.length,0); assert.match(h.el('parcel-status').textContent,/17/);
-  h.map.zoom=17; h.move(); assert.equal(h.requests.length,1);
+  const h=harness(); assert.equal(h.requests.length,0); assert.match(h.el('parcel-status').textContent,/16/);
+  h.map.zoom=16; h.move(); assert.equal(h.requests.length,1);
   h.requests[0].resolve([feature('a')]); await flush(); assert.equal(h.layer.features.length,1);
   h.move(); assert.equal(h.requests.length,1,'same cells reuse cache');
   h.el('parcels').checked=false; h.el('parcels').events.change();
   assert.equal(h.layer.visible,false);assert.equal(h.storage.get('map-parcels-visible'),'false');
   h.el('parcels').checked=true;h.el('parcels').events.change();assert.equal(h.layer.features.length,1);assert.equal(h.requests.length,1);
-  h.map.zoom=16;h.events.zoomend();assert.equal(h.layer.visible,false);
+  h.map.zoom=15;h.events.zoomend();assert.equal(h.layer.visible,false);
 }
 {
-  const h=harness({zoom:17});const old=h.requests[0];
+  const h=harness({zoom:16});const old=h.requests[0];
   h.map.west+=.03;h.map.east+=.03;h.move();const newer=h.requests[1];
   newer.resolve([feature('new')]);await flush();old.resolve([feature('old')]);await flush();
   assert.deepEqual(Array.from(h.layer.features,f=>f.id),['new'],'late response cannot replace new viewport');
   h.map.west-=.03;h.map.east-=.03;h.move();assert.equal(h.requests.length,2);assert.equal(h.layer.features[0].id,'old');
 }
 {
-  const h=harness({zoom:17});h.el('parcels').checked=false;h.el('parcels').events.change();
+  const h=harness({zoom:16});h.el('parcels').checked=false;h.el('parcels').events.change();
   assert.ok(h.requests[0].options.signal.aborted);h.requests[0].resolve([feature('late')]);await flush();
   assert.equal(h.layer.visible,false);assert.equal(h.layer.features.length,0);
 }
 {
-  const h=harness({zoom:17});h.requests[0].reject(new Error('unavailable'));await flush();
+  const h=harness({zoom:16});h.requests[0].reject(new Error('unavailable'));await flush();
   assert.equal(h.el('parcel-retry').hidden,false);assert.match(h.el('parcel-status').textContent,/couldn’t load/);
   h.el('parcel-retry').events.click();assert.equal(h.requests.length,2);h.requests[1].resolve();await flush();
   assert.match(h.el('parcel-status').textContent,/No Vexcel/);assert.equal(h.el('parcel-retry').hidden,true);
 }
 {
-  const h=harness({zoom:17});h.map.east+=.004;h.move();
+  const h=harness({zoom:16});h.map.east+=.004;h.move();
   assert.equal(h.requests.length,2,'at most two concurrent requests');
   h.requests[0].resolve([feature('shared','2025-01-01')]);await flush();
   h.requests[1].resolve([feature('shared')]);await flush();
@@ -61,6 +61,6 @@ function harness({zoom=16, saved=null}={}) {
   assert.equal(h.layer.features.length,1);assert.equal(h.layer.features[0].properties.date,'2026-01-01');
 }
 {
-  const h=harness({zoom:17,saved:'false'});assert.equal(h.requests.length,0);assert.equal(h.el('parcels').checked,false);
+  const h=harness({zoom:16,saved:'false'});assert.equal(h.requests.length,0);assert.equal(h.el('parcels').checked,false);
 }
 console.log('PASS: parcel zoom gate, remembered toggle, viewport cache, stale responses, request limits, deduplication and retry');

@@ -27,7 +27,7 @@ Open <http://127.0.0.1:8003>. Use a free port or stop the server you started bef
 ## Parcels and buildings while browsing
 
 **Map layers & status → Parcels & buildings** is enabled by default and appears
-at zoom 17 or closer in either workspace. Blue lines show parcels; green lines
+at zoom 16 or closer in either workspace. Blue lines show parcels; green lines
 show building footprints. The toggle is remembered in the browser. Outlines load
 as you pan, independently of CoStar property points and selected-site analysis.
 Selected-site evidence remains visible when the browsing layer is switched off.
