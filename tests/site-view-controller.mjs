@@ -3,11 +3,13 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 
 const source=await readFile(new URL('../public/site-view.js',import.meta.url),'utf8');
-const good=()=>({status:'linked',property:{id:'6067080',lat:34.0369,lon:-118.2531,name:'Demo property',address:'510 E Olympic Blvd',type:'Industrial'},
-  scan:{modelId:'35LT5s1GSfA',title:'Building Exterior & Loading Docks',url:'https://my.matterport.com/show/?m=35LT5s1GSfA'},
-  source:{provider:'CoStar property attachment',association:'Exterior walkthrough linked to property 6067080',attachmentDate:'2023-03-01'},
-  limitations:['Scan capture date is not established.','Intervention coverage and map registration are unverified.']});
-function harness({selectRefused=false}={}) {
+const good=()=>{
+  const scan={modelId:'35LT5s1GSfA',title:'Building Exterior & Loading Docks',url:'https://my.matterport.com/show/?m=35LT5s1GSfA',attachmentDate:'2023-03-01',exteriorHint:true};
+  return {status:'linked',property:{id:'6067080',lat:34.0369,lon:-118.2531,name:'Demo property',address:'510 E Olympic Blvd',type:'Industrial'},
+    scan,scans:[scan],source:{provider:'CoStar property attachment',association:'Property/model association'},
+    limitations:['Scan capture date is not established.','Intervention coverage and map registration are unverified.']};
+};
+function harness({selected=true}={}) {
   const elements=new Map(),requests=[],frames=[],selections=[];
   const document={activeElement:null};
   const element=tag=>({tag,events:{},children:[],attributes:{},disabled:false,hidden:false,open:false,isConnected:true,textContent:'',
@@ -21,10 +23,11 @@ function harness({selectRefused=false}={}) {
   document.createElement=tag=>{const el=element(tag);if(tag==='iframe')frames.push(el);return el;};
   const map={handlers:{},on(name,handler){(this.handlers[name]??=[]).push(handler);},fire(name,event){for(const handler of this.handlers[name]??[])handler(event);}};
   const json=(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject}));
-  const selectProperty=property=>{selections.push(property);if(!selectRefused)map.fire('plannersite',{siteId:'property:'+property.id,workflow:'street'});};
+  const selectProperty=property=>{selections.push(property);map.fire('plannersite',{siteId:'property:'+property.id,property,workflow:'street'});};
   $('site-view-proposed').disabled=true;
   $('open-site-view').focus();
   vm.runInNewContext(source,{$,map,json,selectProperty,planningMode:'street',document,URL,AbortController});
+  if(selected)map.fire('plannersite',{siteId:'property:6067080',property:good().property,workflow:'street'});
   return{$,map,document,requests,frames,selections};
 }
 const flush=()=>new Promise(setImmediate);
@@ -38,7 +41,7 @@ async function open(h,descriptor=good()) {
 {
   const h=harness();assert.equal(h.requests.length,0);assert.equal(h.frames.length,0);
   const frame=await open(h);
-  assert.equal(h.requests[0].url,'/api/site-view');assert.equal(h.selections.length,1);
+  assert.equal(h.requests[0].url,'/api/site-view?propertyId=6067080');assert.equal(h.selections.length,0);
   assert.equal(h.$('site-view-dialog').open,true);assert.equal(h.document.activeElement,h.$('site-view-close'));
   assert.equal(frame.src,good().scan.url);assert.match(frame.title,/510 E Olympic/);
   assert.equal(h.$('site-view-proposed').disabled,true);
@@ -56,8 +59,8 @@ async function open(h,descriptor=good()) {
 // Reject wrong sites/models and URL confusion before selecting any property or
 // embedding external content; a backend error remains retryable.
 for(const change of [
-  d=>{d.property.id='other';},d=>{d.status='unavailable';},d=>{d.property.lat=Infinity;},
-  d=>{d.scan.modelId='wrong';},d=>{d.scan.url='http://my.matterport.com/show/?m=35LT5s1GSfA';},
+  d=>{d.property.id='other';},d=>{d.status='invalid';},d=>{d.property.lat=Infinity;},
+  d=>{d.scan.exteriorHint=false;},d=>{d.scan.modelId='wrong';},d=>{d.scan.url='http://my.matterport.com/show/?m=35LT5s1GSfA';},
   d=>{d.scan.url='https://my.matterport.com.evil.example/show/?m=35LT5s1GSfA';},
   d=>{d.scan.url='https://my.matterport.com@evil.example/show/?m=35LT5s1GSfA';},
   d=>{d.scan.url='https://user@my.matterport.com/show/?m=35LT5s1GSfA';},
@@ -107,15 +110,31 @@ for(const event of [
 ]) {
   const h=harness();const pending=h.$('open-site-view').events.click();h.map.fire(...event);
   assert.equal(h.requests[0].options.signal.aborted,true);h.requests[0].resolve(good());await pending;
-  assert.equal(h.frames.length,0);assert.equal(h.selections.length,0);assert.equal(h.$('open-site-view').disabled,false);
+  assert.equal(h.frames.length,0);assert.equal(h.selections.length,0);assert.equal(h.$('open-site-view').disabled,event[0]==='plannersite');
   assert.doesNotMatch(h.$('site-view-entry-status').textContent,/Checking/,'canceled metadata must not retain a loading message');
   const active=harness(),frame=await open(active);active.map.fire(...event);
   assert.equal(active.$('site-view-dialog').open,false);assert.equal(frame.src,undefined);
   assert.equal(active.$('site-view-proposed').disabled,true);
 }
 {
-  const h=harness({selectRefused:true});await open(h);
-  assert.equal(h.frames.length,0);assert.equal(h.$('site-view-dialog').open,false);
-  assert.match(h.$('site-view-entry-status').textContent,/imagery coverage/);
+  const h=harness({selected:false});await h.$('open-site-view').events.click();
+  assert.equal(h.requests.length,0);assert.equal(h.frames.length,0);
+  assert.equal(h.$('open-site-view').disabled,true);
+
 }
 console.log('PASS: site-view descriptor validation, user initiation, focus/close cleanup, load/retry failures, stale requests, selection guards and permanently disabled Proposed');
+
+// Multiple valid tours stay on the same site; an unsupported site has no fallback.
+{
+  const h=harness();const d=good();
+  d.scans.push({...d.scan,modelId:'abcdefghijk',title:'Courtyard exterior',url:'https://my.matterport.com/show/?m=abcdefghijk',exteriorHint:true});
+  const first=await open(h,d);
+  h.$('site-view-tour-choice').events.change({target:{value:'abcdefghijk'}});
+  assert.equal(first.src,undefined);assert.match(h.frames.at(-1).src,/abcdefghijk/);
+  assert.equal(h.selections.length,0);
+  h.$('site-view-close').events.click();
+  const pending=h.$('open-site-view').events.click();
+  h.requests.at(-1).resolve({status:'unavailable',property:d.property,scans:[],scan:null,message:'No verified tour'});await pending;
+  assert.equal(h.$('site-view-dialog').open,false);
+  assert.match(h.$('site-view-entry-status').textContent,/No verified tour/);
+}

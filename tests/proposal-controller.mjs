@@ -125,37 +125,11 @@ const incompleteValues=$('comparison-table').children[0].children[1].children.ma
 assert.equal(incompleteValues[6],'Not assessed');assert.equal(incompleteValues[7],'Not assessed');
 assert.match($('comparison-revision').textContent,/Revision 6/,'rejected geometry did not consume its revision');
 
-// Water comparisons use storage units and reference boundary, not traffic labels.
-{
-  select('water-site','water');
-  const proposal={...response(1,'water-site','water'),development_fixture:false,status:'conditional',recommendation:'Conditional storage option',
-    geometry:[{geometry:{type:'Polygon',coordinates:[]},properties:{revision:1,layout:'treatment-1',role:'proposed'}},
-      {geometry:{type:'Polygon',coordinates:[]},properties:{revision:1,layout:'treatment-1',role:'contributing'}}],
-    access:{text:'Planner-confirmed access'},overlap:{text:'Mapped structures checked'}};
-  const values={runoff_m3:10,captured_m3:4,excess_m3:6,capacity_m3:5,direct_rain_m3:1,direct_excess_m3:0,footprint_m2:25};
-  const comparison={site_id:'water-site',workflow:'water',revision:1,input_revision:0,input_hash:proposal.input_hash,status:'ready',
-    rainfall:{label:'County event',inches:1.01,basis:'estimated'},results:{baseline:{...values,captured_m3:0,excess_m3:10,capacity_m3:0,footprint_m2:0},'treatment-1':values,'treatment-2':{...values,captured_m3:2,excess_m3:8}},
-    ranking:{recommended:'treatment-1',reason:'Conditional comparison only',verdicts:{'treatment-1':{eligible:true},'treatment-2':{eligible:true}}},
-    checks:{'treatment-1':{building_overlap_m2:0,access_overlap_m2:null,terrain:{status:'ready',median_slope_percent:2,max_slope_percent:5,relief_m:.4,source:{provider:'USGS terrain',publication_date:'2025-08-11'},limitations:['Bare-earth screening only.']}}},confirmations:{confirmation_note:'Planner reviewed connections.'},sources:[{label:'County rainfall',url:'https://example.org/rainfall'}],assumptions:['Storage-only event'],method:'Local volume balance'};
-  const event={siteId:'water-site',workflow:'water',inputRevision:0,revision:1,proposal,comparison};
-  map.fire('plannerresult',event);
-  assert.equal($('water-comparison').hidden,false);assert.equal($('traffic-comparison').hidden,true);
-  assert.equal($('proposal-kind').textContent,'Conditional treatment');
-  assert.match(text($('water-comparison-table')),/No added treatment/);
-  assert.doesNotMatch(text($('water-comparison-table')),/CO₂|delay|vehicle/i);
-  assert.deepEqual(JSON.parse(JSON.stringify(activeLayer().data.features)),proposal.geometry);
-  assert.equal(layers.at(-1).options.style(proposal.geometry[1]).color,'#78dbee');
-  assert.equal($('water-comparison-chart').children.length,2);
-  assert.match(text($('water-comparison-alternatives')),/Median slope 2 %/);
-  assert.match(text($('water-comparison-sources')),/Planner reviewed connections/);
-  assert.match($('water-comparison-chart').children[0].children[1].attributes['aria-label'],/Stored 4 m³ · excess 6 m³/);
-  const waterLayer=layers.at(-1);map.fire('plannerinputs',{inputRevision:1});assert.equal($('water-comparison-stale').hidden,false);
-  map.fire('plannerresult',{...event,revision:2});assert.equal(layers.at(-1),waterLayer,'stale water publication cannot replace geometry');
-  const bad={...event,revision:2,inputRevision:1,comparison:{...comparison,revision:2,input_revision:1,input_hash:'changed'},proposal:{...proposal,revision:2,input_revision:1}};
-  map.fire('plannerresult',bad);assert.equal(layers.at(-1),waterLayer);
-  select();assert.equal($('water-comparison').hidden,true);assert.equal(waterLayer.attached,false);
-}
-console.log('PASS: water storage rendering, conditional labels, chart values, exact geometry roles and stale identity isolation');
+// Retired manual water comparisons cannot publish a layout.
+select('water-site','water');
+map.fire('plannerresult',{siteId:'water-site',workflow:'water',inputRevision:0,revision:1,
+  comparison:{site_id:'water-site',workflow:'water',input_revision:0,revision:1,input_hash:'a'.repeat(64),ranking:{},results:{baseline:{}}}});
+assert.match($('proposal-result-message').textContent,/Only traffic comparisons/);
 
 select('water','water');
 const draft={...response(1,'water','water'),development_fixture:false,status:'draft',

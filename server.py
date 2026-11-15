@@ -6,6 +6,7 @@ import math
 import os
 import re
 import time
+from copy import deepcopy
 from threading import BoundedSemaphore, Lock
 from agent_activity import Activity
 from discovery import load_discovery, discovery_context, traffic_context
@@ -19,7 +20,7 @@ from urllib.request import Request, urlopen
 from hydrology import RAINFALL, WATERSHEDS, rainfall_at, rainfall_contours, watershed_at
 from site_evidence import imagery_evidence
 from site_measurements import validate_inputs
-from stormwater import validate_water_design
+from site_identity import resolve_site
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
@@ -96,21 +97,27 @@ def coverage():
         raise ValueError("Vexcel returned no coverage for Los Angeles.")
     from shapely.geometry import shape
     from shapely.errors import ShapelyError
+    valid_features = []
     for feature in features:
         geometry = feature.get("geometry") if isinstance(feature, dict) else None
         if not isinstance(geometry, dict) or geometry.get("type") not in ("Polygon", "MultiPolygon"):
-            raise ValueError("Vexcel returned incomplete imagery coverage.")
+            continue
         try:
             polygon = shape(geometry)
-        except (ShapelyError, TypeError, ValueError) as error:
-            raise ValueError("Vexcel returned invalid imagery coverage.") from error
+        except (ShapelyError, TypeError, ValueError, KeyError, IndexError, OverflowError):
+            continue
         if polygon.is_empty or not polygon.is_valid or not all(math.isfinite(value) for value in polygon.bounds):
-            raise ValueError("Vexcel returned invalid imagery coverage.")
-    # Only geometry is needed to enforce the chosen pan boundary.
+            continue
+        valid_features.append(feature)
+    if not valid_features:
+        raise ValueError("Vexcel returned no usable imagery coverage.")
+    # A malformed historical collection must not disable other valid coverage.
+    # Exclude it without repairing/expanding source geometry; disclose the gap.
+    excluded = len(features) - len(valid_features)
     _coverage = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "geometry": feature["geometry"], "properties": {}}
-        for feature in features if feature.get("geometry")
-    ], "bounds": LA_BOUNDS}
+        for feature in valid_features
+    ], "bounds": LA_BOUNDS, "status": "partial" if excluded else "ready", "excludedFeatures": excluded}
     _coverage_time = time.time()
     return _coverage
 
@@ -214,6 +221,37 @@ def nearby_frontages(lon, lat, property_id=None, *, radius=110):
             for line in frontage_catalog.get(item["id"], ())]
 
 
+OUTLINE_LOCK = Lock()
+
+
+@lru_cache(maxsize=128)
+def _site_outlines(lon, lat, workflow, period):
+    return imagery_evidence(vexcel_request, LAYERS, lon, lat, workflow, "outlines")
+
+
+def site_outlines(lon, lat, workflow):
+    # Resolution and parallel agent tools reuse the same bounded source request.
+    # Measurements annotate their copy; never mutate the cached source evidence.
+    with OUTLINE_LOCK:
+        return deepcopy(_site_outlines(lon, lat, workflow, int(time.monotonic() // 300)))
+
+
+def site_resolution(lon, lat, workflow, property_id=None):
+    items = property_catalog()[0]
+    radius = 200 if workflow == "street" else 110
+    if property_id is not None and any(
+            p["id"] == property_id and abs(p["lat"] - lat) < .00001 and abs(p["lon"] - lon) < .00001 for p in items):
+        return resolve_site(items, lon, lat, [], property_id=property_id, radius=radius)
+    try:
+        outlines = site_outlines(lon, lat, workflow)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        if property_id is not None:
+            raise ValueError("Property association could not be checked at this location.") from None
+        return {**resolve_site(items, lon, lat, [], radius=radius), "status": "unavailable",
+                "message": "Parcel evidence is unavailable. Nearby properties remain separate choices; this point has not been assigned to one."}
+    return resolve_site(items, lon, lat, outlines, property_id=property_id, radius=radius)
+
+
 def site_coordinates(query):
     lat = float(query.get("lat", [""])[0])
     lon = float(query.get("lon", [""])[0])
@@ -273,7 +311,8 @@ class Handler(BaseHTTPRequestHandler):
             if workflow not in ("street", "water") or not 0 < len(question) <= 1500:
                 raise ValueError("Choose a workflow and enter a question up to 1,500 characters.")
             markings, scenario = validate_inputs(data.get("markings", []), data.get("rainfallScenario"), workflow, lon, lat)
-            water_design = validate_water_design(data.get("waterDesign"), workflow)
+            if data.get("waterDesign") is not None:
+                raise ValueError("The separate placement comparison has been retired. Analyze the site and add optional map constraints instead.")
             selected_discovery = discovery_context(workflow, data.get("discoveryReference"), lon, lat)
             traffic = traffic_context(data.get("discoveryReference"), lon, lat) if workflow == "street" else None
             identity = analysis_identity(data)
@@ -297,12 +336,12 @@ class Handler(BaseHTTPRequestHandler):
 
         def property_context():
             items, details, _ = property_catalog()
-            selected = next((item for item in items if item["id"] == property_id and
-                             abs(item["lat"] - lat) < .00001 and abs(item["lon"] - lon) < .00001), None)
+            selected = site_resolution(lon, lat, workflow, property_id)["property"]
+            selected_id = selected["id"] if selected else None
             radius = 200 if workflow == "street" else 110
-            frontages = nearby_frontages(lon, lat, property_id if selected else None, radius=radius)
+            frontages = nearby_frontages(lon, lat, selected_id, radius=radius)
             nearby = nearby_properties(items, lon, lat, radius) if workflow == "street" else []
-            return (details[property_id] if selected else None), frontages, nearby
+            return (details[selected_id] if selected else None), frontages, nearby
 
         def hydrology_context():
             result = {"unavailable": []}
@@ -342,11 +381,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.close_connection = True
             result = analyze_site(
                 key, os.getenv("GROK_MODEL", "grok-4.7"), question, workflow, markings,
-                lambda group: imagery_evidence(vexcel_request, LAYERS, lon, lat, workflow, group),
+                lambda group: site_outlines(lon, lat, workflow) if group == "outlines" else imagery_evidence(vexcel_request, LAYERS, lon, lat, workflow, group),
                 property_context, hydrology_context,
                 lon=lon, lat=lat, scenario=scenario, activity=activity, discovery=selected_discovery,
                 traffic_context=traffic, analysis_identity=identity, allow_generated_timing=True,
-                ranking_policy="strict-v1", water_design=water_design,
+                ranking_policy="strict-v1",
             )
             if streaming:
                 write_event({"type":"result", "run_id":activity.id, "result":result})
@@ -384,12 +423,24 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, load_discovery(workflow))
             elif path.path == "/api/site-view":
                 from site_view import site_view_descriptor, UNAVAILABLE
+                query = parse_qs(path.query)
+                if set(query) != {"propertyId"} or len(query["propertyId"]) != 1 or not query["propertyId"][0].strip():
+                    self.send_json(400, {"error": "Select a property before opening its existing view."})
+                    return
                 try:
-                    result = site_view_descriptor(os.getenv("COSTAR_KIT_DIR", ""), property_catalog()[0])
+                    result = site_view_descriptor(os.getenv("COSTAR_KIT_DIR", ""), property_catalog()[0], query["propertyId"][0])
                 except (OSError, ValueError, KeyError, TypeError):
                     self.send_json(503, {"error": UNAVAILABLE})
                     return
                 self.send_json(200, result)
+            elif path.path == "/api/site-resolution":
+                query = parse_qs(path.query)
+                lon, lat = site_coordinates(query)
+                workflow = query.get("workflow", [""])[0]
+                if workflow not in ("street", "water"):
+                    self.send_json(400, {"error": "Choose a planning workflow."})
+                    return
+                self.send_json(200, site_resolution(lon, lat, workflow, query.get("propertyId", [None])[0]))
             elif path.path == "/api/proposal-fixture":
                 from proposal import fixture
                 qs = parse_qs(path.query)

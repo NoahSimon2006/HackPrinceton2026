@@ -154,12 +154,8 @@
     }
   }
 
-  function inputsChanged(record, resetWaterConfirmations = []) {
+  function inputsChanged(record) {
     if (activeAnalysis?.record === record) cancelAnalysis();
-    if (record === site?.water && record.waterDesign) {
-      for (const key of resetWaterConfirmations) record.waterDesign[key] = false;
-      if (resetWaterConfirmations.length) showWaterDesign();
-    }
     record.revision = (record.revision ?? 0) + 1;
     if (record.report || record.evidencePending || record.facts?.length) record.stale = true;
     showReview(record);
@@ -172,8 +168,7 @@
     const evidence = record.evidence;
     const list = $("site-evidence-list");
     list.replaceChildren();
-    $("run-site-analysis").disabled = Boolean(record.evidencePending);
-    $("update-water-comparison").disabled = !site || workflow !== "water" || Boolean(record.evidencePending);
+    $("run-site-analysis").disabled = Boolean(record.evidencePending || site.identityPending);
     showReview(record);
     $("site-search-toggle").hidden = !evidence?.search?.length;
     $("site-evidence-note").hidden = !evidence;
@@ -264,9 +259,9 @@
   }
   $("cancel-site-analysis").addEventListener("click", cancelAnalysis);
 
-  async function loadEvidence(event, {compareWater = false} = {}) {
+  async function loadEvidence(event) {
     event.preventDefault();
-    if (!site) return;
+    if (!site || site.identityPending) return;
     const selected = site;
     const mode = workflow;
     const record = selected[mode];
@@ -290,20 +285,6 @@
       }
       rainfallScenario = { inches, source: record.source.trim() };
     }
-    let waterDesign = null;
-    if (mode === "water" && compareWater) {
-      const values = record.waterDesign ?? {};
-      const storage = Number(values.storage_depth_m), coefficient = Number(values.runoff_coefficient);
-      if (!String(values.storage_depth_m ?? "").trim() || !Number.isFinite(storage) || storage <= 0 || storage > 1 ||
-          !String(values.runoff_coefficient ?? "").trim() || !Number.isFinite(coefficient) || coefficient <= 0 || coefficient > 1 ||
-          !String(values.confirmation_note ?? "").trim()) {
-        record.evidenceError = "For a comparison, enter storage depth and runoff coefficient above zero and at most 1, plus the basis for those design inputs.";
-        showReview(record); return;
-      }
-      waterDesign = {storage_depth_m:storage,runoff_coefficient:coefficient,
-        confirmation_note:values.confirmation_note.trim(),
-        ...Object.fromEntries(waterConfirmations.map(([id,key]) => [key, values[key] === true]))};
-    }
     record.evidencePending = true;
     record.proposalRevision = proposalRevision;
     record.evidenceError = "";
@@ -317,7 +298,7 @@
     showEvidence();
     try {
       const result = await streamSiteAnalysis({ lat:selected.center.lat, lon:selected.center.lng,
-        propertyId:selected.propertyId, workflow:mode, question, markings, rainfallScenario, waterDesign,
+        propertyId:selected.propertyId, workflow:mode, question, markings, rainfallScenario,
         siteId:selected.key, inputRevision:revision, proposalRevision,
         discoveryReference:record.discovery?.reference ?? null }, {
         signal:controller.signal,
@@ -413,7 +394,7 @@
       remove.disabled = Boolean(draft);
       remove.addEventListener("click", () => {
         site[workflow].features = site[workflow].features.filter((entry) => entry !== feature);
-        inputsChanged(site[workflow], waterConfirmations.map(([,key]) => key));
+        inputsChanged(site[workflow]);
         showFeatures();
         setStatus(`${label.textContent} removed.`);
       });
@@ -629,23 +610,11 @@
     if (site === selected) showRainfall();
   }
 
-  const waterNumbers = [["water-storage-depth","storage_depth_m"],["water-runoff-coefficient","runoff_coefficient"],["water-confirmation-note","confirmation_note"]];
-  const waterConfirmations = [["water-confirm-surface","surface_confirmed"],["water-confirm-connections","connections_confirmed"],
-    ["water-confirm-access","access_confirmed"],["water-confirm-overflow","overflow_confirmed"]];
-  function showWaterDesign() {
-    $("water-design").hidden = workflow !== "water";
-    $("water-design-fields").disabled = !site;
-    $("update-water-comparison").disabled = !site || Boolean(site?.water.evidencePending);
-    const values = site?.water.waterDesign ?? {};
-    for (const [id,key] of waterNumbers) $(id).value = values[key] ?? "";
-    for (const [id,key] of waterConfirmations) $(id).checked = values[key] === true;
-  }
   function showWorkflow() {
     $("traffic-design-guide").hidden = workflow !== "street";
     $("water-tools").hidden = workflow !== "water";
-    showWaterDesign();
     renderDiscoveryContext(site?.[workflow]?.discovery);
-    $("run-site-analysis").disabled = !site || Boolean(site[workflow].evidencePending);
+    $("run-site-analysis").disabled = !site || Boolean(site.identityPending || site[workflow].evidencePending);
     $("planning-brief").disabled = !site;
     $("analysis-site-hint").hidden = Boolean(site);
     if (!site) { $("activity-list").replaceChildren(); $("activity-count").textContent = ""; $("cancel-site-analysis").hidden = true; $("planning-brief").value = workflows[workflow].brief; return; }
@@ -667,9 +636,11 @@
     cancelAnalysis();
     siteRequest?.abort();
     siteRequest = new AbortController();
-    site = sites.get(key) ?? { center, propertyId: property?.id,
+    site = sites.get(key) ?? { center, propertyId: property?.id, property,
       street: { features: [], brief: workflows.street.brief },
       water: { features: [], brief: workflows.water.brief, depth: "", source: "" } };
+    property = site.property ?? property;
+    site.identityPending = false;
     site.key = key;
     sites.set(key, site);
     setPicking(false);
@@ -678,16 +649,22 @@
     $("site-name").textContent = property?.name ?? "Map location";
     $("site-location").textContent = [property?.address, `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`].filter(Boolean).join(" · ");
     $("site-property").textContent = property?.type ?? "";
+    $("site-resolution-candidates").replaceChildren();
+    $("site-resolution-status").textContent = site.identity?.message ?? (property ? "Selected CoStar property." : "Checking the mapped parcel and nearby properties…");
+    $("retry-site-resolution").hidden = Boolean(property);
     siteLayer.clearLayers();
     L.circleMarker(center, { radius: 8, weight: 2, color: "#fff", fillColor: "#a7e5a3",
       fillOpacity: 1, interactive: false }).addTo(siteLayer);
     showWorkflow();
-    map.fire("plannersite", { siteId: key, center, workflow, inputRevision: site[workflow].revision ?? 0 });
+    map.fire("plannersite", { siteId: key, center, workflow, property, inputRevision: site[workflow].revision ?? 0 });
     setStatus("");
     $("site-card").scrollIntoView({ block: "start" });
 
-    if (!property) return;
-    const selectedSite = site;
+    if (!property) { resolveSelection(site); return; }
+    showPropertyDetails(site, property);
+  }
+
+  function showPropertyDetails(selectedSite, property) {
     const signal = siteRequest.signal;
     json(`/api/property-detail?id=${encodeURIComponent(property.id)}`, { signal }).then((detail) => {
       if (site !== selectedSite || signal.aborted) return;
@@ -704,6 +681,56 @@
       }
     });
   }
+
+  function resolveSelection(selected) {
+    const generation = selected.identityGeneration = (selected.identityGeneration ?? 0) + 1;
+    selected.identityPending = true;
+    showWorkflow();
+    const signal = siteRequest.signal;
+    $("site-resolution-status").textContent = "Checking the mapped parcel and nearby properties…";
+    $("retry-site-resolution").hidden = true;
+    const query = new URLSearchParams({lat:selected.center.lat, lon:selected.center.lng, workflow});
+    json(`/api/site-resolution?${query}`, {signal}).then(value => {
+      if (site !== selected || signal.aborted || generation !== selected.identityGeneration) return;
+      if (!["matched", "ambiguous", "unmatched", "unavailable"].includes(value?.status)) throw new Error("Invalid property resolution.");
+      const property = value.status === "matched" ? value.property : null;
+      if (property && (typeof property.id !== "string" || !property.id || !Number.isFinite(property.lat) || !Number.isFinite(property.lon))) throw new Error("Invalid matched property.");
+      if (selected.propertyId !== property?.id) {
+        inputsChanged(selected[workflow]);
+        const other = selected[workflow === "water" ? "street" : "water"];
+        other.revision = (other.revision ?? 0) + 1;
+        if (other.facts?.length || other.report) other.stale = true;
+      }
+      selected.propertyId = property?.id;
+      selected.property = property;
+      selected.identity = value;
+      $("site-name").textContent = property?.name ?? "Map location";
+      $("site-location").textContent = [property?.address, `${selected.center.lat.toFixed(5)}, ${selected.center.lng.toFixed(5)}`].filter(Boolean).join(" · ");
+      $("site-resolution-status").textContent = value.message;
+      $("site-resolution-candidates").replaceChildren();
+      for (const candidate of value.candidates ?? []) {
+        const button = document.createElement("button"); button.type = "button";
+        button.textContent = `Use ${candidate.name} · ${candidate.address}`;
+        button.addEventListener("click", () => selectProperty(candidate));
+        $("site-resolution-candidates").append(button);
+      }
+      if (property) showPropertyDetails(selected, property);
+      else $("site-property").textContent = "CoStar property unassigned";
+      map.fire("planneridentity", {siteId:selected.key, property, workflow});
+      $("retry-site-resolution").hidden = value.status !== "unavailable";
+    }).catch(error => {
+      if (site !== selected || signal.aborted || generation !== selected.identityGeneration) return;
+      $("site-resolution-status").textContent = "Property matching is unavailable. You can still investigate this map point or select a property through search.";
+      $("retry-site-resolution").hidden = false;
+    }).finally(() => {
+      if (generation !== selected.identityGeneration) return;
+      selected.identityPending = false;
+      if (site === selected && !signal.aborted) showWorkflow();
+    });
+  }
+  $("retry-site-resolution").addEventListener("click", () => {
+    if (site && !site.identityPending) resolveSelection(site);
+  });
 
   $("pick-site").addEventListener("click", () => {
     finishDrawing();
@@ -776,7 +803,7 @@
       : selected.reference?.layer === "turning"
         ? "Compare at least two physical lane-reallocation layouts using this sourced historical turning count and measured site evidence. Preserve access, disclose missing inputs and simulation assumptions, and recommend a layout only if the comparison supports it. Do not present historical demand as current traffic."
         : "Investigate the selected historical count with current site evidence. Identify the measurements needed before evaluating a physical redesign. Do not extrapolate current demand or claim emissions benefits.";
-    inputsChanged(site[workflow], waterConfirmations.map(([,key]) => key));
+    inputsChanged(site[workflow]);
     $("planning-brief").value = site[workflow].brief;
     renderDiscoveryContext(selected);
     setStatus("Discovery evidence added to this site's brief. Analyze when ready.");
@@ -798,7 +825,7 @@
       workflow = mode;
       overlays.addTo(map);
       showWorkflow();
-      map.fire("plannersite", site ? { siteId: site.key, center: site.center, workflow, inputRevision: site[workflow].revision ?? 0 } : { workflow });
+      map.fire("plannersite", site ? { siteId: site.key, center: site.center, workflow, property:site.property, inputRevision: site[workflow].revision ?? 0 } : { workflow });
       setStatus(site ? "" : "Search for a property or pick any covered location.");
       if (site) $("site-card").scrollIntoView({ block: "start" });
     } else {
@@ -849,7 +876,7 @@
     }
     if (draft.feature) draft.feature.points = draft.points;
     else site[workflow].features.push({ kind: draft.kind, points: draft.points });
-    inputsChanged(site[workflow], waterConfirmations.map(([,key]) => key));
+    inputsChanged(site[workflow]);
     const label = featureTypes[draft.kind].label;
     finishDrawing();
     setStatus(`${label} saved.`);
@@ -861,20 +888,5 @@
       inputsChanged(site.water);
     });
   }
-  for (const [id,key] of [...waterNumbers,...waterConfirmations]) {
-    $(id).addEventListener(waterConfirmations.some(([name]) => name === id) ? "change" : "input", ({target}) => {
-      if (!site || workflow !== "water") return;
-      const values = site.water.waterDesign ??= {};
-      values[key] = waterConfirmations.some(([name]) => name === id) ? target.checked : target.value;
-      const reset = key === "runoff_coefficient" ? ["surface_confirmed", "overflow_confirmed"]
-        : key === "storage_depth_m" ? ["overflow_confirmed"]
-        : key === "confirmation_note" ? waterConfirmations.map(([,field]) => field) : [];
-      inputsChanged(site.water, reset);
-    });
-  }
-  for (const [id,kind] of [["water-mark-drainage","drainage"],["water-mark-treatment","treatment"],["water-mark-access","access"]]) {
-    $(id).addEventListener("click", () => { if (site && workflow === "water") { $("site-tools").open = true; $("manual-markings").open = true; startDrawing(kind); } });
-  }
-  $("update-water-comparison").addEventListener("click", event => loadEvidence(event, {compareWater:true}));
   $("planning-brief").addEventListener("input", ({ target }) => { site[workflow].brief = target.value; inputsChanged(site[workflow]); });
 })();

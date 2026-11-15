@@ -20,6 +20,44 @@ class ParcelQueryTest(unittest.TestCase):
 
 
 class DetectionParsingTest(unittest.TestCase):
+    def test_mixed_capture_years_do_not_become_overlapping_current_parcels(self):
+        from site_evidence import recent_parcel_collections
+        features = [{'properties': {'request-information.inside-parcel': True,
+                     'metadata.collection': collection, 'metadata.ortho-date-estimate': date}}
+                    for collection, date in [('old', '2025-01-01'), ('new', '2026-07-03'), ('tie', '2026-07-03')]]
+        result = recent_parcel_collections({'features': features})
+        self.assertEqual([f['properties']['metadata.collection'] for f in result['features']], ['new', 'tie'])
+        self.assertIn('older versions', result['collectionSelection'])
+
+    def test_point_miss_uses_one_bounded_neighborhood_query_and_metadata(self):
+        from json import dumps
+        calls = []
+        geometry = {'type':'Polygon','coordinates':[[[-118.25,34.05],[-118.2499,34.05],[-118.2499,34.0501],[-118.25,34.05]]]}
+        def request(path, params, *args, **kwargs):
+            calls.append(params)
+            return dumps({'features':[] if len(calls) == 1 else [{'geometry':geometry,'properties':{
+                'structures':None,'metadata.ortho-date-estimate':'2026-07-03T18:50:14','metadata.collection':'source','metadata.gsd':.063}}]})
+        result = imagery_evidence(request, 'urban', -118.25, 34.05, 'water', 'outlines')
+        self.assertEqual([p['buffer-meter'] for p in calls], [0, 75])
+        self.assertTrue(all(p['page-size'] == 250 for p in calls))
+        self.assertIn('capture-date', calls[0]['include'])
+        self.assertEqual(result[0]['properties']['date'], '2026-07-03')
+        self.assertFalse(result[0]['properties']['buildingCoverage'])
+
+    def test_provider_failure_is_not_retried_as_an_empty_point(self):
+        from unittest.mock import Mock
+        request = Mock(side_effect=ValueError('Vexcel rejected the key or imagery access.'))
+        with self.assertRaises(ValueError):
+            imagery_evidence(request, 'urban', -118.25, 34.05, 'water', 'outlines')
+        self.assertEqual(request.call_count, 1)
+
+    def test_capped_parcel_response_cannot_claim_complete_coverage(self):
+        from json import dumps
+        def request(*args, **kwargs):
+            return dumps({'features':[{'properties':{'request-information.inside-parcel':True}}] * 250})
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            imagery_evidence(request, 'urban', -118.25, 34.05, 'water', 'outlines')
+
     def test_source_features_are_not_truncated_before_conflict_checks(self):
         polygon = {'type':'Polygon','coordinates':[[[-118.25,34.05],[-118.2499,34.05],[-118.2499,34.0501],[-118.25,34.05]]]}
         structures = [{'footprint.wkt':polygon} for _ in range(15)]

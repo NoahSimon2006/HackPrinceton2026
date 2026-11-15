@@ -132,14 +132,18 @@ def measure_outlines(features, lon, lat, *, nearby=False):
             if ids:
                 facts.append(fact(identifier, f"Returned nearby {label.lower()} outlines", len(ids), "outlines",
                                   origin, note="Provider coverage is not a parcel survey or proof of ownership.", feature_ids=ids))
-    parcels = [(f, g) for f, g in valid if f["properties"]["label"] == "Parcel boundary" and g.covers(point)]
+    parcels = list({g.normalize().wkb: (f, g) for f, g in valid
+                    if f["properties"]["label"] == "Parcel boundary" and g.covers(point)}.values())
     if not parcels:
         return facts, warnings + (["No valid parcel polygon containing the selected point. Parcel-relative areas unavailable."] if not nearby else [])
+    if len(parcels) > 1:
+        return facts, warnings + ["Overlapping mapped parcels contain this point. Select an unambiguous parcel before using parcel-relative areas."]
     selected, parcel = parcels[0]
     props = selected["properties"]
     origin = source("Vexcel parcel extraction", f"{VEXCEL}/property/extract", date=props.get("date"), collection=props.get("collection"))
     parcel_id = props["evidenceId"]
-    facts.append(fact("parcel-area", "Selected parcel area", parcel.area, "m²", origin, feature_ids=[parcel_id]))
+    facts.append(fact("parcel-area", "Selected parcel area", parcel.area, "m²", origin,
+                      note=props.get("collectionSelection") or "", feature_ids=[parcel_id]))
     clipped, ids = [], []
     for f, g in valid:
         if f["properties"]["label"] != "Building footprint":

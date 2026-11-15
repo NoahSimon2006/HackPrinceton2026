@@ -56,9 +56,22 @@ class ServerDataTest(unittest.TestCase):
         h.send.assert_called_once();h.send_json.assert_not_called()
 
     def test_coverage_rejects_missing_or_nonpolygon_geometry(self):
-        for geometry in (None,{'type':'Point','coordinates':[-118.25,34.05]}, {'type':'Polygon','coordinates':[]}):
+        crossed = {'type':'Polygon','coordinates':[[[-118.3,34],[-118.2,34.1],[-118.3,34.1],[-118.2,34],[-118.3,34]]]}
+        for geometry in (None,{'type':'Point','coordinates':[-118.25,34.05]}, {'type':'Polygon','coordinates':[]},{'type':'Polygon'},crossed):
             with patch('server._coverage',None),patch('server.vexcel_request',return_value=json.dumps({'features':[{'geometry':geometry}]}).encode()):
                 with self.assertRaises(ValueError):coverage()
+
+    def test_malformed_collection_does_not_remove_other_source_coverage(self):
+        valid = {'type':'Polygon','coordinates':[[[-118.3,34],[-118.2,34],[-118.2,34.1],[-118.3,34.1],[-118.3,34]]]}
+        crossed = {'type':'Polygon','coordinates':[[[-118.5,34],[-118.4,34.1],[-118.5,34.1],[-118.4,34],[-118.5,34]]]}
+        payload = {'features':[{'geometry':crossed},{'geometry':valid},None,{'geometry':{'type':'Polygon'}}]}
+        with patch('server._coverage',None),patch('server.vexcel_request',return_value=json.dumps(payload).encode()) as request:
+            result = coverage()
+            self.assertEqual([f['geometry'] for f in result['features']],[valid])
+            self.assertEqual(result['status'],'partial')
+            self.assertEqual(result['excludedFeatures'],3)
+            self.assertEqual(coverage(),result)
+            request.assert_called_once()
 
 
 if __name__=='__main__':unittest.main()

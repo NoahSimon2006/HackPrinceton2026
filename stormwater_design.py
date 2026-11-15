@@ -31,11 +31,15 @@ def draft_rain_garden(*, lon, lat, evidence, markings, rainfall, scenario, stora
     """Return a local draft or one concrete gap, plus facts safe to cite in a review."""
     point = Point(*PROJECT.transform(lon, lat))
     outlines = [(f["properties"], projected(f["geometry"])) for f in evidence["outlines"]]
-    selected = next(((props, g) for props, g in outlines
-                     if props["label"] == "Parcel boundary" and g.covers(point)), None)
-    if selected is None:
+    parcels = {g.normalize().wkb: (props, g) for props, g in outlines
+               if props["label"] == "Parcel boundary" and g.covers(point)}
+    if not parcels:
         return None, "Which nearby parcel or property should host the garden?", []
-    parcel_props, parcel = selected
+    if len(parcels) != 1:
+        return None, "Which of the overlapping mapped parcels should host the garden? Select a point within one parcel.", []
+    parcel_props, parcel = next(iter(parcels.values()))
+    if parcel_props.get("buildingCoverage") is False:
+        return None, "Can you select a parcel with complete mapped building coverage so the draft can avoid structures?", []
     buildings = [(p, g) for p, g in outlines if p["label"] == "Building footprint" and g.intersects(parcel)]
     if not buildings:
         return None, "Can you select a parcel with mapped buildings so the draft can avoid structures?", []

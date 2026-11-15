@@ -2,9 +2,11 @@
 
 A local planning workspace for Los Angeles, using a Python server, bundled Leaflet, Vexcel aerial imagery and CoStar site evidence. **Traffic & Emissions** opens with dated historical traffic counts. **Stormwater** opens with terrain screening around Kipling Apartments, with optional county rainfall and drainage-context layers.
 
-**Stormwater starts with a map draft.** Select a supported site and ask the agent for a rain garden. The draft uses mapped outlines and avoids known access constraints. It labels ponding depth as a design assumption and leaves external runoff capture unassessed until a contributing area and coefficient support a what-if estimate. **Compare your own placements** opens the optional [Checkpoint 5 storage comparison](docs/CHECKPOINT_5.md).
+**Current work: [Checkpoint 1 of the revised plan](docs/CHECKPOINT_1_WORKFLOW.md), complete for review.** Stormwater now has one analysis path. Map selections can resolve a unique CoStar property through Vexcel parcels, and optional exterior tours follow the selected property. The current suite passes 138 Python tests and six JavaScript test files. Live zero-drawing draft and keep-clear revision checks passed. Both TomTom and HERE have verified source access; map integration remains Checkpoint 2A. Read the [handoff](docs/CONVERSATION_HANDOFF.md) and [approved plan](docs/NEXT_IMPLEMENTATION_PLAN.md).
 
-**[Checkpoint 6 core release acceptance remains blocked](docs/CHECKPOINT_6.md).** That report records the earlier build, before Checkpoint 5 implementation. The new stormwater implementation needs a confirmed real-site design review before release acceptance. Traffic comparisons use official historical turning counts, approved generated signal timing and strict total-CO₂/throughput/regression gates; a supported successful design demonstration and final narrow-screen checks remain pending. The archived assumed-demand emissions layer remains disabled. See [Checkpoint 4](docs/CHECKPOINT_4.md) for the traffic method and source limits. The [Checkpoint 7 existing-site walkthrough](docs/CHECKPOINT_7.md) remains available; Proposed 3D is still disabled until design alignment is verified.
+**Stormwater starts with a map draft.** Select a supported site and ask for a rain garden. The draft uses mapped outlines and avoids known constraints. It labels ponding depth as an assumption and leaves runoff capture unassessed until contributing area and coefficient support a scenario. Add optional keep-clear markings or revise the brief, then analyze again. The old manual placement-comparison workflow has been retired.
+
+**Exterior context is optional.** Under Site evidence & adjustments, check tours linked to the selected property. Interior-only, unspecified and ambiguous links are excluded. No tour changes the active property, and no scan is required for a 2D draft. Proposed 3D is still future work. Historical [release acceptance](docs/CHECKPOINT_6.md), [traffic method](docs/CHECKPOINT_4.md) and [viewer implementation](docs/CHECKPOINT_7.md) reports describe earlier builds, not the current checkpoint numbering. A supported eligible traffic winner and final release acceptance remain open.
 
 Earlier review records: [Checkpoints 0–1](docs/CHECKPOINTS_0_1.md), [Checkpoint 2](docs/CHECKPOINT_2.md).
 
@@ -16,15 +18,15 @@ Keep `VEXCEL_API_KEY`, `GROK_API_KEY` and the absolute `COSTAR_KIT_DIR` in the i
 
 ```sh
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-PORT=8001 .venv/bin/python server.py
+.venv/bin/python -m pip install -r requirements.txt -r requirements-discovery.txt -r requirements-sim.txt
+PORT=8003 .venv/bin/python server.py
 ```
 
-Open <http://127.0.0.1:8001>. After backend changes, restart the Python server and reload the page. Local JavaScript/CSS revalidate on reload. Vexcel imagery and optional Esri labels require network access. Discovery reads local prebuilt source snapshots; missing snapshots produce an explicit unavailable state, never substitute data. A Grok key is needed only when **Analyze site** is selected. Traffic comparisons also require `requirements-sim.txt`, the local OSM network, verified turning-sheet discovery data, and the official CARB export described in the Checkpoint 4 report.
+Open <http://127.0.0.1:8003>. Use a free port or stop the server you started before restarting. After backend changes, restart Python and reload the page. Local JavaScript/CSS revalidate on reload. Vexcel imagery and optional Esri labels require network access. Discovery reads local prebuilt source snapshots; missing snapshots produce an explicit unavailable state, never substitute data. A Grok key is needed only when **Analyze site** is selected. Traffic comparisons also require the local OSM network, verified turning-sheet discovery data, and the original official CARB export at `sim/sources/emfac2025-la-2026.csv`. The new readiness report records the restored inputs, hashes and remaining source gaps.
 
 ## Build discovery data
 
-The optional comparison needs `requirements-discovery.txt` and the source-validated cached Kipling terrain raster to publish a conditional preference. The base map and draft workflow can run without the terrain dependencies.
+Terrain discovery needs `requirements-discovery.txt` and its source-validated cached raster. The base map and draft workflow can run independently of the broader terrain build.
 
 The existing workspace has the source snapshots under ignored `private/discovery/` and the OSM network under ignored `sim/`. To rebuild from cached sources:
 
@@ -60,9 +62,8 @@ The network builder keeps original OSM identifiers, checks the converted connect
 4. Choose **Analyze site** to run one lead Deep Agent with concurrent site-evidence and domain specialists. Expand **Agent activity** to follow actual tool results and inspect cited facts. Changing sites/modes cancels the followed run; a changed discovery selection also cancels the old analysis, including when two features share coordinates.
 5. Under **Site evidence & adjustments**, inspect returned outlines, detections, frontages and locally measured facts. Drawings and manually edited rainfall remain distinct from source values. They do not constitute verified drainage, current traffic, a physical proposal or a benefit calculation. Editing inputs marks prior results stale.
 6. For keyboard site selection, focus the map, pan with arrow keys, then choose **Use map center as site**. Under **Adjust or add map markings**, add points at the map center or edit each point's labeled coordinates, then save the marking using the map controls. Invalid or uncovered points cannot be saved.
-7. For the approved exterior demo, choose **Open existing view** under **Exterior walkthrough · 510 E Olympic Blvd**, then press the tour's Play control. Opening selects that property on the map. The existing Matterport tour loads on demand and needs network access, but no Grok call or SDK key. Close returns to the map; **Retry viewer** and **Open Matterport in a new tab** are available if the embedded provider fails. **Proposed** is disabled because there is no supported design registered to this scan.
-
-8. In Stormwater, select the **Normandie** property and choose **Analyze site** to screen a draft. Revise it by describing an access constraint or marking a keep-clear area. For an optional detailed comparison at **Kipling Apartments**, open **Compare your own placements**, mark the contributing surface and two or three treatments, and supply the depth, coefficient, input basis and confirmations. **Update comparison** runs fresh source analysis and an event storage balance. Changing the rainfall or markings makes previous results stale. Green shows the conditional treatment footprint and cyan shows the contributing surface. Both workflows reserve capacity for direct rainfall before applying runoff from outside the treatment.
+7. Under **Site evidence & adjustments → Optional exterior view**, choose **Check exterior view**. Only tours associated with the selected property and described as relevant exterior/site context can open. Multiple eligible tours have a selector. No match leaves the map usable; no substitute warehouse opens. Matterport loads only on request, with retry/close controls. **Proposed** remains disabled.
+8. In Stormwater, select **Normandie — 229 S Normandie Ave** and choose **Analyze site** with no drawings. Revise it through the brief or mark a keep-clear area under **Adjust or add map markings**. Optional runoff/treatment markings and rainfall scenarios remain available. Storage reserves room for direct rain before screening externally supplied runoff. A tour is not required.
 
 All site work is held for the current page session. The labeled **Development preview** uses test geometry. At verified turning-count sites, expand a traffic alternative and choose **Show footprint on map** to inspect the tested layout and its verdict. The optional stormwater terrain screening currently uses the cached Kipling 1 m USGS raster.
 

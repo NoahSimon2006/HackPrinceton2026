@@ -264,35 +264,3 @@ def from_traffic_comparison(comparison: dict, layout_name: str, *, site_id: str,
                                   approach=params["approach"], lanes_removed=params["lanes_removed"], new_use=params["new_use"]),
                     geometry=geometry, existing_geometry_ids=[], proposed_geometry_ids=[geometry[0].id], metrics=metrics,
                     assumptions=list(comparison["assumptions"]), access=access, overlap=overlap, recommendation=text)
-
-
-def from_water_comparison(comparison: dict, layout_name: str, *, site_id: str, revision: int,
-                          input_revision: int) -> Proposal:
-    """Publish only the locally ranked conditional storage screening alternative."""
-    if (comparison.get('status') != 'ready' or comparison['ranking']['recommended'] != layout_name or
-            not comparison['ranking']['verdicts'].get(layout_name, {}).get('eligible')):
-        raise ValueError('Only an eligible, ranked stormwater treatment can be published.')
-    fingerprint = comparison_fingerprint(comparison, site_id=site_id, revision=revision, input_revision=input_revision)
-    base, result = comparison['results']['baseline'], comparison['results'][layout_name]
-    common = dict(revision=revision, input_hash=fingerprint)
-    definitions = [('runoff_m3', 'm³'), ('captured_m3', 'm³'), ('excess_m3', 'm³'),
-                   ('capacity_m3', 'm³'), ('direct_rain_m3', 'm³'), ('direct_excess_m3', 'm³'), ('footprint_m2', 'm²')]
-    metrics = [Metric(id='footprint_area' if key == 'footprint_m2' else key, unit=unit, baseline=base[key], proposed=result[key], status='calculated',
-                      method=comparison['method'], **common) for key, unit in definitions]
-    treatment_id, drainage_id = f'{layout_name}-footprint', 'contributing-surface'
-    geometry = [GeometryFeature(id=treatment_id, geometry=comparison['geometry'][layout_name]['geometry'],
-                                properties={'revision': revision, 'role': 'proposed', 'layout': layout_name}),
-                GeometryFeature(id=drainage_id, geometry=comparison['contributing_geometry']['geometry'],
-                                properties={'revision': revision, 'role': 'contributing', 'layout': layout_name})]
-    return Proposal(site_id=site_id, workflow='water', revision=revision, input_revision=input_revision,
-                    input_hash=fingerprint, development_fixture=False, status="conditional",
-                    design=Design(kind='bioretention', storage_depth_m=comparison['design']['storage_depth_m']),
-                    evidence=[EvidenceReference(id='vexcel-outlines', source='Vexcel parcel and mapped building outlines', classification='observed'),
-                              EvidenceReference(id='costar-context', source='Selected CoStar property use and reported operations', classification='reported'),
-                              EvidenceReference(id='planner-water-inputs', source='Planner drawings, depth, coefficient and site confirmations', classification='user_provided'),
-                              EvidenceReference(id='water-rainfall', source=comparison['rainfall']['label'], classification='user_provided' if comparison['rainfall']['basis']=='user_provided' else 'modeled')],
-                    geometry=geometry, existing_geometry_ids=[drainage_id], proposed_geometry_ids=[treatment_id], metrics=metrics,
-                    assumptions=comparison['assumptions'],
-                    access=Finding(status='checked', text='Planner confirmed access preservation; drawn keep-clear and available CoStar frontage checks found no conflict. Missing frontage geometry remains unassessed, and physical access is not independently verified.', evidence_ids=['planner-water-inputs','costar-context']),
-                    overlap=Finding(status='checked', text='Treatment lies within the mapped parcel, outside mapped buildings, the external contributing area and drawn keep-clear areas.', evidence_ids=['vexcel-outlines','planner-water-inputs']),
-                    recommendation='Conditional screening preference: greatest external runoff stored, then smallest footprint. Confirm grades, soils, utilities, setbacks, drainage and overflow before detailed design. This is not construction feasibility or permanent runoff removal.')

@@ -28,8 +28,14 @@ function harness(mode = 'water', options = {}) {
   const map = { handlers: {}, events: [], center:{lat:34.05,lng:-118.25},createPane() {}, getPane: () => ({ style: {} }),
     on(name, handler) { this.handlers[name] = handler; },
     fire(name, event) { this.events.push({name,event}); this.handlers[name]?.(event); }, setView(point) {this.center=Array.isArray(point)?{lat:point[0],lng:point[1]}:point;},getCenter(){return this.center;}, closePopup() {}, getZoom: () => 17 };
-  const requests = [];
-  const json = (url, options = {}) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }));
+  const requests = [], identityRequests = [];
+  const json = (url, requestOptions = {}) => {
+    if (url.startsWith('/api/site-resolution')) {
+      if (!options.captureIdentity) return Promise.resolve({status:'unmatched',property:null,candidates:[],message:'No unique property match.'});
+      return new Promise((resolve,reject)=>identityRequests.push({url,options:requestOptions,resolve,reject}));
+    }
+    return new Promise((resolve, reject) => requests.push({ url, options:requestOptions, resolve, reject }));
+  };
   vm.runInNewContext(source, { $, map, json, planningMode: mode, coverage: options.coverage ?? null,
     insideCoverage: options.insideCoverage ?? (()=>true),
     cancelSiteAnalysis: () => {},
@@ -45,7 +51,7 @@ function harness(mode = 'water', options = {}) {
     $('planner').hidden = !visible;
     map.fire('plannerworkspace', { mode, visible });
   }
-  return { $, map, layers, requests, select, workspace };
+  return { $, map, layers, requests, identityRequests, select, workspace };
 }
 const watershed = (name) => ({ type: 'FeatureCollection', features: [{ type: 'Feature',
   properties: { WATERSHED: name, NAME: ' ' }, geometry: { type: 'Polygon', coordinates: [] } }] });
@@ -56,7 +62,7 @@ const flush = () => new Promise(setImmediate);
 // user input preservation, layer visibility and per-site caching.
 {
   const h = harness();
-  h.select(34.051, -118.2521);
+  h.select(34.051, -118.2521);await flush();
   assert.equal(h.requests.length, 2, 'selecting a water site loads both sources without an agent');
   h.requests[1].resolve(watershed('lariver'));
   h.requests[0].reject(new Error('Service offline'));
@@ -92,10 +98,10 @@ const flush = () => new Promise(setImmediate);
 // Rapid site changes cannot leak an old watershed or depth into the new site.
 {
   const h = harness('street');
-  h.select(34.05, -118.25);
+  h.select(34.05, -118.25);await flush();
   assert.equal(h.requests.length, 0);
   h.workspace('water');
-  h.select(34.06, -118.30);
+  h.select(34.06, -118.30);await flush();
   assert.equal(h.requests.length, 4);
   h.requests[2].resolve({ estimate: null });
   h.requests[3].resolve({ type: 'FeatureCollection', features: [] });
@@ -108,7 +114,7 @@ const flush = () => new Promise(setImmediate);
   assert.equal(h.$('watershed-legend').hidden, true);
   assert.equal(h.$('view-watershed').disabled, true);
   assert.match(h.$('rain-result').textContent, /No reliable contour estimate/);
-  h.select(34.05, -118.25);
+  h.select(34.05, -118.25);await flush();
   assert.equal(h.$('watershed-name').textContent, 'Ballona');
   assert.equal(h.$('rain-depth').value, .99);
   assert.equal(h.requests.length, 4);
@@ -117,7 +123,7 @@ const flush = () => new Promise(setImmediate);
 // marks an in-flight result stale when the user changes its inputs.
 {
   const h = harness();
-  h.select(34.05, -118.25);
+  h.select(34.05, -118.25);await flush();
   h.requests[0].resolve(rainfall);
   h.requests[1].resolve(watershed('ballona'));
   await flush();
@@ -143,12 +149,12 @@ console.log('PASS: hydrology, source failures/retry, manual inputs, workspace vi
 // Cancel/supersede a run: late activity and results cannot repaint another site.
 {
   const h=harness('street');
-  h.select(34.05,-118.25);
+  h.select(34.05,-118.25);await flush();
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
   const first=h.requests[0];
   first.options.onEvent({specialist:'site-evidence',status:'started',summary:'Reading source.',fact_ids:[]});
   assert.equal(h.$('activity-count').textContent,'· 1');
-  h.select(34.06,-118.26);
+  h.select(34.06,-118.26);await flush();
   assert.equal(first.options.signal.aborted,true);
   first.options.onEvent({specialist:'lead',status:'completed',summary:'OLD RESULT',fact_ids:[]});
   first.resolve({report:{findings:[],recommendations:[],questions:['OLD RESULT']},facts:[]});
@@ -172,7 +178,7 @@ console.log('PASS: canceled and superseded activity cannot repaint another site'
     source:{label:'LADOT',url:'https://example.org/source',retrieved_at:'2026-11-14'},
     layer:{unit:'vehicles reported',period:'Historical',method:'No scaling',limitations:'No current demand'},
     feature:{properties:{label:'Source intersection',center:[-118.25,34.05],value:18102,period:'2014-01-16'}}};
-  h.map.fire('discoveryselect',selection);
+  h.map.fire('discoveryselect',selection);await flush();
   assert.equal(h.requests.length,0);
   assert.equal(h.$('discovery-context').hidden,false);
   assert.match(h.$('discovery-feature-value').textContent,/18,102/);
@@ -196,7 +202,7 @@ console.log('PASS: discovery seeds a dated site brief and submits a reference wi
     source:{label:'LADOT',url:'https://example.org/source',retrieved_at:'2026-11-14'},
     layer:{unit:'vehicles reported',period:'Historical',method:'Verified count',limitations:'Not current demand'},
     feature:{properties:{label:'Counted intersection',center:[-118.25,34.05],value:4000,period:'2011-11-08'}}};
-  h.map.fire('discoveryselect',selection);
+  h.map.fire('discoveryselect',selection);await flush();
   assert.match(h.$('planning-brief').value,/at least two physical/);
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
   const body=JSON.parse(h.requests[0].options.body);
@@ -209,7 +215,7 @@ console.log('PASS: discovery seeds a dated site brief and submits a reference wi
   assert.equal(published[0].event.revision,1);
   const repeated=h.$('site-analysis').events.submit({preventDefault(){}});
   assert.equal(JSON.parse(h.requests[1].options.body).proposalRevision,2);
-  h.select(34.06,-118.26);h.requests[1].resolve({report:null,facts:[],proposal:{revision:2},comparison:{revision:2}});await repeated;
+  h.select(34.06,-118.26);await flush();h.requests[1].resolve({report:null,facts:[],proposal:{revision:2},comparison:{revision:2}});await repeated;
   assert.equal(h.map.events.filter(e=>e.name==='plannerresult').length,1,'superseded site analysis must not emit a proposal');
 }
 console.log('PASS: turning-count brief, proposal identity, monotonic revisions and suppressed stale/superseded publication');
@@ -217,7 +223,7 @@ console.log('PASS: turning-count brief, proposal identity, monotonic revisions a
 // Re-selecting the active workspace is a no-op: it must not erase a published
 // proposal through a redundant plannersite event or cancel the active request.
 {
-  const h=harness('street');h.select(34.05,-118.25);
+  const h=harness('street');h.select(34.05,-118.25);await flush();
   const before=h.map.events.filter(e=>e.name==='plannersite').length;
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
   h.workspace('street');
@@ -232,9 +238,9 @@ console.log('PASS: turning-count brief, proposal identity, monotonic revisions a
 // and send the edited geometry only to the existing local analysis endpoint.
 {
   const h=harness('street',{coverage:{},insideCoverage:p=>p.lng<=-118.249});
-  h.$('use-map-center').events.click();
-  assert.equal(h.map.events.at(-1).name,'plannersite');
-  assert.equal(h.map.events.at(-1).event.siteId,'34.050000,-118.250000');
+  h.$('use-map-center').events.click();await flush();
+  assert.equal(h.map.events.filter(e=>e.name==='plannersite').at(-1).name,'plannersite');
+  assert.equal(h.map.events.filter(e=>e.name==='plannersite').at(-1).event.siteId,'34.050000,-118.250000');
   h.$('mark-actions').children[1].events.click();
   assert.equal(h.$('keyboard-marking-editor').hidden,false);
   h.$('draw-add-center').events.click();
@@ -272,8 +278,8 @@ console.log('PASS: turning-count brief, proposal identity, monotonic revisions a
   assert.deepEqual(secondBody.markings[0].geometry.coordinates[0][0],[-118.25,34.04995]);
   h.requests[1].resolve({report:null,facts:[]});await second;
   const before=h.map.events.filter(e=>e.name==='plannersite').length;
-  h.map.center={lat:Infinity,lng:-118.25};h.$('use-map-center').events.click();
-  h.map.center={lat:34.05,lng:-118.248};h.$('use-map-center').events.click();
+  h.map.center={lat:Infinity,lng:-118.25};h.$('use-map-center').events.click();await flush();
+  h.map.center={lat:34.05,lng:-118.248};h.$('use-map-center').events.click();await flush();
   assert.equal(h.map.events.filter(e=>e.name==='plannersite').length,before,'invalid/uncovered centers cannot select a site');
 }
 console.log('PASS: active-workspace persistence and keyboard site/constraint revisions with coordinate validation');
@@ -281,7 +287,7 @@ console.log('PASS: active-workspace persistence and keyboard site/constraint rev
 // A spherical distance just under 1 km may already be outside the server's
 // projected buffer. The UI keeps a margin rather than saving a doomed request.
 {
-  const h=harness('street');h.select(34.05,-118.25);
+  const h=harness('street');h.select(34.05,-118.25);await flush();
   h.$('mark-actions').children[1].events.click();h.$('draw-add-center').events.click();
   const longitude=h.$('draw-coordinates').children[0].children[2].children[0];
   longitude.value='-118.23917';longitude.events.input();
@@ -291,77 +297,47 @@ console.log('PASS: active-workspace persistence and keyboard site/constraint rev
   assert.equal(h.$('draw-coordinate-error').hidden,true);
 }
 
-// Water inputs are explicit, per-site and revision-bound; no proposed defaults.
+// A site draft requires no drawings or manual comparison inputs.
 {
-  const h=harness();h.select(34.051,-118.2521);
+  const h=harness();h.select(34.051,-118.2521);await flush();
   h.requests[0].resolve(rainfall);h.requests[1].resolve(watershed('Ballona'));await flush();h.requests.length=0;
-  assert.equal(h.$('water-design').hidden,false);assert.equal(h.$('water-storage-depth').value,'');assert.equal(h.$('water-confirm-connections').checked,false);
-  let pending=h.$('site-analysis').events.submit({preventDefault(){}});
-  assert.equal(JSON.parse(h.requests[0].options.body).waterDesign,null);
-  h.requests[0].resolve({report:null,facts:[]});await pending;h.requests.length=0;
-  const enter=(id,value)=>{h.$(id).value=value;h.$(id).events.input({target:h.$(id)});};
-  enter('water-storage-depth','0.2');
-  await h.$('update-water-comparison').events.click({preventDefault(){}});
-  assert.equal(h.requests.length,0,'partial inputs cannot silently use defaults');
-  pending=h.$('site-analysis').events.submit({preventDefault(){}});
-  assert.equal(JSON.parse(h.requests[0].options.body).waterDesign,null,'optional comparison fields cannot block an agent draft');
-  h.requests[0].resolve({report:null,facts:[]});await pending;h.requests.length=0;
-  enter('water-runoff-coefficient','0.85');enter('water-confirmation-note','Proposed storage and field-checked connection.');
-  for(const id of ['water-confirm-surface','water-confirm-connections','water-confirm-access','water-confirm-overflow']) {h.$(id).checked=true;h.$(id).events.change({target:h.$(id)});}
-  pending=h.$('update-water-comparison').events.click({preventDefault(){}});
-  const body=JSON.parse(h.requests[0].options.body);
-  assert.deepEqual(body.waterDesign,{storage_depth_m:.2,runoff_coefficient:.85,confirmation_note:'Proposed storage and field-checked connection.',surface_confirmed:true,connections_confirmed:true,access_confirmed:true,overflow_confirmed:true});
-  assert.equal(body.inputRevision,7);
-  enter('water-storage-depth','0.25');assert.equal(h.requests[0].options.signal.aborted,true,'editing design cancels its active run');
-  assert.equal(h.$('water-confirm-overflow').checked,false,'new depth needs overflow confirmation again');
-  assert.equal(h.$('water-confirm-surface').checked,true,'changing depth does not invalidate the same source surface');
-  h.requests[0].resolve({report:null,facts:[],proposal:{revision:2},comparison:{revision:2}});await pending;
-  assert.equal(h.map.events.filter(event=>event.name==='plannerresult').length,0);
-  h.select(34.052,-118.253);assert.equal(h.$('water-storage-depth').value,'');assert.equal(h.$('water-confirm-access').checked,false);
-  h.select(34.051,-118.2521);assert.equal(h.$('water-storage-depth').value,'0.25','design settings remain scoped to their site');
-  h.workspace('street');assert.equal(h.$('water-design').hidden,true);
-  h.requests.length=0;pending=h.$('site-analysis').events.submit({preventDefault(){}});
-  assert.equal(JSON.parse(h.requests[0].options.body).waterDesign,null,'water inputs never enter traffic request');
-  h.requests[0].resolve({report:null,facts:[]});await pending;
-}
-console.log('PASS: explicit stormwater inputs, no defaults, per-site persistence, update action, cancellation and workflow isolation');
-
-// Confirmations describe a particular physical layout, not every future edit.
-{
-  const h=harness();h.select(34.05,-118.25);
-  const confirm=()=>{for(const id of ['water-confirm-surface','water-confirm-connections','water-confirm-access','water-confirm-overflow']) {h.$(id).checked=true;h.$(id).events.change({target:h.$(id)});}};
-  confirm();h.$('water-mark-treatment').events.click();
-  for(const point of [[34.05,-118.25],[34.0501,-118.25],[34.0501,-118.2499]]) {h.map.center={lat:point[0],lng:point[1]};h.$('draw-add-center').events.click();}
-  h.$('draw-save').events.click();
-  for(const id of ['water-confirm-surface','water-confirm-connections','water-confirm-access','water-confirm-overflow']) assert.equal(h.$(id).checked,false);
-  confirm();h.$('shape-list').children[0].children[2].events.click();
-  assert.equal(h.$('water-confirm-connections').checked,false,'removal cannot retain an old connection confirmation');
-  confirm();h.$('water-runoff-coefficient').value='.7';h.$('water-runoff-coefficient').events.input({target:h.$('water-runoff-coefficient')});
-  assert.equal(h.$('water-confirm-surface').checked,false);assert.equal(h.$('water-confirm-access').checked,true);
-}
-console.log('PASS: geometry, coefficient and depth changes invalidate their physical confirmations');
-
-// A late automatic county request must not replace the newer analysis source.
-{
-  const h=harness();h.select(34.05,-118.25);
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
-  h.requests[2].resolve({report:null,facts:[],hydrology:{estimate:{inches:1.1,method:'on_contour',depth_range:[1.1,1.1]},watershed:watershed('Ballona')}});await pending;
-  h.requests[0].resolve(rainfall);h.requests[1].reject(new Error('Old lookup failed'));await flush();
-  assert.equal(h.$('rain-value').textContent,'1.10');assert.equal(h.$('watershed-name').textContent,'Ballona');
-  assert.equal(h.$('retry-hydrology').hidden,true);
-  const next=h.$('site-analysis').events.submit({preventDefault(){}});
-  h.requests[3].resolve({report:null,facts:[],hydrology:{unavailable:['rainfall','watershed']}});await next;
-  assert.match(h.$('rain-result').textContent,/latest analysis.*cached/);
-  assert.match(h.$('watershed-result').textContent,/latest analysis.*cached/);
-  assert.equal(h.$('retry-hydrology').hidden,false,'latest source failure exposes a retry instead of stale success');
+  const body=JSON.parse(h.requests[0].options.body);
+  assert.equal(Object.hasOwn(body,'waterDesign'),false);
+  assert.deepEqual(body.markings,[]);
+  h.requests[0].resolve({report:null,facts:[]});await pending;
+  const html=await readFile(new URL('../public/index.html',import.meta.url),'utf8');
+  assert.doesNotMatch(html,/Compare your own placements|update-water-comparison/);
+  assert.match(html,/manual-markings/,'optional constraints remain available');
 }
-console.log('PASS: latest hydrology source wins and cached values disclose later source failures');
 
+// A late parcel match cannot assign a previous property to a new map point.
 {
- const h=harness('street',{coverage:{},insideCoverage:point=>point.lng < -118.249});
- h.map.fire('plannerproperty',{property:{id:'outside',name:'Outside',lat:34.05,lon:-118.248}});
- assert.equal(h.map.events.filter(e=>e.name==='plannersite').length,1,'marker click outside imagery cannot select a site');
- assert.match(h.$('planner-status').textContent,/coverage/);
- h.map.fire('plannerproperty',{property:{id:'inside',name:'Inside',lat:34.05,lon:-118.25}});
- assert.equal(h.map.events.filter(e=>e.name==='plannersite').at(-1).event.siteId,'property:inside');
+  const h=harness('street',{captureIdentity:true});
+  h.select(34.05,-118.25);
+  assert.equal(h.$('run-site-analysis').disabled,true);
+  h.select(34.06,-118.30);
+  const property={id:'one',lat:34.05,lon:-118.25,name:'First site',address:'First address',type:'Multifamily'};
+  h.identityRequests[0].resolve({status:'matched',property,candidates:[],message:'Matched'});await flush();
+  assert.equal(h.$('site-name').textContent,'Map location');
+  h.identityRequests[1].resolve({status:'ambiguous',property:null,candidates:[property],message:'Choose a property'});await flush();
+  assert.equal(h.$('run-site-analysis').disabled,false);
+  assert.match(h.$('site-resolution-status').textContent,/Choose/);
+  const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  assert.equal(JSON.parse(h.requests.at(-1).options.body).propertyId,undefined);
+  h.requests.at(-1).resolve({report:null,facts:[]});await pending;
 }
+
+// A unique match preserves the clicked coordinates and reports identity separately.
+{
+  const h=harness('street',{captureIdentity:true});h.select(34.05,-118.25);
+  const property={id:'matched',lat:34.0501,lon:-118.2501,name:'Matched site',address:'Source address',type:'Multifamily'};
+  h.identityRequests[0].resolve({status:'matched',property,candidates:[],message:'Same mapped parcel'});await flush();
+  assert.match(h.$('site-location').textContent,/34.05000, -118.25000/);
+  assert.equal(h.map.events.at(-1).name,'planneridentity');
+  const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  const body=JSON.parse(h.requests.at(-1).options.body);
+  assert.equal(body.propertyId,'matched');assert.equal(body.lat,34.05);assert.equal(body.lon,-118.25);
+  h.requests.at(-1).resolve({report:null,facts:[]});await pending;
+}
+console.log('PASS: single stormwater analysis path, optional constraints, guarded property resolution and source/revision isolation');

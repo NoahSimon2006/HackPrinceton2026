@@ -34,6 +34,16 @@ function harness() {
  assert.equal(h.requests.length,count);assert.match(h.$('status-title').textContent,/outside/);
 }
 {
+ const h=harness();const p=h.context.loadCoverage();h.requests[0].resolve({...h.covered,status:'partial',excludedFeatures:1});await p;
+ assert.equal(h.$('status-title').textContent,'Imagery ready');
+ assert.match(h.$('status-detail').textContent,/invalid and excluded/);
+ h.map.zoom=17;h.$('properties').checked=true;const refresh=h.context.updateProperties();
+ h.requests[1].resolve({properties:[],total:0});await refresh;
+ assert.match(h.$('status-detail').textContent,/invalid and excluded/,'a property refresh preserves the coverage warning');
+ h.context.selectProperty({id:'excluded-area',name:'Excluded area',lat:34.05,lon:-118.5});
+ assert.match(h.$('status-title').textContent,/outside/,'excluded source coverage cannot authorize navigation');
+}
+{
  const h=harness();h.map.zoom=17;h.$('properties').checked=true;
  const old=h.context.updateProperties(), newer=h.context.updateProperties();
  h.requests[1].resolve({properties:[{id:'new',name:'New',lat:34.05,lon:-118.25}],total:1});await newer;
@@ -53,3 +63,16 @@ function harness() {
  assert.equal(h.$('results').hidden,true,'selection must not reopen a matching in-flight search');
 }
 console.log('PASS: center-only sourced coverage, property request generations and stale search isolation');
+
+// Removing a workflow must not remove shared nodes used during real page boot.
+{
+  const html=await readFile(new URL('../public/index.html',import.meta.url),'utf8');
+  const ids=[...html.matchAll(/\bid="([^"]+)"/g)].map(match=>match[1]);
+  const available=new Set(ids);
+  assert.equal(available.size,ids.length,'HTML ids must be unique');
+  for(const file of ['planner.js','proposal.js','site-view.js']) {
+    const script=await readFile(new URL('../public/'+file,import.meta.url),'utf8');
+    for(const match of script.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(available.has(match[1]),`${file} needs #${match[1]} in the page`);
+  }
+}
+console.log('PASS: shared controller elements remain present after workflow removal');

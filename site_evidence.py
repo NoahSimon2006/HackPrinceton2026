@@ -3,6 +3,7 @@
 import json
 import math
 import re
+from datetime import datetime
 
 SEARCH_TEXT = {
     "street": "marked pedestrian crosswalks and driveway entrances connecting to a street",
@@ -40,6 +41,36 @@ def feature(geometry, label, **properties):
     return {"type": "Feature", "geometry": geometry, "properties": {"label": label, **properties}}
 
 
+def recent_parcel_collections(payload):
+    """Do not combine successive imagery versions into overlapping site parcels.
+
+    The provider has returned multiple years even with latest=true. Select the
+    newest dated collection at the point (or nearby when the point has no parcel).
+    Retain ties, including overlapping parcels, for explicit local ambiguity checks.
+    """
+    features = payload["features"]
+    containing = [f for f in features if f.get("properties", {}).get("request-information.inside-parcel") is True]
+    dated = []
+    for item in containing or features:
+        props = item.get("properties", {})
+        date, collection = props.get("metadata.ortho-date-estimate"), props.get("metadata.collection")
+        if not isinstance(date, str) or not isinstance(collection, str) or not collection:
+            continue
+        try:
+            # Capture timestamps are compared as calendar dates, not mixed UTC/
+            # local datetimes. Collections captured on the same day remain tied.
+            day = datetime.fromisoformat(date).date()
+        except ValueError:
+            continue
+        dated.append((day, collection))
+    if not dated:
+        return payload
+    newest = max(day for day, _ in dated)
+    collections = {collection for day, collection in dated if day == newest}
+    return {**payload, "features": [f for f in features if f.get("properties", {}).get("metadata.collection") in collections],
+            "collectionSelection": "Most recent dated collection returned for this point or nearby search; older versions are not combined. Coverage may be incomplete."}
+
+
 def parcel_features(payload, evidence, *, nearby=False):
     if not isinstance(payload, dict) or not isinstance(payload.get("features"), list):
         raise ValueError("Parcel response has no valid feature collection.")
@@ -64,6 +95,8 @@ def parcel_features(payload, evidence, *, nearby=False):
         metadata = {
             "collection": props.get("metadata.collection"),
             "date": (props.get("metadata.ortho-date-estimate") or "")[:10],
+            "gsd": props.get("metadata.gsd"),
+            "collectionSelection": payload.get("collectionSelection"),
         }
         outlines.append(feature(boundary, "Parcel boundary", buildingCoverage=structures is not None, **metadata))
         for structure in structures or []:
@@ -116,8 +149,8 @@ def imagery_evidence(request, layers, lon, lat, workflow, group):
     calls = {
         "outlines": ("/property/extract", {
             "wkt": f"POINT({lon} {lat})", "srid": 4326, "layer": layers,
-            "latest": "true", "include": "footprint-wkt",
-            **({"buffer-meter": 200, "page-size": 250} if workflow == "street" else {}),
+            "latest": "true", "include": "footprint-wkt,capture-date,collection,gsd",
+            "buffer-meter": 200 if workflow == "street" else 0, "page-size": 250,
         }, False),
         "search": ("/embedding/extract", {
             "wkt": area, "srid": 4326, "search-text": SEARCH_TEXT[workflow],
@@ -133,14 +166,26 @@ def imagery_evidence(request, layers, lon, lat, workflow, group):
     }
 
     path, params, post = calls[group]
-    payload = json.loads(request(path, params, "application/json", 5_000_000, post=post, timeout=25))
+    def fetch(values):
+        try:
+            return json.loads(request(path, values, "application/json", 5_000_000, post=post, timeout=25))
+        except ValueError as error:
+            if group == "outlines" and str(error) == "No Vexcel property outlines are available at this point.":
+                return {"features": []}
+            raise
+    payload = fetch(params)
     evidence = {group: []}
     if group == "outlines":
         if not isinstance(payload.get("features"), list):
             raise ValueError("Vexcel returned no valid parcel collection.")
-        if workflow == "street" and len(payload["features"]) >= 250:
-            raise ValueError("The intersection parcel search exceeded its coverage limit.")
-        parcel_features(payload, evidence, nearby=workflow == "street")
+        if workflow == "water" and not any(item.get("properties", {}).get("request-information.inside-parcel") is True
+                                           for item in payload["features"] if isinstance(item, dict)):
+            payload = fetch({**params, "buffer-meter": 75})
+        if not isinstance(payload.get("features"), list) or len(payload["features"]) >= 250:
+            raise ValueError("The bounded parcel search is incomplete; narrow the selected site.")
+        # Keep distinct overlapping/nearby parcels so local resolution can disclose
+        # ambiguity rather than choosing the first returned property.
+        parcel_features(recent_parcel_collections(payload), evidence, nearby=True)
     elif group == "detections":
         detection_features(payload, evidence, labels)
     else:

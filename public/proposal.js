@@ -40,7 +40,6 @@
     comparison = null; realRevision = 0;
     removeProposal();
     $("traffic-comparison").hidden = true;
-    $("water-comparison").hidden = true;
     $("comparison-stale").hidden = true;
     $("proposal-result-message").hidden = true;
     $("load-proposal-fixture").disabled = !selected;
@@ -52,7 +51,7 @@
   }
   function validate(p, site, revision, fixture) {
     if (p.schema_version !== 1 || p.development_fixture !== fixture || !identity(p, site, revision)) throw new Error("Proposal identity mismatch.");
-    const allowed = fixture ? ["fixture"] : site.workflow === "water" ? ["draft","conditional"] : ["recommended","tested","rejected"];
+    const allowed = fixture ? ["fixture"] : site.workflow === "water" ? ["draft"] : ["recommended","tested","rejected"];
     if (!allowed.includes(p.status)) throw new Error("Proposal status mismatch.");
     if (!Array.isArray(p.geometry) || !p.geometry.length || !Array.isArray(p.metrics) || !p.metrics.length ||
         p.geometry.some(g => g.properties?.revision !== revision) ||
@@ -88,7 +87,7 @@
     $("proposal-summary").textContent = p.recommendation;
     $("proposal-area-label").textContent = "Footprint";
     $("proposal-area").textContent = `${area.proposed.toFixed(1)} ${area.unit}`;
-    $("proposal-impact").textContent = fixture ? "Unassessed" : draft ? "Screening estimate" : site.workflow === "water" ? "See storage comparison" : "Simulated · see comparison";
+    $("proposal-impact").textContent = fixture ? "Unassessed" : draft ? "Screening estimate" : "Simulated · see comparison";
     $("proposal-water-metrics").hidden = !draft;
     $("proposal-water-metrics").replaceChildren();
     if (draft) for (const [id, title] of [["storage_volume","Ponding storage"],["direct_rain_volume","Rain onto garden"],
@@ -123,83 +122,7 @@
     ["Maximum approach queue", "m", r => maximum(r.max_queue_m)],
     ["Maximum approach hourly noise", "dB(A)", r => maximum(r.max_noise_db)],
   ];
-  function renderWaterComparison(c) {
-    $("traffic-comparison").hidden = true;
-    $("water-comparison").hidden = false;
-    const names = Object.keys(c.results ?? {}).filter(name => name !== "baseline"), winner = c.ranking?.recommended;
-    $("water-comparison-title").textContent = winner ? "A conditional treatment option" : "No treatment recommended";
-    $("water-comparison-outcome").textContent = c.ranking?.reason || (winner ? `${label(winner)} ranks highest under the confirmed screening inputs.` : "The available evidence does not support a recommendation.");
-    $("water-comparison-rainfall").textContent = `${c.rainfall?.label ?? "Rainfall event unavailable"} · ${number(c.rainfall?.inches,"in")} · ${c.rainfall?.basis ?? "source unavailable"}`;
-    $("water-comparison-stale").hidden = true;
-    $("water-comparison-revision").textContent = `Revision ${c.revision} · inputs ${c.input_revision} · ${c.input_hash.slice(0,8)}`;
-    const table = element("table"), head = element("thead"), heading = element("tr");
-    for (const name of ["Metric","baseline",...names]) {
-      const cell = element("th",name === "baseline" ? "No added treatment" : name === "Metric" ? name : label(name));
-      cell.setAttribute("scope","col"); if(name === winner) cell.className = "recommended-column"; heading.append(cell);
-    }
-    head.append(heading); table.append(head);
-    const body = element("tbody");
-    for (const [key,title,unit] of [["runoff_m3","Contributing runoff","m³"],["captured_m3","Temporarily stored runoff","m³"],
-      ["excess_m3","Excess contributing runoff","m³"],["capacity_m3","Added storage capacity","m³"],
-      ["direct_rain_m3","Rain onto treatment","m³"],["direct_excess_m3","Excess direct rain","m³"],["footprint_m2","Treatment footprint","m²"]]) {
-      const row = element("tr"), titleCell = element("th",title); titleCell.setAttribute("scope","row"); titleCell.append(element("small",unit)); row.append(titleCell);
-      for (const name of ["baseline",...names]) { const cell = element("td",number(c.results[name]?.[key],"",2)); if(name === winner) cell.className="recommended-column"; row.append(cell); }
-      body.append(row);
-    }
-    table.append(body); $("water-comparison-table").replaceChildren(table);
-    $("water-comparison-chart").replaceChildren();
-    for (const name of names) {
-      const values = c.results[name], row = element("div"); row.className="water-volume-row";
-      row.append(element("strong",label(name)));
-      const totals = `Stored ${number(values.captured_m3,"m³",2)} · excess ${number(values.excess_m3,"m³",2)}`;
-      const bar = element("div"); bar.className="water-volume-bar"; bar.setAttribute("role","img"); bar.setAttribute("aria-label",`${label(name)}: ${totals}`);
-      if(finite(values.runoff_m3) && values.runoff_m3 > 0 && finite(values.captured_m3) && finite(values.excess_m3)) {
-        for(const [key,klass] of [["captured_m3","stored"],["excess_m3","excess"]]) { const segment=element("span"); segment.className=klass; segment.setAttribute("style",`width:${Math.max(0,Math.min(100,values[key]/values.runoff_m3*100))}%`); bar.append(segment); }
-      }
-      row.append(bar,element("small",totals)); $("water-comparison-chart").append(row);
-    }
-    $("water-comparison-alternatives").replaceChildren();
-    for (const name of names) {
-      const card=element("details"), summary=element("summary",label(name)), verdict=c.ranking?.verdicts?.[name] ?? {};
-      summary.append(element("span",name === winner ? "Conditional choice" : verdict.eligible ? "Not selected" : "Not eligible")); card.append(summary);
-      for(const reason of [...(verdict.ineligible_reasons ?? []),...(verdict.tradeoffs ?? [])]) card.append(element("p",reason));
-      if(c.descriptions?.[name]) card.append(element("p",c.descriptions[name]));
-      for(const [key,value] of Object.entries(c.checks?.[name] ?? {})) {
-        if(value === null || ["boolean","number","string"].includes(typeof value)) {
-          const areaKey=key.endsWith("_m2"), title=label(areaKey ? key.slice(0,-3) : key);
-          card.append(element("p",`${title}: ${typeof value === "boolean" ? value ? "Yes" : "No" : typeof value === "string" ? value : number(value,areaKey ? "m²" : "",2)}`));
-        }
-      }
-      const terrain=c.checks?.[name]?.terrain;
-      if(terrain) {
-        card.append(element("p",`Terrain screening: ${terrain.status ?? "Not assessed"}. Median slope ${number(terrain.median_slope_percent,"%",2)}; maximum slope ${number(terrain.max_slope_percent,"%",2)}; relief ${number(terrain.relief_m,"m",2)}.`));
-        if(terrain.source) {
-          const origin=terrain.source;
-          card.append(element("p",`Terrain source: ${typeof origin === "string" ? origin : origin.label ?? origin.provider ?? "Local elevation dataset"}. Publication: ${origin.publication_date ?? "unknown"}; acquisition: ${origin.observed_at ?? "unknown"}.`));
-          if(typeof origin.url === "string" && /^https?:\/\//i.test(origin.url)) {const link=element("a","Open terrain source ↗");link.href=origin.url;link.target="_blank";link.rel="noopener noreferrer";card.append(link);}
-        }
-        if(terrain.reason) card.append(element("p",terrain.reason));
-        for(const note of terrain.limitations ?? []) card.append(element("p",note));
-      } else card.append(element("p","Terrain at this treatment: not assessed. Mapped terrain does not establish a drainage connection."));
-      $("water-comparison-alternatives").append(card);
-    }
-    $("water-comparison-method").textContent = c.method ?? "Contributing runoff = rainfall × contributing area × runoff coefficient. Storage = treatment area × proposed depth. Direct rainfall uses storage first.";
-    $("water-comparison-sources").replaceChildren();
-    $("water-comparison-sources").append(element("p",`Contributing area: ${number(c.contributing_area_m2,"m²",2)}. Proposed storage depth: ${number(c.design?.storage_depth_m,"m",3)}. Planner runoff coefficient: ${number(c.design?.runoff_coefficient,"",3)}.`));
-    if(c.confirmations?.confirmation_note) $("water-comparison-sources").append(element("p",`Planner input basis: ${c.confirmations.confirmation_note}`));
-    for (const item of c.sources ?? []) {
-      const title = typeof item === "string" ? item : item.label ?? item.provider ?? item.title ?? "Source";
-      const url = typeof item === "object" ? item.url : null;
-      const row=element("p"), link=element(typeof url === "string" && /^https?:\/\//i.test(url) ? "a" : "span",title);
-      if(link.tagName === "A" || (typeof url === "string" && /^https?:\/\//i.test(url))) {link.href=url;link.target="_blank";link.rel="noopener noreferrer";} row.append(link);
-      if(typeof item === "object") row.append(element("small",` · Observed: ${item.observed_at ?? "not recorded"}${item.retrieved_at ? ` · Retrieved: ${item.retrieved_at}` : ""}${item.basis ? ` · ${item.basis}` : ""}`));
-      $("water-comparison-sources").append(row);
-    }
-    $("water-comparison-assumptions").replaceChildren();
-    for(const assumption of c.assumptions ?? []) $("water-comparison-assumptions").append(element("li",typeof assumption === "string" ? assumption : assumption.text ?? JSON.stringify(assumption)));
-  }
   function renderComparison(c, alternatives) {
-    $("water-comparison").hidden = true;
     const names = Object.keys(c.results ?? {}).filter(name => name !== "baseline");
     const recommended = c.ranking?.recommended;
     $("traffic-comparison").hidden = false;
@@ -277,7 +200,6 @@
         const replacement = p ? prepareLayer(p) : null;
         controller?.abort(); ++request;
         comparison = null; realRevision = event.revision;
-        $("water-comparison").hidden = true;
         $("proposal-result-message").hidden = Boolean(p);
         if (p) {
           publish(p, area, selected, replacement);
@@ -301,18 +223,8 @@
         return;
       }
       if (!c.results?.baseline) throw new Error("Comparison metrics are missing.");
-      if (c.workflow === "water") {
-        const winner = c.ranking.recommended;
-        const area = p ? validate(p, selected, event.revision, false) : null;
-        if (event.draftQuestion || Boolean(winner) !== Boolean(p) || (p &&
-            (p.status !== "conditional" || c.status !== "ready" || !c.ranking.verdicts[winner]?.eligible ||
-             p.input_hash !== c.input_hash || p.geometry.some(g => g.properties.layout !== winner))))
-          throw new Error("Water proposal and comparison mismatch.");
-        const replacement = p ? prepareLayer(p) : null;
-        controller?.abort(); ++request;
-        renderWaterComparison(c);
-        if (p) publish(p, area, selected, replacement); else removeProposal();
-      } else {
+      if (c.workflow !== "street") throw new Error("Only traffic comparisons are supported. Analyze the site for a stormwater draft.");
+      {
         const names = Object.keys(c.results).filter(name => name !== "baseline");
         if (!names.length) throw new Error("Tested layouts are missing.");
         const alternatives = Object.fromEntries(names.map(name => {
@@ -356,7 +268,7 @@
       if (token !== request) return;
       const area = validate(p, site, revision, true);
       publish(p, area, site);
-      comparison = null; $("traffic-comparison").hidden = true; $("water-comparison").hidden = true;
+      comparison = null; $("traffic-comparison").hidden = true;
       map.setView(site.center, Math.max(map.getZoom(), 19), {animate:false});
       $("proposal-message").textContent = "Purple dashed outline = UI fixture. Access, overlap and benefits remain unassessed.";
     } catch (error) {
@@ -377,6 +289,6 @@
     $("load-proposal-fixture").disabled = false;
     $("revise-proposal-fixture").disabled = !published?.development_fixture;
     if (published) { $("proposal-stale").hidden = false; $("proposal-map-caption").textContent = caption(true); }
-    if (comparison) $(comparison.workflow === "water" ? "water-comparison-stale" : "comparison-stale").hidden = false;
+    if (comparison) $("comparison-stale").hidden = false;
   });
 })();

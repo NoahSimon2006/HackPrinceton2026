@@ -58,6 +58,11 @@ function setStatus(title, detail, error = false) {
   $("status-dot").classList.toggle("error", error);
 }
 
+function setImageryStatus(detail) {
+  const note = coverage?.excludedFeatures ? " Some source coverage outlines were invalid and excluded." : "";
+  setStatus("Imagery ready", detail + note);
+}
+
 function insideRing(point, ring) {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -272,7 +277,7 @@ async function loadCoverage() {
     }
     lastAllowed = map.getCenter();
     map.dragging.enable();
-    setStatus("Imagery ready", "Pan is limited to Vexcel-covered Los Angeles.");
+    setImageryStatus("Pan is limited to Vexcel-covered Los Angeles.");
   } catch (error) {
     setStatus("Coverage check failed", error.message, true);
   }
@@ -319,7 +324,7 @@ async function updateProperties() {
       markerById.get(selectedId).openPopup();
       focusPending = false;
     }
-    setStatus("Imagery ready", `${data.total} CoStar properties in view · coverage limited to Vexcel imagery.`);
+    setImageryStatus(`${data.total} CoStar properties in view · coverage limited to Vexcel imagery.`);
   } catch (error) {
     if (generation === propertyGeneration && error.name !== "AbortError") setStatus("Property layer unavailable", error.message, true);
   }
