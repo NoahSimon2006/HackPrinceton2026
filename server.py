@@ -37,6 +37,9 @@ ANALYSIS_LOCK = Lock()
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
           "/discovery.js": "discovery.js", "/analysis-stream.js": "analysis-stream.js", "/planner.js": "planner.js", "/proposal.js": "proposal.js",
           "/site-view.js": "site-view.js", "/projects.js": "projects.js", "/scouting.js": "scouting.js",
+          "/concept-scene.js": "concept-scene.js", "/concept-scene-renderer.js": "concept-scene-renderer.js",
+          "/vendor/three.module.js": "vendor/three.module.js", "/vendor/three.core.js": "vendor/three.core.js",
+          "/vendor/OrbitControls.js": "vendor/OrbitControls.js", "/vendor/three.LICENSE": "vendor/three.LICENSE",
           "/vector-zoom.js": "vector-zoom.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
           "/vendor/leaflet.css": "vendor/leaflet.css"}
@@ -567,7 +570,7 @@ class Handler(BaseHTTPRequestHandler):
             if path.path in STATIC:
                 file = PUBLIC / STATIC[path.path]
                 mime = "text/html" if file.suffix == ".html" else (
-                    "text/css" if file.suffix == ".css" else "text/javascript")
+                    "text/css" if file.suffix == ".css" else "text/javascript" if file.suffix == ".js" else "text/plain")
                 # Local development reads assets from disk on every request.
                 # Revalidate the page so reloads don't keep an older app bundle.
                 cache = "public, max-age=3600" if file.parent.name == "vendor" else "no-cache"
@@ -575,6 +578,21 @@ class Handler(BaseHTTPRequestHandler):
             elif path.path == "/api/projects":
                 query = parse_qs(path.query)
                 self.send_json(200, project_store().get(query["id"][0]) if "id" in query else {"projects":project_store().list()})
+            elif path.path == "/api/concept-scene":
+                from concept_scene import SceneUnavailable, build_scene, parse_scene_query
+                try:
+                    query = parse_scene_query(parse_qs(path.query, keep_blank_values=True))
+                except SceneUnavailable as error:
+                    self.send_json(400, {"error": str(error)})
+                    return
+                try:
+                    project = project_store().get(query.pop("project_id"))
+                    result = build_scene(project, **query)
+                except ValueError as error:
+                    self.send_json(404, {"error": str(error) if isinstance(error, SceneUnavailable)
+                        else "The saved project is unavailable. Reopen a planning project."})
+                    return
+                self.send_json(200, result)
             elif path.path == '/api/scouts':
                 query = parse_qs(path.query)
                 self.send_json(200, scout_store().get(query['id'][0]) if 'id' in query else {'searches': scout_store().list()})

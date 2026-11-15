@@ -5,15 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=22">
+  <link rel="stylesheet" href="/styles.css?v=23">
   <script defer src="/vendor/leaflet.js"></script>
   <script defer src="/vector-zoom.js?v=1"></script>
   <script defer src="/app.js?v=19"></script>
-  <script defer src="/proposal.js?v=7"></script>
+  <script defer src="/proposal.js?v=8"></script>
+  <script defer src="/concept-scene.js?v=1"></script>
   <script defer src="/analysis-stream.js?v=2"></script>
   <script defer src="/site-view.js?v=2"></script>
   <script defer src="/projects.js?v=1"></script>
-  <script defer src="/planner.js?v=19"></script>
+  <script defer src="/planner.js?v=20"></script>
   <script defer src="/discovery.js?v=3"></script>
   <script defer src="/scouting.js?v=1"></script>
 </head>
@@ -119,7 +120,9 @@
             <dl id="proposal-water-metrics" class="proposal-metrics" hidden></dl>
             <div id="proposal-checks"></div>
             <ul id="proposal-assumptions" hidden></ul>
-            <button id="focus-proposal" type="button">Zoom to footprint</button>
+            <div class="proposal-view-actions"><button id="focus-proposal" type="button">Zoom to footprint</button>
+              <button id="open-concept-scene" type="button" disabled aria-haspopup="dialog" aria-controls="concept-scene-dialog">Explore in 3D <span aria-hidden="true">↗</span></button></div>
+            <p id="concept-scene-entry" class="concept-scene-entry" role="status">A published footprint enables its conceptual 3D view.</p>
             <p id="proposal-revision"></p><p id="proposal-stale" hidden>Inputs changed. Analyze again to update this proposal.</p>
           </section>
           <section id="water-design-review" class="planner-card water-design-review" hidden>
@@ -290,6 +293,29 @@
       <div class="map-bottom"><span>Drag to pan · scroll to zoom</span><button id="reset" type="button">↗ &nbsp; Back to Los Angeles</button></div>
     </main>
   </div>
+  <dialog id="concept-scene-dialog" class="concept-scene-dialog" aria-labelledby="concept-scene-title" aria-describedby="concept-scene-description">
+    <header class="concept-scene-header"><div><span class="section-label">DESIGN EXPLORER · CONCEPTUAL 3D</span><h2 id="concept-scene-title">Selected design</h2><p id="concept-scene-identity"></p></div>
+      <button id="concept-scene-close" type="button" aria-label="Close conceptual 3D view">Close <span aria-hidden="true">×</span></button></header>
+    <div class="concept-scene-toolbar">
+      <div class="concept-scene-modes" role="group" aria-label="Conceptual comparison"><button id="concept-scene-existing" type="button" aria-pressed="false">Existing</button><button id="concept-scene-proposed" type="button" aria-pressed="true">Proposed</button></div>
+      <p id="concept-scene-description">Compare mapped surroundings and the selected footprint from the same viewpoint.</p>
+      <label class="concept-scene-context-toggle"><input id="concept-scene-context" type="checkbox" checked> Show surroundings</label>
+    </div>
+    <p id="concept-scene-stale" class="concept-scene-warning" hidden>Saved reference · inputs or evidence have changed. This view has not been reevaluated.</p>
+    <div class="concept-scene-body">
+      <div class="concept-scene-visual"><div id="concept-scene-stage" class="concept-scene-stage" role="img" aria-label="Conceptual 3D view of the selected design"></div>
+        <div class="concept-scene-camera" role="group" aria-label="3D camera controls"><button id="concept-scene-reset" type="button">Reset view</button><button id="concept-scene-top" type="button">Top view</button><button id="concept-scene-left" type="button" aria-label="Rotate view left">↶</button><button id="concept-scene-right" type="button" aria-label="Rotate view right">↷</button><button id="concept-scene-zoom-in" type="button" aria-label="Zoom 3D view in">＋</button><button id="concept-scene-zoom-out" type="button" aria-label="Zoom 3D view out">−</button></div>
+        <p class="concept-scene-gesture">Drag to orbit · scroll to zoom · Shift + drag to pan</p>
+      </div>
+      <aside id="concept-scene-info" class="concept-scene-info"><span id="concept-scene-verdict" class="concept-scene-verdict"></span><h3 id="concept-scene-mode-label">Proposed concept</h3><p id="concept-scene-mode-note"></p>
+        <dl id="concept-scene-metrics" class="concept-scene-metrics"></dl><p id="concept-scene-saved" class="concept-scene-fineprint"></p>
+        <h3>Scene basis</h3><p id="concept-scene-context-note"></p><ul id="concept-scene-assumptions"></ul>
+        <details><summary>Source &amp; coordinate details</summary><p id="concept-scene-coordinates"></p><ul id="concept-scene-sources"></ul></details>
+      </aside>
+    </div>
+    <footer class="concept-scene-footer"><p id="concept-scene-status" role="status">The scene opens only when requested.</p><button id="concept-scene-retry" type="button" hidden>Retry 3D view</button><span>Illustrative materials and heights · no scan alignment</span></footer>
+  </dialog>
+
   <dialog id="site-view-dialog" class="site-view-dialog" aria-labelledby="site-view-title" aria-describedby="site-view-description">
     <header class="site-view-header">
       <div><span class="section-label">3D PROPERTY TOURS · MATTERPORT</span><h2 id="site-view-title">Selected property</h2><p id="site-view-tour-title"></p></div>

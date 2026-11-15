@@ -343,3 +343,42 @@ console.log('PASS: traffic environmental/readiness separation, whole-evaluation 
   assert.equal(inspections.length,3);
 }
 console.log('PASS: live same-input retries detach historical evidence links and preserve stale geometry through previews until valid publication');
+
+// 3D may consume only the exact footprint successfully published to the map,
+// including a deliberate alternative/history inspection and its original project.
+{
+  const displays=[];map.on('proposaldisplay',event=>displays.push(event));
+  const lastDisplay=()=>displays.at(-1);
+  select('water','water',1);
+  const sceneStudy={...study,projectId:'water-project'};
+  map.fire('plannerresult',sceneStudy);
+  assert.equal(lastDisplay().projectId,'water-project');
+  assert.equal(lastDisplay().siteId,'water');assert.equal(lastDisplay().workflow,'water');
+  assert.equal(lastDisplay().proposal.revision,2);
+  assert.deepEqual(JSON.parse(JSON.stringify(lastDisplay().proposal.geometry)),activeLayer().data.features);
+  $('water-design-alternatives').children[1].children.find(c=>c.textContent==='Inspect this footprint').events.click();
+  assert.equal(lastDisplay().proposal.metrics[0].proposed,20);
+  assert.equal(lastDisplay().projectId,'water-project');
+  $('water-design-history').children[0].events.click();
+  assert.equal(lastDisplay().proposal.revision,1);
+  assert.equal(lastDisplay().proposal.input_revision,0);
+  assert.equal(lastDisplay().projectId,'water-project','history retains its canonical project lookup');
+  assert.equal(lastDisplay().historical,true);
+  assert.equal(lastDisplay().savedAt,'2026-11-14T14:05:00+00:00');
+  $('water-return-current').events.click();
+  const priorDisplay=lastDisplay();
+  const invalid=structuredClone(sceneStudy);invalid.revision=3;invalid.proposal.metrics[0].input_hash='wrong';
+  map.fire('plannerresult',invalid);
+  assert.equal(lastDisplay(),priorDisplay,'an invalid map publication cannot replace the scene source');
+  select('a','street',0);
+  assert.equal(lastDisplay().proposal,null,'site switching clears the scene source');
+  const noWinner={...result(1,0,null),projectId:'traffic-project'};
+  map.fire('plannerresult',noWinner);
+  assert.equal(lastDisplay().proposal,null,'a no-winner comparison does not pick a 3D layout implicitly');
+  $('comparison-alternatives').children[1].children.find(c=>c.textContent==='Show footprint on map').events.click();
+  assert.equal(lastDisplay().projectId,'traffic-project');
+  assert.equal(lastDisplay().proposal.status,'rejected');
+  assert.equal(lastDisplay().proposal.geometry[0].properties.layout,'layout_b');
+  assert.deepEqual(JSON.parse(JSON.stringify(lastDisplay().proposal.geometry)),activeLayer().data.features);
+}
+console.log('PASS: scene publication follows validated map geometry, project identity, history and explicit rejected-layout inspection');

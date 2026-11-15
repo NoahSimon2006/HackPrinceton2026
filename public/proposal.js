@@ -37,6 +37,7 @@
     return `${statuses[published.status]} · revision ${published.revision}${stale ? " · stale inputs" : ""}`;
   }
   function removeProposal() {
+    map.fire("proposaldisplay", {proposal:null});
     published = null; layer?.remove(); layer = null;
     show.checked = false; show.disabled = true;
     $("proposal-review").hidden = true;
@@ -121,6 +122,12 @@
     $("proposal-map-caption").textContent = caption(stale);
     $("proposal-stale").hidden = !stale;
     $("revise-proposal-fixture").disabled = !fixture;
+    // The 3D view follows this validated, actually displayed footprint, including
+    // read-only history and explicitly inspected rejected alternatives.
+    map.fire('proposaldisplay',{proposal:p,projectId:study?.projectId,siteId:site.siteId,
+      workflow:site.workflow,inputRevision:site.inputRevision,stale,savedAt:study?.savedAt,
+      historical:Boolean(study?.historical),displayStatus:study?.displayStatus || p.status,
+      viewLabel:study?.viewLabel || (study?.historical?`Earlier revision ${p.revision}`:statuses[p.status])});
   }
   function renderWaterStudy(study, preview='', alternativeEntry=null) {
     const plan=study.waterPlan, c=plan?.comparison ?? {}, p=alternativeEntry?study.alternatives?.[alternativeEntry.id]:study.proposal;
@@ -174,7 +181,7 @@
           try {
             const ownSite={...selected,inputRevision:study.inputRevision};
             const area=validate(alternative,ownSite,study.revision,false);
-            publish(alternative,area,selected,prepareLayer(entry.status==='rejected'?{...alternative,status:'rejected'}:alternative),study);focus();
+            publish(alternative,area,selected,prepareLayer(entry.status==='rejected'?{...alternative,status:'rejected'}:alternative),{...study,displayStatus:entry.status==='rejected'?'rejected':alternative.status,viewLabel:'Study alternative'});focus();
             renderWaterStudy(study,'Alternative footprint · read-only inspection. The saved concept and its constraints are unchanged.',entry);
             $('proposal-kind').textContent=`Study alternative · ${entry.status || 'concept'}`;
             if(entry.status==='rejected') {
@@ -198,7 +205,7 @@
         try {
           const ownSite={...selected,inputRevision:saved.inputRevision ?? saved.proposal.input_revision};
           const area=validate(saved.proposal,ownSite,saved.revision,false);
-          const historical={...saved,inputRevision:ownSite.inputRevision,restored:true};
+          const historical={...saved,projectId:currentWater.projectId,inputRevision:ownSite.inputRevision,restored:true,historical:true};
           publish(saved.proposal,area,selected,undefined,historical);focus();
           renderWaterStudy(historical,'Earlier revision · read-only inspection. The current concept is unchanged.');
           $('proposal-kind').textContent=`Earlier revision ${saved.revision} · read only`;
@@ -295,7 +302,7 @@
       inspect.addEventListener('click',()=>{
         if(!selected || selected.workflow!=='street' || currentTraffic?.siteId!==selected.siteId)return;
         try {
-          const own={...saved,siteId:currentTraffic.siteId,workflow:'street',inputRevision:saved.inputRevision ?? saved.comparison.input_revision,restored:true};
+          const own={...saved,projectId:currentTraffic.projectId,siteId:currentTraffic.siteId,workflow:'street',inputRevision:saved.inputRevision ?? saved.comparison.input_revision,restored:true,historical:true};
           showTrafficEvaluation(own,trafficAlternatives(own),true);
         }catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Earlier evaluation unavailable: ${error.message}`;}
       });$('traffic-design-history').append(inspect);

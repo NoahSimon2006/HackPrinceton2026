@@ -2,7 +2,7 @@
 
 Prepared November 14, 2026. Product decisions approved; implementation proceeds one authorized checkpoint at a time.
 
-**Current implementation (November 15, 2026):** Checkpoints 0–6 and the [Checkpoint 6 follow-up](CHECKPOINT_6_FOLLOWUP.md) are pushed to `main` through `abb548a`. [Checkpoint 7 core product and demonstration](CHECKPOINT_7_CORE_DEMO.md) is implemented locally with acceptance gaps. Fresh stormwater scouting, the native 40 → 20 m² revision, cancellation recovery and saved traffic history inspection passed. The final native stormwater check passed with both specialists after the latest fix; the final scout check also passed with both specialists. The [desktop walkthrough](DEMO_WALKTHROUGH.md) distinguishes fresh investigation from saved historical evaluations. No eligible real traffic recommendation or material positive CoStar traffic-access evidence at Main/1st has been established; narrow-screen review was limited, and fault/race/source-expiry checks used harnesses. Desktop remains the priority; Checkpoint 8 has not started and requires the user's next instruction.
+**Current implementation (November 15, 2026):** Checkpoints 0–7 are pushed to `main` through `ee07eb0`. [Checkpoint 8 conceptual 3D](CHECKPOINT_8_CONCEPTUAL_3D.md) is implemented and desktop-verified. Current/historical stormwater and rejected-traffic scenes pass browser checks; focused harnesses cover input and publication invalidation. The viewer derives exact local-meter geometry from saved 2D designs and uses a shared comparison camera; heights and materials remain illustrative. It makes no new model or simulation calls and does not claim Matterport registration. The [desktop walkthrough](DEMO_WALKTHROUGH.md) includes the 3D inspection step. Traffic eligibility and material CoStar access evidence at Main/1st remain open gaps; desktop remains the priority.
 
 Sustainability Map will help Los Angeles urban planners and traffic engineers discover environmental improvement opportunities, choose a location, and develop an inspectable physical concept through conversation. The primary workflow begins with a goal and a map area. The agent investigates that area, presents up to three supported locations, and waits for the user to choose one before developing and evaluating designs.
 
@@ -400,7 +400,7 @@ Connect location findings to source-verified demand and valid network inputs. Ge
 
 ### Checkpoint 7 Verify the core product and demonstration
 
-**Current status:** Implemented locally, with acceptance gaps. The [report](CHECKPOINT_7_CORE_DEMO.md) separates fresh desktop/native checks, reused historical evidence and harness coverage. The final native scout check completed both specialists; an eligible traffic winner, material CoStar traffic-access evidence and a full narrow-screen journey remain gaps. No blanket release signoff is claimed.
+**Current status:** Committed and pushed as `ee07eb0`, with the documented acceptance gaps retained. The [report](CHECKPOINT_7_CORE_DEMO.md) separates fresh desktop/native checks, reused historical evidence and harness coverage. The final native scout check completed both specialists; an eligible traffic winner, material CoStar traffic-access evidence and a full narrow-screen journey remain gaps. No blanket release signoff is claimed.
 
 **Outcome:** Both workflows are usable and the sponsor/agent contributions are demonstrable.
 
@@ -411,6 +411,8 @@ Prepare a concise demo: request opportunities, choose a location, inspect the ag
 **Acceptance:** Review the walkthrough, automated results and remaining gaps. Core readiness requires useful actions and artifacts in both modes. A missing eligible traffic recommendation remains separately recorded even if the rejection demo is accepted for presentation.
 
 ### Checkpoint 8 Add conceptual 3D
+
+**Current status:** Authorized and implemented locally on `codex/checkpoint-8-conceptual-3d`. Read the [report](CHECKPOINT_8_CONCEPTUAL_3D.md) for actual browser evidence, focused geometry/lifecycle checks and explicit acceptance boundaries. Matterport remains separate until scan registration is verified.
 
 **Outcome:** The same published design can be inspected in a simple 3D scene.
 
@@ -432,7 +434,7 @@ The following are intended implementation areas, not changes made by this plan. 
 | Traffic design, evaluation and selection | [traffic_analysis.py](../traffic_analysis.py), [street_design.py](../street_design.py), [traffic_sim.py](../traffic_sim.py), [traffic_counts.py](../traffic_counts.py) |
 | Shared publication contract | [proposal.py](../proposal.py), [proposal.js](../public/proposal.js) |
 | Search area, shortlist and project UI | [index.html](../public/index.html), [planner.js](../public/planner.js), [discovery.js](../public/discovery.js), [analysis-stream.js](../public/analysis-stream.js), [app.js](../public/app.js), [styles.css](../public/styles.css) |
-| Existing tour and future scene lifecycle | [site_view.py](../site_view.py), [site-view.js](../public/site-view.js); a scene renderer at Checkpoint 8 |
+| Existing tour and conceptual scene lifecycle | [site_view.py](../site_view.py), [site-view.js](../public/site-view.js), [concept_scene.py](../concept_scene.py), [concept-scene.js](../public/concept-scene.js), [concept-scene-renderer.js](../public/concept-scene-renderer.js) |
 
 When implementation is approved, synchronize the repository's next plan, conversation handoff and README with these decisions. Keep older numbered checkpoint reports as history. Remove obsolete claims about a mandatory first site selection, no request-generated shortlist, the manual placement flow and a scan prerequisite for conceptual 3D.
 

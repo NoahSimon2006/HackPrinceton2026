@@ -178,7 +178,7 @@
       record.evidenceError=[record.evidenceError,'The earlier stormwater concept remains available below as a saved reference; this attempt did not update it.'].filter(Boolean).join(' ');
       // Keep historical source IDs readable without linking them to the failed
       // attempt's newer evidence ledger.
-      map.fire('plannerrestore',{siteId:selected.key,workflow:mode,
+      map.fire('plannerrestore',{projectId:value.id,siteId:selected.key,workflow:mode,
         inputRevision:saved.inputRevision ?? saved.proposal.input_revision,revision:saved.revision,
         proposal:saved.proposal,alternatives:saved.alternatives ?? {},waterPlan:saved.waterPlan,
         designHistory:history,savedAt:saved.savedAt,restored:true,historicalReference:true});
@@ -200,7 +200,7 @@
       })}:null;
       record.stale=true;
       record.evidenceError=[record.evidenceError,'Earlier evaluated layouts remain available below as a saved reference; this attempt did not update them.'].filter(Boolean).join(' ');
-      map.fire('plannerrestore',{siteId:selected.key,workflow:mode,
+      map.fire('plannerrestore',{projectId:value.id,siteId:selected.key,workflow:mode,
         inputRevision:saved.inputRevision ?? saved.comparison.input_revision,revision:saved.revision,
         proposal:saved.proposal,comparison:saved.comparison,alternatives:saved.alternatives ?? {},trafficPlan:plan,
         trafficDesignHistory:history,savedAt:saved.savedAt,restored:true,historicalReference:true});
@@ -213,17 +213,17 @@
         stale:value.resultVersion !== value.version || stopped});
       if(result.hydrology) applyHydrology(selected.water,result.hydrology);
       if(value.resultVersion === value.version && !stopped && (result.proposal || result.comparison || result.draftQuestion))
-        map.fire('plannerresult',{siteId:selected.key,workflow:mode,inputRevision:record.revision ?? 0,
+        map.fire('plannerresult',{projectId:value.id,siteId:selected.key,workflow:mode,inputRevision:record.revision ?? 0,
           revision:record.proposalRevision,proposal:result.proposal,comparison:result.comparison,
           alternatives:result.alternatives ?? {},draftQuestion:result.draftQuestion,waterPlan:result.waterPlan,designHistory:value.designHistory ?? result.designHistory ?? [],
           trafficPlan:result.trafficPlan,trafficDesignHistory:value.trafficDesignHistory ?? result.trafficDesignHistory ?? [],
           savedAt:result.savedAt,restored:true});
       else if(mode==='water' && !stopped && result.proposal) map.fire('plannerrestore',{
-        siteId:selected.key,workflow:mode,inputRevision:result.proposal.input_revision,revision:result.proposal.revision,
+        projectId:value.id,siteId:selected.key,workflow:mode,inputRevision:result.proposal.input_revision,revision:result.proposal.revision,
         proposal:result.proposal,alternatives:result.alternatives ?? {},waterPlan:result.waterPlan,
         designHistory:value.designHistory ?? result.designHistory ?? [],savedAt:result.savedAt,restored:true});
       else if(mode==='street' && !stopped && result.comparison) map.fire('plannerrestore',{
-        siteId:selected.key,workflow:mode,inputRevision:result.comparison.input_revision,revision:result.comparison.revision,
+        projectId:value.id,siteId:selected.key,workflow:mode,inputRevision:result.comparison.input_revision,revision:result.comparison.revision,
         proposal:result.proposal,comparison:result.comparison,alternatives:result.alternatives ?? {},trafficPlan:result.trafficPlan,
         trafficDesignHistory:value.trafficDesignHistory ?? result.trafficDesignHistory ?? [],savedAt:result.savedAt,restored:true});
       else if(stopped)restorePrevious();
@@ -637,7 +637,7 @@
       // A changed site or marking must never publish geometry from an older run.
       if (site === selected && workflow === mode && (record.revision ?? 0) === revision &&
           !result.analysisError && (result.proposal || result.comparison || result.draftQuestion)) {
-        map.fire("plannerresult", {siteId:selected.key, workflow:mode, inputRevision:revision,
+        map.fire("plannerresult", {projectId:saved.id,siteId:selected.key, workflow:mode, inputRevision:revision,
           revision:proposalRevision, proposal:result.proposal ?? null, comparison:result.comparison ?? null,
           alternatives:result.alternatives ?? {}, draftQuestion:result.draftQuestion ?? null,
           waterPlan:result.waterPlan,designHistory:result.designHistory ?? [],trafficPlan:result.trafficPlan,
