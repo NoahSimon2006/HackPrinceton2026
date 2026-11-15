@@ -1,6 +1,6 @@
 import re
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from threading import Barrier
 from agent_activity import Activity
 
@@ -267,13 +267,80 @@ class AgentTest(unittest.TestCase):
     def test_unstructured_specialist_completion_saves_partial_report_and_unblocks_lead(self):
         final = message(call('SiteReview', {'findings':[], 'recommendations':[], 'questions':['Verify source coverage?']}))
         lead=lead_model([calls('delegate'), final])
-        specialists=[specialist_model('site','street',[AIMessage(content='Inputs inspected.')]),
-                     specialist_model('domain','street',[AIMessage(content='Inputs inspected.')])]
+        specialists=[specialist_model('site','street',[AIMessage(content='Inputs inspected.'), AIMessage(content='Still plain text.')]),
+                     specialist_model('domain','street',[AIMessage(content='Inputs inspected.'), AIMessage(content='Still plain text.')])]
         with patch('site_agent.ChatXAI',side_effect=[lead,*specialists]):
             result=analyze_site('unused','fake','Review','street',[],lambda _:[],lambda:({},[]),lambda:{},lon=LON,lat=LAT)
         self.assertIsNone(result['analysisError'])
         self.assertEqual(result['specialists'],{'site-evidence':False,'domain-analysis':False})
         self.assertEqual(len([path for path in result['artifactsRead']['lead'] if '/reports/' in path]),2)
+
+    def test_specialist_plain_completion_gets_one_cited_correction_without_source_replay(self):
+        final = message(call('SiteReview', {'findings':[], 'recommendations':[], 'questions':['Verify source coverage?']}))
+        corrected = message(call('SiteReview', {'findings':[{'text':'Traffic comparison inputs remain unavailable.',
+            'fact_ids':['traffic-comparison-status']}], 'recommendations':[], 'questions':['Which supported counted site should be investigated?']}))
+        lead = lead_model([calls('delegate'), final])
+        site = specialist_model('site','street',[final])
+        domain = specialist_model('domain','street',[AIMessage(content='Inputs inspected.'), corrected])
+        imagery = Mock(return_value=[]); property_source = Mock(return_value=({},[])); events=[]
+        with patch('site_agent.ChatXAI',side_effect=[lead,site,domain]):
+            result=analyze_site('unused','fake','Review','street',[],imagery,property_source,lambda:{},lon=LON,lat=LAT,activity=Activity(events.append))
+        self.assertIsNone(result['analysisError'])
+        self.assertEqual(result['specialists'],{'site-evidence':True,'domain-analysis':True})
+        self.assertEqual(domain.tool_sets[-1],{'SiteReview'})
+        self.assertEqual(len(domain.seen),4)
+        self.assertEqual(len([e for e in events if e['stage']=='structured-review']),1)
+        self.assertEqual(imagery.call_count,2)
+        property_source.assert_called_once()
+        self.assertIn('/project/reports/domain-analysis.json',result['artifactsRead']['lead'])
+        self.assertTrue(any(f['id']=='traffic-comparison-status' for f in result['facts']))
+
+    def test_failed_specialist_correction_stays_bounded_and_preserves_validated_evidence(self):
+        final = message(call('SiteReview', {'findings':[], 'recommendations':[], 'questions':['Verify source coverage?']}))
+        bad_number = message(call('SiteReview', {'findings':[{'text':'Traffic comparison inputs show 999 vehicles.',
+            'fact_ids':['traffic-comparison-status']}], 'recommendations':[], 'questions':['Verify demand?']}))
+        for correction in (AIMessage(content='Still plain text.'), bad_number, calls('read_traffic_inputs')):
+            with self.subTest(correction=correction):
+                lead=lead_model([calls('delegate'),final]); site=specialist_model('site','street',[final])
+                domain=specialist_model('domain','street',[AIMessage(content='Inputs inspected.'),correction,final])
+                events=[]; imagery=Mock(return_value=[]); property_source=Mock(return_value=({},[]))
+                with patch('site_agent.ChatXAI',side_effect=[lead,site,domain]):
+                    result=analyze_site('unused','fake','Review','street',[],imagery,property_source,lambda:{},lon=LON,lat=LAT,activity=Activity(events.append))
+                self.assertIsNone(result['analysisError'])
+                self.assertEqual(result['specialists'],{'site-evidence':True,'domain-analysis':False})
+                self.assertEqual(len(domain.seen),4)
+                self.assertEqual(len(domain.responses),1,'no second corrective request may consume the remaining response')
+                self.assertEqual(domain.tool_sets[-1],{'SiteReview'})
+                self.assertEqual(len([e for e in events if e['stage']=='structured-review']),1)
+                self.assertEqual(imagery.call_count,2); property_source.assert_called_once()
+                self.assertIn('/project/reports/domain-analysis.json',result['artifactsRead']['lead'])
+                self.assertNotIn('999',str(result['report']))
+                self.assertTrue(any(f['id']=='traffic-comparison-status' for f in result['facts']))
+
+    def test_specialist_correction_cannot_exceed_existing_model_call_limit(self):
+        final=message(call('SiteReview',{'findings':[],'recommendations':[],'questions':['Verify source coverage?']}))
+        domain=specialist_model('domain','street',[
+            *[message(read('/project/source-brief.json')) for _ in range(9)], AIMessage(content='Inputs inspected.'), final])
+        lead=lead_model([calls('delegate'),final]); site=specialist_model('site','street',[final])
+        with patch('site_agent.ChatXAI',side_effect=[lead,site,domain]):
+            result=analyze_site('unused','fake','Review','street',[],lambda _:[],lambda:({},[]),lambda:{},lon=LON,lat=LAT)
+        self.assertIsNone(result['analysisError'])
+        self.assertEqual(len(domain.seen),12)
+        self.assertEqual(len(domain.responses),1)
+        self.assertFalse(result['specialists']['domain-analysis'])
+
+    def test_cancellation_before_specialist_correction_prevents_another_model_request(self):
+        final=message(call('SiteReview',{'findings':[],'recommendations':[],'questions':['Verify source coverage?']}))
+        domain=specialist_model('domain','street',[AIMessage(content='Inputs inspected.'),final])
+        lead=lead_model([calls('delegate'),final]); site=specialist_model('site','street',[final])
+        def emit(event):
+            if event['stage']=='structured-review': activity.cancelled.set()
+        activity=Activity(emit)
+        with patch('site_agent.ChatXAI',side_effect=[lead,site,domain]):
+            result=analyze_site('unused','fake','Review','street',[],lambda _:[],lambda:({},[]),lambda:{},lon=LON,lat=LAT,activity=activity)
+        self.assertIn('canceled',result['analysisError'])
+        self.assertEqual(len(domain.seen),3)
+        self.assertEqual(len(domain.responses),1)
 
     def test_unknown_citations_and_unsupported_measurements_are_rejected(self):
         item = fact("crossing", "Marked crossing", 25, "m", source("Planner"))

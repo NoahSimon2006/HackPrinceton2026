@@ -148,7 +148,7 @@ def sponsor_checks(design, outlines: list | None, frontages: list | None) -> dic
             assessed += 1
             if cuts > 0 and design.distance(line) <= 3.0:
                 conflicts.append(frontage.get("evidenceId"))
-        if assessed == len(frontages):
+        if assessed == len(frontages) and all(frontage.get("coverageComplete") is not False for frontage in frontages):
             result["access_conflicts"] = len(conflicts)
         result["access_evidence"] = [c for c in conflicts if c]
     return result

@@ -11,7 +11,7 @@ from agent_context import fact_index, compact_evaluation
 from xai_runtime import invoke_model, classify_error
 from deepagents.backends.utils import create_file_data
 from langchain.tools import ToolRuntime
-from langchain_core.messages import ToolMessage, RemoveMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, RemoveMessage
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
@@ -19,7 +19,7 @@ from langgraph.types import Command
 from deepagents import create_deep_agent
 from agent_workspace import (WorkspaceBackend, FILESYSTEM_TOOLS, skill_files, permissions, tool_guard, serializable_response)
 from deepagents.profiles import register_harness_profile, HarnessProfile, GeneralPurposeSubagentProfile
-from langchain.agents.middleware import ModelCallLimitMiddleware, wrap_model_call
+from langchain.agents.middleware import ModelCallLimitMiddleware, after_model, wrap_model_call
 from langchain.agents.structured_output import ToolStrategy
 from langchain_xai import ChatXAI
 from langsmith import tracing_context
@@ -396,6 +396,8 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         if name == "lead":
             allowed |= {"task", "write_todos"}
         model_calls = 0
+        review_repair_used = False
+        review_repair_pending = False
         primary_skill = "proposal-publication" if name == "lead" else "property-association" if name == "site-evidence" else "stormwater-concept" if workflow == "water" else "traffic-evaluation"
 
         def validated(recommendations):
@@ -403,6 +405,31 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                 raise ValueError(f"Read /skills/{primary_skill}/SKILL.md before completing this assignment.")
             if name == "lead":
                 check_recommendations(recommendations)
+
+        @after_model(can_jump_to=["model", "end"])
+        def repair_specialist_review(state, runtime):
+            nonlocal review_repair_used, review_repair_pending
+            if name == "lead":
+                return None
+            activity.check()
+            if state.get("structured_response") is not None:
+                return None
+            if review_repair_pending:
+                # The single correction did not validate. Preserve the existing
+                # partial-report fallback instead of opening another model loop.
+                return {"jump_to": "end"}
+            last = next((item for item in reversed(state["messages"]) if isinstance(item, AIMessage)), None)
+            if (review_repair_used or last is None or last.tool_calls or needed - attempted
+                    or f"/skills/{primary_skill}/SKILL.md" not in skill_reads[name]):
+                return None
+            review_repair_used = review_repair_pending = True
+            activity.event(name, "structured-review", "retry",
+                           "Saving the collected specialist findings in the required cited report format.")
+            return {"messages": [HumanMessage(content=
+                "Your source investigation is complete, but plain text did not save a report. "
+                "Finish now with the SiteReview tool, using only the facts already returned and their exact cited values. "
+                "Do not call source or filesystem tools. If a conclusion is unsupported, omit it and ask the necessary question.")],
+                "jump_to": "model"}
 
         @wrap_model_call
         def scoped(request, handler):
@@ -417,7 +444,9 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                     activity.event(name, "validation", "retry", "Correcting bounded design parameters before simulation.")
                 elif isinstance(message, ToolMessage) and '"status": "invalid_layouts"' in str(message.content):
                     activity.event(name, "validation", "retry", "Choosing distinct valid alternatives before simulation.")
-            phase_tools = set(allowed)
+            # ToolStrategy appends SiteReview after this filter. The repair
+            # exposes only that schema, with all existing validators intact.
+            phase_tools = set() if review_repair_pending else set(allowed)
             if name == "lead":
                 if not {"site-evidence", "domain-analysis"} <= summaries.keys():
                     phase_tools -= {"evaluate_designs", "draft_rain_garden"}
@@ -438,6 +467,12 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             except Exception:
                 activity.event(name, "model-request", "failed", "The model request failed; retrieved source facts are preserved.")
                 raise
+            if review_repair_pending and any(
+                    call["name"] != "SiteReview"
+                    for item in response.result if isinstance(item, AIMessage) for call in item.tool_calls):
+                # Hidden tools remain executable in the graph registry; reject
+                # unexpected calls here before a correction can run any of them.
+                raise ValueError("Specialist report correction may only submit SiteReview.")
             response = serializable_response(response)
             if response.structured_response is not None and name != "lead":
                 save_report(name, response.structured_response)
@@ -449,7 +484,9 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
 
         return create_deep_agent(model=models[name], backend=backend, tools=tools,
             subagents=subagents, skills=["/skills/"], permissions=permissions(name),
-            middleware=[ModelCallLimitMiddleware(run_limit=12, exit_behavior="error"), scoped,
+            # after_model hooks run in reverse order: increment the call limit
+            # before a specialist repair is allowed to jump back to the model.
+            middleware=[repair_specialist_review, ModelCallLimitMiddleware(run_limit=12, exit_behavior="error"), scoped,
                         tool_guard(name, activity, skill_reads, artifact_reads, assignments, backend, task_failure)],
             system_prompt=instruction, checkpointer=checkpoint_backend if name == "lead" else None,
             response_format=ToolStrategy(review_schema(facts, attempted, needed, validated,

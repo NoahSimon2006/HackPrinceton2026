@@ -251,6 +251,11 @@ def property_facts(details, frontages, nearby=None):
         valid_frontages.append(frontage)
         facts.append(fact(identifier, "Selected-property frontage" if frontage.get("selectedProperty") else "Nearby-property frontage",
                           geometry.length, "m", origin, note="Source frontage line length; not road width or crossing distance. Ownership of nearby frontage is not inferred.", feature_ids=[identifier]))
+    if len(valid_frontages) != len(frontages):
+        # Keep invalid geometry off the map without losing its coverage gap.
+        # Consumers must not mistake the remaining lines for a complete source.
+        for frontage in valid_frontages:
+            frontage["coverageComplete"] = False
     frontages[:] = valid_frontages
     return facts, warnings
 

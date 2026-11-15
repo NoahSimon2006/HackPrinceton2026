@@ -390,7 +390,7 @@ Develop candidate-specific treatment geometry, internal alternatives, explicit e
 
 ### Checkpoint 6 Complete the traffic design loop
 
-**Implemented; live acceptance partial:** See [Checkpoint 6 verification](CHECKPOINT_6_TRAFFIC_LOOP.md). Native historical comparison, exact rejected geometry and a complete live conversational revision passed. Shared pacing/retries and compact context resolved the observed demo blockage. A live anchored scout journey and eligible recommendation remain acceptance gaps. Implementation is included in this release; those live acceptance gaps remain open.
+**Implemented; live acceptance partial:** See [Checkpoint 6 verification](CHECKPOINT_6_TRAFFIC_LOOP.md). Native historical comparison, exact rejected geometry and a complete live conversational revision passed. Shared pacing/retries and compact context resolved the observed demo blockage. The live anchored scout/evaluation/revision journey is now verified at Main/1st; an eligible recommendation remains an acceptance gap. See the [follow-up](CHECKPOINT_6_FOLLOWUP.md). The core implementation is released; the local follow-up closes the linked journey gap while the eligible-recommendation gap remains open.
 
 **Outcome:** A selected traffic opportunity yields inspectable alternatives and reproducible evaluations where supported.
 

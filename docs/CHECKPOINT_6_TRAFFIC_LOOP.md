@@ -2,7 +2,7 @@
 
 Implemented November 15, 2026 on `codex/checkpoint-6-traffic-loop`; integrated for release with the latest `main` map and source fixes. Checkpoint 5 was committed as `abf6ef3` (`Complete sourced stormwater design and revision loop`) and pushed to `origin/main` by a fast-forward.
 
-**Implementation is complete; some live acceptance remains open.** A real native agent run produced three inspectable rejected layouts, and the previously rate-limited conversational revision now completes with the existing key. See [model reliability verification](MODEL_DEMO_RELIABILITY.md): the full revision took 65.1 seconds with a cited summary and no provider errors. An anchored live scout journey and an eligible real traffic recommendation remain open. Checkpoint 7 has not started.
+**Implementation is complete; some live acceptance remains open.** A real native agent run produced three inspectable rejected layouts, and the previously rate-limited conversational revision now completes with the existing key. See [model reliability verification](MODEL_DEMO_RELIABILITY.md): the full revision took 65.1 seconds with a cited summary and no provider errors. The [Checkpoint 6 follow-up](CHECKPOINT_6_FOLLOWUP.md) now verifies a live Main/1st scout → select → evaluate → revise journey. An eligible real traffic recommendation remains open. Checkpoint 7 has not started.
 
 ## Delivered behavior
 
@@ -64,7 +64,7 @@ Release integration on top of `main` through `fb1b5eb` passed **83 focused Pytho
 
 ## Remaining acceptance gaps
 
-- Demonstrate a live flow candidate spatially linked to a verified counted intersection; otherwise keep the explicit direct historical-study path.
+- The live count-linked scouting/evaluation/revision path is verified at Main/1st in the follow-up; its tested alternatives remain rejected.
 - Obtain supported property access evidence and demonstrate an eligible real design. The small modeled CO₂ reduction at this site is insufficient to override a queue or access failure.
 - Arbitrary intersection families, current turning-demand inference, conceptual 3D and core-release acceptance remain outside this checkpoint.
 

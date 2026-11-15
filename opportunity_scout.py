@@ -146,9 +146,13 @@ def _signals(workflow, bounds, data):
             elif workflow == 'street':
                 pd = previous['feature']['properties'].get('scalar_detail', {})
                 sd = signal['feature']['properties'].get('scalar_detail', {})
-                overlap = (pd.get('road_name') and pd.get('road_name') == sd.get('road_name')
-                           and pd.get('direction') == sd.get('direction')
-                           and signal['_shape'].distance(previous['_shape']) < 35)
+                same_corridor = (pd.get('road_name') and pd.get('road_name') == sd.get('road_name')
+                                 and pd.get('direction') and pd.get('direction') == sd.get('direction'))
+                # Proximity alone does not make different roads or opposing
+                # approaches the same opportunity. Keep their source extents
+                # distinct so one cannot hide the other's counted-site link.
+                close = close and same_corridor
+                overlap = same_corridor and signal['_shape'].distance(previous['_shape']) < 35
             if close or overlap:
                 previous['memberIds'] = list(dict.fromkeys([*previous['memberIds'], *signal['memberIds']]))
                 break
