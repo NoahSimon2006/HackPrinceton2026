@@ -7,9 +7,10 @@ const source = await readFile(new URL('../public/planner.js', import.meta.url), 
 const transportSource = await readFile(new URL('../public/analysis-stream.js', import.meta.url), 'utf8');
 function harness(mode = 'water', options = {}) {
   const elements = new Map();
-  const element = () => ({ hidden: false, checked: false, disabled: false, value: '', textContent: '',
+  const element = tagName => ({ tagName, hidden: false, open: false, checked: false, disabled: false, value: '', textContent: '',
     events: {}, children: [], attributes: {}, style: { setProperty() {} }, classList: { toggle() {} },
-    setAttribute(name, value) {this.attributes[name]=value;}, replaceChildren(...children) {this.children=children;}, append(...children) {this.children.push(...children);}, scrollIntoView() {},
+    setAttribute(name, value) {this.attributes[name]=value;}, replaceChildren(...children) {this.children=children;}, append(...children) {this.children.push(...children);}, scrollIntoView() {}, focus() {},
+    click() { this.events.click?.(); },
     addEventListener(name, handler) { this.events[name] = handler; } });
   const $ = (id) => {
     if (!elements.has(id)) elements.set(id, element());
@@ -505,6 +506,49 @@ const descendantsText = element => [element.textContent,...element.children.map(
   assert.equal(h.requests.filter(r=>r.url==='/api/site-analysis').length,0,'restoration does not call the agent');
 }
 console.log('PASS: real streamed partial evidence, nullable metadata, interrupted-run retry and saved-result restoration');
+
+{
+  const facts = [
+    {id:'parcel-area',label:'Selected parcel area',display:'70,744.08 m²',basis:'measured'},
+    {id:'county-rainfall',label:'County design rainfall',value:1.03,display:'1.03 in',basis:'estimated'},
+    {id:'county-watershed',label:'County watershed',display:'Ballona Creek',basis:'reported'},
+    ...Array.from({length:35},(_,i)=>({id:`detail-${i}`,label:`Technical measurement ${i}`,display:'Recorded',basis:'reported'})),
+  ];
+  const report = {findings:[{text:'Full technical finding about the parcel.',fact_ids:['parcel-area']}],recommendations:[],questions:[]};
+  const saved={id:'a'.repeat(32),version:1,resultVersion:1,status:'ready',artifacts:[],events:[],
+    snapshot:{workflow:'water',siteId:'saved-water-summary',lon:-118.25249,lat:34.04670,propertyId:null,
+      question:'Find a compact rain garden.',markings:[],rainfallScenario:null,inputRevision:0,proposalRevision:1},
+    result:{report,facts,sourceStatus:{outlines:'ready',hydrology:'ready',property:'empty'},
+      proposal:{workflow:'water',overlap:{status:'checked'},evidence:[{id:'county-rainfall'}],metrics:[]}}};
+  const h = harness('water',{savedProject:saved});
+  h.map.fire('scoutselect',{project:saved});await flush();await flush();
+  const assessment = h.$('agent-assessment').children;
+  const intro = assessment.filter(node=>node.tagName!=='details').map(descendantsText).join(' ');
+  assert.match(intro,/A rain garden fits.*avoids mapped buildings.*Runoff capture is still unknown/);
+  assert.match(intro,/Confirm next.*View design.*See supporting evidence/);
+  assert.doesNotMatch(intro,/Full technical finding|70,744/);
+  const full = assessment.find(node=>node.tagName==='details');
+  assert.equal(full.open,false);
+  assert.match(descendantsText(full),/Full technical finding.*Selected parcel area/);
+  assert.equal(h.$('water-evidence-summary').children.filter(node=>node.tagName==='dt').length,4);
+  assert.match(descendantsText(h.$('water-evidence-summary')),/1.03 inches over 24 hours.*LA County source/);
+  assert.equal(h.$('all-site-facts-label').textContent,'All 38 measurements and sources');
+  assert.equal(h.$('all-site-facts').open,false);
+  assert.equal(h.$('site-facts-list').children.length,38);
+  const rainSource = h.$('water-evidence-summary').children.flatMap(node=>node.children).find(node=>node.textContent==='LA County source');
+  rainSource.click();
+  assert.equal(h.$('all-site-facts').open,true,'source links open the exact record inside the ledger');
+  assert.equal(h.$('fact-county-rainfall').open,true);
+  assert.equal(h.requests.filter(r=>r.url==='/api/site-analysis').length,0);
+
+  const blocked = {...saved,result:{...saved.result,proposal:null,draftQuestion:'Can you outline the driveway to keep clear?'}};
+  const next = harness('water',{savedProject:blocked});
+  next.map.fire('scoutselect',{project:blocked});await flush();await flush();
+  const blockedIntro = next.$('agent-assessment').children.filter(node=>node.tagName!=='details').map(descendantsText).join(' ');
+  assert.match(blockedIntro,/No rain garden placed.*Can you outline the driveway to keep clear/);
+  assert.doesNotMatch(blockedIntro,/View design/);
+}
+console.log('PASS: saved stormwater assessments lead with the decision; all facts and blocked-site details remain accessible');
 
 {
   const h=harness('street',{streamResponses:[new TypeError('Failed to fetch'),[activity(partialFacts),terminal(partialFacts)]]});
