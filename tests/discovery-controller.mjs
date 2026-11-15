@@ -4,7 +4,7 @@ import vm from 'node:vm';
 const source=await readFile(new URL('../public/discovery.js',import.meta.url),'utf8');
 const flush=()=>new Promise(setImmediate);
 function harness(mobile=false) {
-  const elements=new Map(),requests=[],events=[],rendered=[],timers=[],clock={now:Date.now()};
+  const elements=new Map(),requests=[],events=[],rendered=[],timers=[],windowEvents={},clock={now:Date.now()};
   class TestDate extends Date {static now(){return clock.now;}}
   const element=()=>({value:'',disabled:false,hidden:false,children:[],events:{},textContent:'',
     classList:{contains:()=>false},setAttribute(){},append(...children){this.children.push(...children);},
@@ -15,11 +15,11 @@ function harness(mobile=false) {
     fire(name,event){events.push({name,event});this.handlers[name]?.(event);},on(name,fn){this.handlers[name]=fn;},attributionControl:{addAttribution(){}}};
   const popup={setLatLng(){return this;},setContent(content){this.content=content;return this;},openOn(){return this;}};
   const json=(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject}));
-  vm.runInNewContext(source,{$,map,json,planningMode:'street',coverage:null,AbortController,setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},Date:TestDate,window:{matchMedia:()=>({matches:mobile})},
+  vm.runInNewContext(source,{$,map,json,planningMode:'street',coverage:null,AbortController,setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},Date:TestDate,window:{matchMedia:()=>({matches:mobile}),addEventListener:(name,fn)=>{windowEvents[name]=fn;}},
     document:{createElement:element,getElementById:$},
     L:{latLng:(lat,lng)=>({lat,lng}),layerGroup:()=>overlay,popup:()=>popup,circleMarker:()=>({}),
       geoJSON:(data,options)=>{for(const feature of data.features){const leaf={bindTooltip(){},on(name,fn){this[name]=fn;}};options.onEachFeature(feature,leaf);rendered.push({feature,leaf});}return{addTo(){}};}}});
-  return{$,map,requests,events,rendered,overlay,timers,clock};
+  return{$,map,requests,events,rendered,overlay,timers,clock,windowEvents};
 }
 function data(workflow='street',id='flow') {
   return{schema:1,workflow,version:`${workflow}-hash`,bbox:[-118.26,34.04,-118.24,34.06],
@@ -31,6 +31,7 @@ function data(workflow='street',id='flow') {
 {
   const h=harness();
   assert.equal(h.requests[0].url,'/api/discovery?workflow=street');
+  assert.equal(h.requests[0].options.cache,'no-store','page load must request current data without browser caching');
   h.requests[0].resolve(data());await flush();
   assert.equal(h.rendered.length,1);
   assert.match(h.$('discovery-limit').textContent,/traffic volume and emissions are not measured/);
@@ -77,6 +78,21 @@ console.log('PASS: source-only discovery, selection, off toggle, partial failure
 console.log('PASS: narrow-screen controls collapse after selection and reopen on request');
 
 {
+  const h=harness();h.requests[0].resolve(data());await flush();
+  h.windowEvents.pageshow({persisted:false});
+  assert.equal(h.requests.length,1,'ordinary page load must not request traffic twice');
+  h.windowEvents.pageshow({persisted:true});
+  assert.equal(h.requests.length,2,'restoring a saved page must refresh even a cached traffic layer');
+  assert.equal(h.requests[1].options.cache,'no-store');
+  h.requests[1].resolve(data());await flush();
+  h.map.fire('plannerworkspace',{mode:'water'});
+  h.requests[2].resolve(data('water','terrain'));await flush();
+  h.windowEvents.pageshow({persisted:true});
+  assert.equal(h.requests.length,3,'restoring stormwater must not fetch traffic');
+}
+console.log('PASS: fresh traffic request on page load and browser restoration without duplicate startup requests');
+
+{
   const h=harness();const current=data();
   const live={...current.layers[0],id:'flow',version:'flow-current',status:'partial',unit:'% of free-flow speed',
     features:[{...current.layers[0].features[0],id:'slow-road',properties:{...current.layers[0].features[0].properties,
@@ -95,6 +111,7 @@ console.log('PASS: narrow-screen controls collapse after selection and reopen on
   assert.equal(h.rendered.length,0,'both current-traffic layers expire without historical fallback');
   h.$('discovery-refresh').events.click();
   assert.equal(h.requests.length,2,'refresh is explicitly initiated');
+  assert.equal(h.requests[1].options.cache,'no-store','manual refresh also bypasses browser caching');
   h.map.fire('plannerworkspace',{mode:'water'});
   h.requests[2].resolve(data('water','rainfall'));await flush();
   h.requests[1].resolve(data());await flush();

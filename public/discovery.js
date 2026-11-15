@@ -113,7 +113,7 @@
     try {
       const cached=cache.get(mode);
       const reusable=cached && (mode!=='street' || !cached.flow_expires_epoch || Date.now()/1000<cached.flow_expires_epoch);
-      const result=!retry&&reusable?cached:await json(`/api/discovery?workflow=${mode}`,{signal:controller.signal});
+      const result=!retry&&reusable?cached:await json(`/api/discovery?workflow=${mode}`,{signal:controller.signal,cache:'no-store'});
       if(request!==token)return;
       if(result.workflow!==mode || result.schema!==1 || !Array.isArray(result.layers))throw new Error('Discovery identity mismatch.');
       data=result;cache.set(mode,result);picker.replaceChildren();
@@ -144,7 +144,9 @@
   $('discovery-retry').addEventListener('click',()=>load(mode,true));
   $('discovery-refresh').addEventListener('click',()=>load(mode,true));
   document.addEventListener?.('visibilitychange',expireFlow);
+  // Back/forward restoration resumes this script instead of running startup again.
+  window.addEventListener('pageshow',event=>{if(event.persisted && mode==='street')load(mode,true);});
   map.on('plannerworkspace',({mode})=>load(mode));
   map.attributionControl.addAttribution('Traffic © TomTom · Street context © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Terrain: USGS · Hydrology: LA County');
-  load(planningMode);
+  load(planningMode,true);
 })();
