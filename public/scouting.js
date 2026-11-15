@@ -23,9 +23,9 @@
   function snapshotText(batch) {
     const at = batch.snapshotAt || batch.created;
     const date = new Date(at), timestamp = Number.isFinite(date.getTime())
-      ? ` · traffic retrieved ${date.toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}` : '';
+      ? ` · ${date.toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}` : '';
     const stale = batch.evidenceFreshness === 'snapshot' || (batch.candidates ?? []).some(c=>Number.isFinite(expiresAt(c)) && Date.now() >= expiresAt(c));
-    return `Saved search${timestamp}. ${stale ? 'Traffic may have changed; your feedback and choices stay available.' : 'These readings describe conditions at search time.'} Refresh map traffic to check current conditions.`;
+    return `Saved results${timestamp}${stale ? ' · Traffic may have changed.' : ' · Traffic at search time.'}`;
   }
   function updateFreshness() {
     clearTimeout(expiryTimer);
@@ -98,6 +98,34 @@
     if(candidate.provenance?.retrievedAt) details.append(el('p',`Retrieved ${new Date(candidate.provenance.retrievedAt).toLocaleString()}`));
     return details;
   }
+  const shortText = (value,chars,words) => typeof value==='string' && value.length<=chars && value.trim().split(/\s+/).length<=words ? value.trim() : '';
+  function compactFeedback(candidate) {
+    const feedback=candidate.feedback ?? {}, supplied=feedback.brief ?? {};
+    if(shortText(supplied.headline,100,16) && (supplied.metric==='' || shortText(supplied.metric,140,22)) && shortText(supplied.action,220,36)
+        && [supplied.headline,supplied.metric,supplied.action].join(' ').trim().split(/\s+/).length<=60) return supplied;
+    // Older saved results did not have compact copy. Build it from structured
+    // evidence, leaving every original sentence available in the details.
+    const prefix=`${candidate.id}-`, facts=new Map((candidate.evidence ?? []).map(f=>[f.id?.startsWith(prefix)?f.id.slice(prefix.length):f.id,f]));
+    const number=key=>{const value=facts.get(key)?.value;return typeof value==='number' && Number.isFinite(value) && value>=0 ? value : null;};
+    const signal=number('signal'), length=number('length_m'), street=mode==='street';
+    const uses=(candidate.evidence ?? []).filter(f=>f.id?.includes('costar-nearby-use-')).map(f=>f.label).join(' ').toLowerCase();
+    let metric='', action=street?'Check turning queues and nearby entrances, then choose one small change to test.':'Trace runoff to the actual inlet, then mark a planting area that keeps entrances clear.';
+    if(signal!==null) metric=street && signal<=100 ? `Traffic was ${Number((100-signal).toFixed(1))}% slower than uncongested speed.`
+      : !street ? `Terrain suggests about ${signal.toLocaleString()} m² may drain toward this point.` : '';
+    if(!metric) {
+      const fact=(candidate.evidence ?? []).find(f=>typeof f.value==='number' && Number.isFinite(f.value) && f.unit && shortText(f.label,70,10));
+      if(fact) metric=`${fact.label}: ${fact.value.toLocaleString()} ${fact.unit}.`;
+    }
+    if(street) {
+      if(facts.has('historical-demand-date')) action='Check current turns against the historical counts before testing a change.';
+      else if(/retail|industrial|warehouse/.test(uses) || number('costar-reportedLoadingDocks')>0) action='Check loading times and entrances before testing a curb or signal change.';
+      else if(/multifamily|residential/.test(uses)) action='Check residential driveways and crossings before changing the curb or signal timing.';
+      else if(length!==null && length>=300) action='Walk the mapped stretch and locate the main queue before testing signal or access changes.';
+    }
+    return {headline:shortText(feedback.headline,100,16) || (street?'Check this slow approach':'Trace runoff here'),
+      metric:metric || (street?'Traffic observation saved with this search.':'Terrain observation saved with this search.'),
+      action:shortText(feedback.nextStep,180,30) || action};
+  }
   async function choose(candidate) {
     if(running() || selecting || unavailable(candidate)) return;
     const current=generation, id=search.id; selecting=true; render();
@@ -122,7 +150,7 @@
       return article;
     }
     const investigation=el('details',undefined,'scout-investigation');investigation.open=false;
-    investigation.append(el('summary','Investigation and evidence'));
+    investigation.append(el('summary','Details and sources'));
     const citations=evidence(candidate), facts=new Map((candidate.evidence ?? []).map((fact,index)=>[fact.id,{fact,index}]));
     function citedParagraph(value,ids=[]) {
       const paragraph=el('p',value);
@@ -134,28 +162,29 @@
       }
       return paragraph;
     }
-    // Saved searches can predate structured feedback. Their actual evidence and
-    // next action still provide a useful card when specialist review is absent.
-    const feedback=candidate.feedback ?? {}, street=mode==='street';
-    article.append(el('h4',feedback.headline || (street?'Investigate this slow approach':'Explore this collection area'),'scout-feedback-title'));
-    article.append(citedParagraph(feedback.observation || candidate.environmental?.summary ||
-      (street?'Use this mapped location to check traffic flow and nearby access.':'Use this mapped location to trace where rainwater collects.'),feedback.factIds || []));
-    const relevance=feedback.relevance || candidate.reason;
-    if(relevance) article.append(el('h4','Why consider it'),el('p',relevance));
+    const feedback=candidate.feedback ?? {}, brief=compactFeedback(candidate);
     const findings=batch.reviewStale ? [] : (batch.review?.findings ?? []).filter(finding=>
       finding.candidate_id===candidate.id && finding.text && finding.fact_ids?.length && finding.fact_ids.every(id=>facts.has(id)));
+    // Only purpose-written summaries replace the concrete source action. Older
+    // short findings can be measurement-only or caveats, so keep them in detail.
+    const concise=findings.map(finding=>shortText(finding.summary,220,42)).find(Boolean);
+    if(!concise) article.append(el('p',brief.headline,'scout-feedback-title'));
+    if(brief.metric) article.append(el('p',brief.metric,'scout-metric'));
+    const nextStep=el('section',undefined,'scout-next-step');
+    nextStep.append(el('p',concise || brief.action));article.append(nextStep);
+    if(feedback.headline) investigation.append(el('h4',feedback.headline));
+    const observation=feedback.observation || candidate.environmental?.summary;
+    if(observation) investigation.append(el('h4','What the evidence shows'),citedParagraph(observation,feedback.factIds || []));
+    const relevance=feedback.relevance || candidate.reason;
+    if(relevance) investigation.append(el('h4','Why consider it'),el('p',relevance));
     if(findings.length) {
       const assessment=el('section',undefined,'scout-assessment');assessment.append(el('h4','Agent assessment'));
       for(const finding of findings) assessment.append(citedParagraph(finding.text,finding.fact_ids));
-      article.append(assessment);
+      investigation.append(assessment);
     }
-    const nextStep=el('section',undefined,'scout-next-step');
-    nextStep.append(el('h4','Start here'),el('p',feedback.nextStep || candidate.direction ||
-      (street?'Choose this location, then check the slow approach, crossings and property entrances before proposing a change.':
-        'Choose this location, then trace the nearest inlet and check space for planting before sizing a rain garden.')));
-    article.append(nextStep);
+    if(feedback.nextStep || candidate.direction) investigation.append(el('h4','Suggested investigation'),el('p',feedback.nextStep || candidate.direction));
     const tradeoff=feedback.tradeoff || candidate.disruption || candidate.feasibility;
-    if(tradeoff) article.append(el('h4','What to weigh'),el('p',tradeoff));
+    if(tradeoff) investigation.append(el('h4','What to weigh'),el('p',tradeoff));
     if(!candidate.propertyId && candidate.center?.every(Number.isFinite))
       investigation.append(el('p',`Map location ${index+1} · ${candidate.center[1].toFixed(5)}, ${candidate.center[0].toFixed(5)}`,'scout-basis'));
     investigation.append(el('p','Evidence availability is reported separately and does not raise a location’s priority.','scout-basis'));
@@ -204,21 +233,20 @@
       if(!latest) section.append(el('summary',`Earlier locations · search ${index+1}`));
       else section.append(el('h3',batches.length>1?`More locations · search ${index+1}`:'Researched locations','scout-batch-title'));
       const goal=batch.feedbackGoal || search.goal;
-      if(goal) section.append(el('p',`Your goal: ${goal}`,'scout-goal-context'));
-      if(batch.summary) section.append(el('p',batch.summary));
       if(mode==='street' && (batch.candidates ?? []).some(c=>!unavailable(c))) {
         const notice=el('p',snapshotText(batch),'scout-snapshot');
         freshnessItems.push({batch,node:notice});section.append(notice);
       }
-      if(batch.goalChecks?.length) {
-        const checks=el('details',undefined,'scout-goal-checks');checks.open=false;
-        checks.append(el('summary','Checks for your goal'));
-        const items=el('ul');for(const check of batch.goalChecks) items.append(el('li',check));
-        checks.append(items);section.append(checks);
-      }
-      if(batch.methodology || batch.warnings?.length || batch.agentStatus==='partial') {
+      if(goal || batch.summary || batch.methodology || batch.goalChecks?.length || batch.warnings?.length || batch.agentStatus==='partial') {
         const method=el('details',undefined,'scout-method');method.open=false;
-        method.append(el('summary','How locations were compared'));
+        method.append(el('summary','Search details'));
+        if(goal) method.append(el('p',`Your goal: ${goal}`,'scout-goal-context'));
+        if(batch.summary) method.append(el('p',batch.summary));
+        if(mode==='street') method.append(el('p','Traffic readings describe this saved search. Your feedback and choices stay available; refresh map traffic to check current conditions.','scout-basis'));
+        if(batch.goalChecks?.length) {
+          method.append(el('h4','Checks for your goal'));
+          const items=el('ul');for(const check of batch.goalChecks) items.append(el('li',check));method.append(items);
+        }
         if(batch.methodology) method.append(el('p',batch.methodology,'scout-basis'));
         if(batch.agentStatus==='partial') method.append(el('p','The full agent review could not finish. Available specialist findings and source-based guidance are shown for each location.'));
         for(const warning of batch.warnings ?? []) method.append(el('p',warning,'scout-notice'));

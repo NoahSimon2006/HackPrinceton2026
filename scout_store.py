@@ -8,6 +8,7 @@ import time
 from uuid import uuid4
 
 from project_store import ProjectConflict, identifier, now
+from place_feedback import enrich_feedback
 
 REFRESH_NOTICE = "This older search did not save its location details. Run a new search to recover selectable locations; new searches keep their answers."
 
@@ -95,6 +96,18 @@ class ScoutStore:
     def get(self, search_id):
         with self.lock, self.projects.connect() as db:
             value = self._read(db, search_id)
+            for batch in value['batches']:
+                missing = [candidate for candidate in batch['candidates']
+                           if candidate.get('available') is not False and not candidate.get('feedback', {}).get('brief')]
+                if missing:
+                    # Old answers get the compact presentation too. Derive it
+                    # from their saved facts; never rewrite their original
+                    # assessment, source snapshot or stored record.
+                    compact = enrich_feedback(batch, value['workflow'], batch.get('feedbackGoal', value['goal']))
+                    briefs = {candidate['id']: candidate.get('feedback', {}).get('brief')
+                              for candidate in compact['candidates']}
+                    for candidate in missing:
+                        candidate.setdefault('feedback', {})['brief'] = briefs[candidate['id']]
             if value['workflow'] == 'street':
                 current = time.time()
                 for batch in value['batches']:

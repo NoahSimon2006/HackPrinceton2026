@@ -104,7 +104,10 @@ class ScoutStoreTest(unittest.TestCase):
             self.assertEqual(saved['summary'], current['summary'])
             saved_candidate = saved['candidates'][0]
             self.assertEqual(saved_candidate['evidenceFreshness'], 'snapshot')
-            for key in ('feedback', 'evidence', 'geometry', 'center', 'label'):
+            for key, original in item['feedback'].items():
+                self.assertEqual(saved_candidate['feedback'][key], original)
+            self.assertEqual(saved_candidate['feedback']['brief'], current['candidates'][0]['feedback']['brief'])
+            for key in ('evidence', 'geometry', 'center', 'label'):
                 self.assertEqual(saved_candidate[key], item[key])
             self.assertTrue(saved_candidate.get('available', True))
             selected = restarted.select(search['id'], item['id'])
@@ -123,8 +126,28 @@ class ScoutStoreTest(unittest.TestCase):
                 search = self.complete(request('street'), item)
                 saved = ScoutStore(self.projects).get(search['id'])['batches'][0]
                 self.assertEqual(saved['evidenceFreshness'], 'snapshot')
-                self.assertEqual(saved['candidates'][0]['feedback'], item['feedback'])
+                self.assertEqual(saved['candidates'][0]['feedback']['nextStep'], item['feedback']['nextStep'])
                 self.assertEqual(self.store.select(search['id'], item['id'])['candidate']['id'], item['id'])
+
+    def test_old_answers_get_distinct_briefs_without_rewriting_saved_content(self):
+        items = [candidate(1), candidate(2)]
+        for item, length in zip(items, (209, 118)):
+            item['evidence'] = [{'id': item['id'] + '-signal', 'value': 18},
+                                {'id': item['id'] + '-length_m', 'value': length}]
+            item['feedback'] = {'nextStep': 'The original complete recommendation.'}
+        search = self.store.begin(request('street'), 'a' * 32)
+        self.store.finish(search['id'], 'a' * 32, {'candidates': items})
+        with self.projects.connect() as db:
+            before = db.execute('SELECT payload FROM scouts WHERE id=?', (search['id'],)).fetchone()[0]
+        batch = ScoutStore(self.projects).get(search['id'])['batches'][0]
+        first, second = [item['feedback'] for item in batch['candidates']]
+        self.assertIn('Longest', first['brief']['headline'])
+        self.assertIn('Shortest', second['brief']['headline'])
+        self.assertNotEqual(first['brief']['action'], second['brief']['action'])
+        self.assertEqual(first['nextStep'], items[0]['feedback']['nextStep'])
+        with self.projects.connect() as db:
+            after = db.execute('SELECT payload FROM scouts WHERE id=?', (search['id'],)).fetchone()[0]
+        self.assertEqual(before, after)
 
     def test_cancelled_more_search_preserves_the_previous_saved_answer(self):
         item = {**candidate(), 'expiresAt': time.time() - 30, 'feedback': {'nextStep': 'Check the first location.'}}
@@ -134,7 +157,7 @@ class ScoutStoreTest(unittest.TestCase):
         self.assertFalse(self.store.finish(first['id'], 'b' * 32, {'candidates': [candidate(2)], 'review': {'findings': ['LATE REVIEW']}}))
         saved = ScoutStore(self.projects).get(first['id'])
         self.assertEqual(len(saved['batches']), 1)
-        self.assertEqual(saved['batches'][0]['candidates'][0]['feedback'], item['feedback'])
+        self.assertEqual(saved['batches'][0]['candidates'][0]['feedback']['nextStep'], item['feedback']['nextStep'])
         self.assertNotIn('LATE REVIEW', json.dumps(saved))
         self.assertEqual(self.store.select(first['id'], item['id'])['candidate']['id'], item['id'])
 
@@ -176,7 +199,9 @@ class ScoutStoreTest(unittest.TestCase):
         self.assertIn(old_notice, unchanged)
 
     def test_new_saved_answer_is_not_changed_by_legacy_copy_migration(self):
-        item = {**candidate(), 'expiresAt': time.time() - 30, 'feedback': {'nextStep': 'Check this loading entrance.'}}
+        item = {**candidate(), 'expiresAt': time.time() - 30, 'feedback': {
+            'nextStep': 'Check this loading entrance.',
+            'brief': {'headline': 'Check loading access', 'metric': '', 'action': 'Check this loading entrance.'}}}
         first = self.complete(request('street'), item)
         restored = ScoutStore(self.projects).get(first['id'])
         self.assertEqual(restored['batches'], first['batches'])

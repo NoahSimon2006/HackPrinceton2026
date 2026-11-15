@@ -25,8 +25,8 @@ def bundle():
             "modelContext":{"environmental":"A terrain screening signal; capture unassessed.","evidence":[FACT]}}]}
 
 
-def review(text="The terrain signal is 901.00 m²; investigate drainage connectivity.", ids=None, candidates=None):
-    return message(call("ScoutReview",{"findings":[{"candidate_id":candidate_id,"text":text,"fact_ids":ids or ["terrain-signal"]}
+def review(text="The terrain signal is 901.00 m²; investigate drainage connectivity.", ids=None, candidates=None, summary=None):
+    return message(call("ScoutReview",{"findings":[{"candidate_id":candidate_id,"text":text,"summary":summary,"fact_ids":ids or ["terrain-signal"]}
         for candidate_id in (candidates if candidates is not None else ["candidate-a"])]}))
 
 
@@ -72,6 +72,15 @@ class ScoutAgentTest(unittest.TestCase):
             result = review_scout("unused","fake","Find runoff interception opportunities","water",research,
                 activity=activity or Activity(events.append),persist_artifact=lambda path,content:saved.__setitem__(path,content))
         return result,models,research,saved,events
+
+    def test_brief_advice_is_saved_and_must_be_concise_and_grounded(self):
+        summary = 'A place to trace runoff toward an inlet. Check which surfaces drain here before sizing planting.'
+        invalid = [review(summary='Capture 9999 m² here.'), review(summary='Impact unassessed.'),
+                   review(summary='Check the inlet. ' * 20)]
+        result, _, _, _, _ = self.run_graph([specialist(), specialist(),
+            lead(final=[*invalid, review(summary=summary)])])
+        self.assertEqual(result['review']['findings'][0]['summary'], summary)
+        self.assertNotIn('9999', str(result['review']))
 
     def test_native_parallel_delegation_reads_skills_and_saved_reports_without_raw_geometry(self):
         rendezvous = Barrier(2)

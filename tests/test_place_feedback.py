@@ -150,6 +150,58 @@ class PlaceFeedbackTests(unittest.TestCase):
             self.assertIn('search again', result['summary'])
             self.assertTrue(all('feedback' not in item for item in result['candidates']))
 
+    def test_compact_feedback_has_one_intuitive_metric_and_retains_details(self):
+        item = candidate('one', 53, speed_kmh=21.2, free_flow_kmh=40,
+                         length_m=165.2, time_penalty_s=97.5)
+        result = enrich_feedback({'candidates': [item]}, 'street', 'Improve pedestrian crossings')
+        feedback = result['candidates'][0]['feedback']
+        brief = feedback['brief']
+        self.assertEqual(set(brief), {'headline', 'metric', 'action'})
+        self.assertEqual(brief['metric'], 'Traffic was 47% slower than uncongested speed.')
+        self.assertIn('pedestrian routes', brief['action'])
+        self.assertNotIn('165.2', str(brief))
+        self.assertNotIn('97.5', str(brief))
+        self.assertLessEqual(len(' '.join(brief.values()).split()), 60)
+        self.assertIn('165.2 m', feedback['observation'])
+        self.assertIn('97.5 seconds', feedback['observation'])
+
+    def test_compact_actions_keep_equal_speed_locations_distinct(self):
+        choices = [candidate('long', 18, length_m=209), candidate('short', 18, length_m=118)]
+        for item in choices:
+            item['evidence'].append({'id': item['id'] + '-costar-nearby-use-1',
+                                     'label': 'Nearby CoStar records by property type: Multifamily', 'value': 1})
+        result = enrich_feedback({'candidates': choices}, 'street', 'Improve crossings')
+        first, second = [item['feedback']['brief'] for item in result['candidates']]
+        self.assertIn('Longest', first['headline'])
+        self.assertIn('Shortest', second['headline'])
+        self.assertIn('full stretch', first['action'])
+        self.assertIn('downstream queue', second['action'])
+        self.assertNotEqual(first['action'], second['action'])
+
+    def test_compact_feedback_budget_holds_with_all_goal_topics_and_sparse_sources(self):
+        for workflow in ('street', 'water'):
+            for facts in (candidate('full', 900 if workflow == 'water' else 18,
+                                    length_m=200, path_length_m=50, drop_m=3,
+                                    **{'historical-demand-date': '2015-02-03', 'costar-reportedLoadingDocks': 20}),
+                          {'id': 'empty', 'evidence': []}):
+                with self.subTest(workflow=workflow, candidate=facts['id']):
+                    brief = enrich_feedback({'candidates': [facts]}, workflow,
+                        'Improve safe crossings, preserve loading access, add shade trees and prefer low-cost changes')['candidates'][0]['feedback']['brief']
+                    self.assertTrue(brief['action'])
+                    self.assertLessEqual(len(' '.join(brief.values()).split()), 60)
+                    self.assertNotIn('unassessed', str(brief))
+                    if facts['id'] == 'empty':
+                        self.assertEqual(brief['metric'], '')
+
+    def test_compact_goal_changes_action_without_claiming_benefit(self):
+        bundle = {'candidates': [candidate('one', 53)]}
+        access = enrich_feedback(bundle, 'street', 'Preserve loading access')['candidates'][0]['feedback']['brief']
+        walking = enrich_feedback(bundle, 'street', 'Safer pedestrian crossings')['candidates'][0]['feedback']['brief']
+        self.assertIn('loading entrances', access['action'])
+        self.assertIn('pedestrian routes', walking['action'])
+        self.assertNotEqual(access['action'], walking['action'])
+        self.assertNotIn('emissions', access['metric'])
+
 
 if __name__ == '__main__':
     unittest.main()

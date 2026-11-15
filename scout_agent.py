@@ -22,7 +22,10 @@ from xai_runtime import invoke_model
 class ScoutFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
     candidate_id: str = Field(min_length=1, max_length=160)
-    text: str = Field(min_length=1, max_length=700)
+    summary: str | None = Field(default=None, min_length=1, max_length=220,
+        description="One or two short sentences: why this place fits the goal and the next useful check. No measurement inventory.")
+    text: str = Field(min_length=1, max_length=500,
+        description="Supporting explanation for expanded details; at most three short sentences.")
     fact_ids: list[str] = Field(min_length=1, max_length=6)
 
 
@@ -125,7 +128,16 @@ emissions or a redesign benefit. Use CoStar operating context and Vexcel spatial
 facts to motivate practical next checks; do not invent a sponsor contribution.
 Missing evidence does not prove no opportunity. Return at least one concise
 ScoutReview finding for EVERY candidate that has source facts, with candidate_id
-and supporting fact_ids. In each finding explain what the candidate's specific
+and supporting fact_ids. Always supply summary: at most 35 words and 220 characters,
+in one or two short sentences. Lead with why this location suits the goal and the
+next useful check. The card already displays a key source measurement: do not
+repeat a list of speeds, lengths, dates or percentages. For example: 'A focused
+place to check delivery queues. Observe loading activity before adjusting signals.'
+Use everyday terms such as 'past traffic counts' and 'property boundaries', not
+specialist shorthand such as 'turning sheet' or 'screened excess time'.
+Use text only for supporting detail: at most three short sentences and 500
+characters. Select the most useful insight instead of listing every caveat or
+restating all the source facts. In each finding explain what the candidate's specific
 evidence means for the user's stated goal, then give a concrete next action or
 practical tradeoff. Use plain language the planner can act on. Do not merely
 repeat a measurement, say 'impact unassessed', or list missing data. Pair each
@@ -177,7 +189,7 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
                 if required - covered:
                     raise ValueError("Give at least one useful, cited finding for every candidate with source facts; explain its relevance to the goal and a concrete next check.")
                 for finding in self.findings:
-                    if _only_placeholder(finding.text):
+                    if _only_placeholder(finding.text) or (finding.summary is not None and _only_placeholder(finding.summary)):
                         raise ValueError("A status such as 'impact unassessed' is not feedback. Explain what the cited evidence means for the goal and give a concrete next check.")
                     facts = evidence.get(finding.candidate_id)
                     if facts is None or not set(finding.fact_ids) <= facts.keys():
@@ -186,7 +198,7 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
                     for identifier in finding.fact_ids:
                         item = facts[identifier]
                         supported |= numeric_tokens(" ".join(str(item.get(key,"")) for key in ("label","display","value","method","note")))
-                    if numeric_tokens(finding.text)-supported:
+                    if numeric_tokens(finding.text + ' ' + (finding.summary or ''))-supported:
                         raise ValueError("Use only exact numbers present in the cited candidate facts.")
                 return self
 
@@ -209,6 +221,7 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
             "Finish now with the ScoutReview tool, using only the candidate facts already returned and their exact cited values. "
             "Do not call source or filesystem tools. Give every candidate with source facts a useful cited finding connecting the goal, "
             "the evidence and a concrete next check. Do not invent benefits or return only missing-evidence disclaimers. "
+            "Include a summary of at most 35 words and 220 characters; put supporting detail in text, at most 500 characters. "
             "An empty findings list is allowed only when no candidate has source facts.")
 
         def correct_review():

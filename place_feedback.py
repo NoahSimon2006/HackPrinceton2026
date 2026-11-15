@@ -171,6 +171,80 @@ def _traffic_next(facts, all_facts, topics, citations):
     return action
 
 
+def _brief(facts, all_facts, workflow, topics):
+    """A scan-friendly decision: one distinction, one metric, one next action."""
+    value = _number(facts, 'signal')
+    if workflow == 'water':
+        metric = (f'Terrain suggests runoff may collect from about {value:,.0f} m².'
+                  if value is not None else '')
+        headline = ('Largest terrain collection signal' if _extreme(facts, all_facts, 'signal') else
+                    'Check this runoff collection point')
+        if topics['planting']:
+            action = 'Trace runoff to the inlet, then check soil and utilities for planting beside it.'
+        elif topics['walking']:
+            action = 'Trace runoff to the inlet and mark a storage area that keeps walking routes clear.'
+        elif topics['access']:
+            action = 'Trace runoff to the inlet and mark a storage area outside driveways and loading entrances.'
+        else:
+            action = 'Find the actual inlet, then mark a planting area with a clear overflow route.'
+        return {'headline': headline, 'metric': metric, 'action': action}
+
+    if value is not None and value <= 100:
+        metric = f'Traffic was {100 - value:g}% slower than uncongested speed.'
+    elif value is not None:
+        metric = f'Traffic was at {value:g}% of uncongested speed.'
+    else:
+        speed = _number(facts, 'speed_kmh')
+        metric = f'Recorded speed: {speed:g} km/h.' if speed is not None else ''
+    longest = _extreme(facts, all_facts, 'length_m')
+    shortest = _extreme(facts, all_facts, 'length_m', largest=False)
+    headline = ('Longest mapped slow stretch' if longest else 'Shortest mapped slow stretch' if shortest else
+                'Check what is causing the queue')
+    uses = ', '.join(use for use, _ in _nearby_uses(facts)).lower()
+    historical = facts.get('historical-demand-date', {}).get('value')
+    if historical:
+        headline = 'Turning counts available for comparison'
+        action = 'Check today’s turns against the historical counts before comparing signal changes.'
+    elif any(word in uses for word in ('multifamily', 'residential', 'apartment')):
+        if not longest and not shortest:
+            headline = 'Housing access near the slowdown'
+        if longest:
+            action = 'Walk the full stretch and check whether queues block housing entrances or crossings.'
+        elif shortest:
+            action = 'Check whether the downstream queue blocks nearby housing entrances or crossing routes.'
+        elif topics['walking']:
+            action = 'Check crossing sight lines and queue spillback near the housing entrances.'
+        else:
+            action = 'Observe housing entrances and check whether queues block residents entering or leaving.'
+    elif any(word in uses for word in ('retail', 'restaurant', 'shopping')):
+        if not longest and not shortest:
+            headline = 'Shop access near the slowdown'
+        action = ('Check whether deliveries or pickups block traffic or crossing sight lines beside nearby shops.'
+                  if topics['walking'] else
+                  'Observe deliveries and pickups beside nearby shops before comparing curb management with signal changes.')
+    elif any(word in uses for word in ('industrial', 'warehouse', 'manufactur')):
+        if not longest and not shortest:
+            headline = 'Industrial access near the slowdown'
+        action = 'Observe truck turns at nearby industrial entrances before changing lane width or curb space.'
+    elif longest:
+        action = ('Walk the full stretch to find queues that block crossings before comparing signal changes.' if topics['walking'] else
+                  'Walk the full stretch to find queues that block entrances before comparing signal changes.' if topics['access'] else
+                  'Walk the full stretch to locate each stopping point before comparing signal changes.')
+    elif shortest:
+        action = ('Check sight lines and crossing delays at the downstream stopping point.' if topics['walking'] else
+                  'Check whether the downstream queue blocks driveways or loading entrances.' if topics['access'] else
+                  'Inspect the downstream stopping point for a signal, crossing or driveway conflict.')
+    elif topics['walking']:
+        action = 'Check where queues cross pedestrian routes before comparing signal or curb changes.'
+    elif topics['access']:
+        action = 'Check where queues block driveways or loading entrances before comparing signal or curb changes.'
+    elif topics['cost']:
+        action = 'Locate the stopping point, then compare a small reversible signal or curb trial.'
+    else:
+        action = 'Observe where the queue starts, then check signal timing and driveway conflicts.'
+    return {'headline': headline, 'metric': metric, 'action': action}
+
+
 def enrich_feedback(bundle, workflow, goal):
     """Return a copy with evidence-linked guidance and shared goal constraints.
 
@@ -247,7 +321,8 @@ def enrich_feedback(bundle, workflow, goal):
                 next_step += ' Mark driveways and loading entrances that must remain clear.'
         tradeoff = _tradeoff(facts, workflow, citations)
         candidate['feedback'] = {'headline': headline, 'observation': observation, 'relevance': relevance,
-                                 'nextStep': next_step, 'tradeoff': tradeoff, 'factIds': list(dict.fromkeys(citations))}
+                                 'nextStep': next_step, 'tradeoff': tradeoff, 'factIds': list(dict.fromkeys(citations)),
+                                 'brief': _brief(facts, all_facts, workflow, topics)}
     if candidates:
         count = len(candidates)
         compared = 'traffic observations' if workflow == 'street' else 'terrain paths where runoff may collect'
