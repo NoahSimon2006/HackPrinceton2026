@@ -158,6 +158,44 @@ class ScoutAgentTest(unittest.TestCase):
         self.assertEqual(json.loads(saved["/project/reports/domain-analysis.json"])["status"],"complete")
         self.assertIn("/project/reports/domain-analysis.json",result["artifactsRead"]["lead"])
 
+    def test_plain_lead_completion_gets_one_cited_correction(self):
+        models = [specialist(), specialist(), lead(final=[AIMessage(content="Here are the three locations."), review()])]
+        result, models, research, _, _ = self.run_graph(models)
+        self.assertEqual(result['agentStatus'], 'complete')
+        self.assertEqual(result['reviewSource'], 'lead')
+        self.assertEqual(models[-1].tool_sets[-1], {'ScoutReview'})
+        self.assertEqual(len(models[-1].seen), 5)
+        research.assert_called_once()
+
+    def test_source_refresh_before_assessment_does_not_hide_new_review(self):
+        value = bundle(); value['reviewStale'] = True
+        result, _, _, _, _ = self.run_graph(research=Mock(return_value=value))
+        self.assertFalse(result['reviewStale'])
+        self.assertTrue(result['review']['findings'])
+
+    def test_failed_lead_retains_validated_specialist_advice(self):
+        domain = review('The terrain signal is 901.00 m²; trace the downhill route to an inlet.')
+        site = review('Check access near the terrain signal before placing a planting area.')
+        models = [specialist([site]), specialist([domain]), lead(final=[RuntimeError('PRIVATE PROVIDER ERROR')])]
+        result, _, research, _, _ = self.run_graph(models)
+        self.assertEqual(result['agentStatus'], 'partial')
+        self.assertEqual(result['reviewSource'], 'specialists')
+        self.assertEqual(len(result['review']['findings']), 2)
+        self.assertIn('trace the downhill route', str(result['review']))
+        self.assertIn('Check access', str(result['review']))
+        self.assertNotIn('PRIVATE PROVIDER ERROR', str(result))
+        research.assert_called_once()
+
+    def test_failed_lead_repair_keeps_specialists_without_another_retry(self):
+        models = [specialist(), specialist(), lead(final=[AIMessage(content='Plain conclusion.'),
+                  AIMessage(content='Still plain.'), review()])]
+        result, models, research, _, _ = self.run_graph(models)
+        self.assertEqual(result['reviewSource'], 'specialists')
+        self.assertEqual(result['agentStatus'], 'partial')
+        self.assertEqual(len(models[-1].responses), 1)
+        self.assertEqual(len(result['review']['findings']), 1, 'identical specialist findings are deduplicated')
+        research.assert_called_once()
+
     def test_skipped_candidate_read_gets_one_bounded_read_then_cited_review(self):
         domain=ScriptedModel(responses=[
             message(read("/skills/opportunity-scouting/SKILL.md"),read("/project/brief.json")),

@@ -1,14 +1,15 @@
-"""Durable area/choice history with expiring, memory-only live traffic evidence."""
+"""Durable place research; traffic freshness never deletes a saved answer."""
 from copy import deepcopy
+from datetime import datetime, timezone
 import json
 import math
-from threading import RLock, Timer
+from threading import RLock
 import time
 from uuid import uuid4
 
 from project_store import ProjectConflict, identifier, now
 
-REFRESH_NOTICE = "Live traffic evidence expired and is not archived. Run a new search to refresh this area; earlier choices remain in history."
+REFRESH_NOTICE = "This older search did not save its location details. Run a new search to recover selectable locations; new searches keep their answers."
 
 
 def validate_search(value):
@@ -25,31 +26,54 @@ def validate_search(value):
     return {'workflow': workflow, 'goal': goal.strip(), 'bounds': bounds}
 
 
-def expired_candidate(candidate):
-    return {'id': candidate['id'], 'label': 'Previous traffic opportunity', 'available': False,
-            'groupedCandidateIds': candidate.get('provenance', {}).get('groupedCandidateIds', [candidate['id']]),
-            'resumeNotice': REFRESH_NOTICE}
+def _source_timestamp(candidate):
+    sources = [candidate.get('provenance', {}).get('source', {}),
+               *(fact.get('source', {}) for fact in candidate.get('evidence', []))]
+    for source in sources:
+        timestamp = source.get('retrieved_at') or source.get('observed_at')
+        if isinstance(timestamp, str):
+            try:
+                datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                return timestamp
+            except ValueError:
+                pass
+    return None
+
+
+def _timestamp_order(value):
+    parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    return parsed.replace(tzinfo=timezone.utc).timestamp() if parsed.tzinfo is None else parsed.timestamp()
 
 
 def archive_batch(batch, workflow):
-    if workflow != 'street':
-        return deepcopy(batch)
-    if not batch['candidates']:
-        # An empty search has no live observation to expire. Keep actionable
-        # application copy, without persisting source or model narratives.
-        return {'id': batch['id'], 'created': batch['created'], 'candidates': [],
-                'summary': 'No additional traffic locations could be confirmed in this map area. Try a smaller or nearby area, or pick a spot on the map to investigate it directly.',
-                'agentStatus': batch.get('agentStatus'), 'exhausted': batch.get('exhausted', False), 'warnings': []}
-    # Even model prose, provider geometry and derived metrics can encode feed history.
-    return {'id': batch['id'], 'created': batch['created'], 'candidates': [expired_candidate(c) for c in batch['candidates']],
-            'summary': REFRESH_NOTICE, 'agentStatus': batch.get('agentStatus'), 'exhausted': batch.get('exhausted', False),
-            'methodology': 'Environmental screening first; feasibility and disruption next. Readiness is separate.',
-            'warnings': [], 'resumeNotice': REFRESH_NOTICE}
+    """Save the research the user received, rather than a live feed cache."""
+    saved = deepcopy(batch)
+    for candidate in saved.get('candidates', []):
+        candidate.pop('modelContext', None)
+        candidate.setdefault('snapshotAt', _source_timestamp(candidate) or saved.get('snapshotAt') or saved['created'])
+    timestamps = [candidate['snapshotAt'] for candidate in saved.get('candidates', [])]
+    saved.setdefault('snapshotAt', min(timestamps, key=_timestamp_order) if timestamps else saved['created'])
+    return saved
+
+
+def evidence_freshness(expires_at, current):
+    """Unknown or old timestamps are snapshots, never implicitly current."""
+    if type(expires_at) in (int, float):
+        expires = expires_at / 1000 if expires_at >= 1e12 else expires_at
+    elif isinstance(expires_at, str):
+        try:
+            parsed = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+            expires = parsed.timestamp() if parsed.tzinfo is not None else 0
+        except ValueError:
+            expires = 0
+    else:
+        expires = 0
+    return 'current' if math.isfinite(expires) and expires > current else 'snapshot'
 
 
 class ScoutStore:
     def __init__(self, projects):
-        self.projects, self.lock, self.live = projects, RLock(), {}
+        self.projects, self.lock = projects, RLock()
         with projects.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS scouts (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
             for row in db.execute('SELECT id,payload FROM scouts').fetchall():
@@ -68,17 +92,28 @@ class ScoutStore:
             raise ValueError('Area search not found.')
         return json.loads(row[0])
 
-    def _purge(self):
-        current = time.time()
-        for key, (expiry, _) in list(self.live.items()):
-            if expiry <= current:
-                del self.live[key]
-
     def get(self, search_id):
         with self.lock, self.projects.connect() as db:
-            self._purge()
             value = self._read(db, search_id)
-            value['batches'] = [deepcopy(self.live.get((search_id, b['id']), (0, b))[1]) for b in value['batches']]
+            if value['workflow'] == 'street':
+                current = time.time()
+                for batch in value['batches']:
+                    # Versions before saved snapshots persisted only an empty
+                    # location marker. Explain that old-version limitation,
+                    # without suggesting that new answers will disappear too.
+                    legacy = [candidate for candidate in batch['candidates']
+                              if 'snapshotAt' not in batch and candidate.get('available') is False
+                              and not candidate.get('center')]
+                    for candidate in legacy:
+                        candidate['resumeNotice'] = REFRESH_NOTICE
+                    if legacy and len(legacy) == len(batch['candidates']):
+                        batch['summary'] = batch['resumeNotice'] = REFRESH_NOTICE
+                    batch.setdefault('snapshotAt', batch.get('created'))
+                    for candidate in batch['candidates']:
+                        candidate.setdefault('snapshotAt', batch['snapshotAt'])
+                        candidate['evidenceFreshness'] = evidence_freshness(candidate.get('expiresAt', batch.get('expiresAt')), current)
+                    batch['evidenceFreshness'] = ('current' if batch['candidates'] and
+                        all(c['evidenceFreshness'] == 'current' for c in batch['candidates']) else 'snapshot')
             value['exhausted'] = bool(value['batches'] and value['batches'][-1].get('exhausted'))
             return value
 
@@ -134,7 +169,6 @@ class ScoutStore:
 
     def finish(self, search_id, run_id, result=None, *, status='ready', error=None):
         with self.lock, self.projects.connect() as db:
-            self._purge()
             value = self._read(db, search_id)
             if value['runId'] != run_id or value['status'] != 'running':
                 return False
@@ -143,18 +177,6 @@ class ScoutStore:
                 for candidate in batch.get('candidates', []):
                     candidate.pop('modelContext', None)
                 value['batches'].append(archive_batch(batch, value['workflow']))
-                if value['workflow'] == 'street' and batch.get('candidates'):
-                    expiry = min(c.get('expiresAt', 0) for c in batch['candidates'])
-                    if expiry > time.time():
-                        self.live[(search_id, run_id)] = (expiry, batch)
-                        def expire():
-                            with self.lock:
-                                self._purge()
-                        timer = Timer(max(.01, expiry - time.time() + .01), expire)
-                        timer.daemon = True
-                        timer.start()
-                        if len(self.live) > 50:
-                            del self.live[next(iter(self.live))]
             value.update(status=status, error=error, runId=None, updated=now())
             self._write(db, value)
             return True

@@ -51,7 +51,7 @@ def review_scout(key, model_name, goal, workflow, research, activity=None, persi
     """
     activity = activity or Activity(seconds=240)
     lock, bundle = RLock(), None
-    reports, evidence = {}, {}
+    reports, evidence, validated_reports = {}, {}, {}
     names = ("lead", "site-evidence", "domain-analysis")
     skills, reads = ({name:set() for name in names} for _ in range(2))
     source_reads, assignments = set(), {"lock":lock,"started":set()}
@@ -105,6 +105,10 @@ def review_scout(key, model_name, goal, workflow, research, activity=None, persi
                    "review":report,"candidate_ids":list(evidence)}
         with lock:
             reports[name] = payload
+            if not partial and report is not None:
+                # A failed lead response must not throw away already checked
+                # specialist findings. Only validated structured reports enter.
+                validated_reports[name] = report
         save(f"/project/reports/{name}.json",payload)
         activity.event(name,"artifact-write","completed",f"Saved /project/reports/{name}.json.")
         activity.event(name,"investigation","partial" if partial else "completed",
@@ -128,6 +132,16 @@ repeat a measurement, say 'impact unassessed', or list missing data. Pair each
 uncertainty with the useful check it calls for. A suggested check is not a
 promise of benefit. If the goal asks for something the facts cannot establish,
 say so and identify what the available evidence does help the user decide.
+Differentiate the locations using their actual road extent, excess travel time,
+nearby property uses, parcel space or linked demand evidence. Equal speed ratios
+do not imply identical places. Explain which investigation each location is best
+suited to and what would change the planner's decision. Do not repeat the same
+generic next steps for every location. Treat traffic values as observations at
+search time; these notes remain useful after the live map updates.
+Lead with the useful choice-specific advice, then give one brief limitation if
+needed. Do not narrate internal policies about screening order, readiness points,
+sponsor contributions or whether a site has been selected. Those are rules for
+your work, not feedback the planner needs to read.
 Use only exact numbers from those facts. Do not invent thresholds, dimensions,
 benefits, source identifiers or URLs. Do not move, reorder or select candidates,
 produce a proposal, call simulations or recommend construction. Wait for explicit
@@ -204,11 +218,18 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
                            "Saving the collected candidate findings in the required cited report format.")
             return {"messages": [HumanMessage(content=review_correction)], "jump_to": "model"}
 
+        def ready_for_review():
+            if bundle is None or "/skills/opportunity-scouting/SKILL.md" not in skills[name]:
+                return False
+            if name == "lead":
+                return ({"site-evidence", "domain-analysis"} <= reports.keys()
+                        and {f"/project/reports/{specialist}.json" for specialist in names[1:]} <= reads[name]
+                        and "/project/plan.md" in backend.saved)
+            return name in source_reads
+
         @after_model(can_jump_to=["model", "end"])
         def repair_specialist_review(state, runtime):
             nonlocal review_repair_used, review_repair_pending, source_repair_used, source_repair_pending
-            if name == "lead":
-                return None
             activity.check()
             if state.get("structured_response") is not None:
                 return None
@@ -222,6 +243,8 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
             if (review_repair_used or last is None or last.tool_calls
                     or "/skills/opportunity-scouting/SKILL.md" not in skills[name]):
                 return None
+            if name == "lead":
+                return correct_review() if ready_for_review() else None
             if name not in source_reads:
                 if source_repair_used:
                     return {"jump_to": "end"}
@@ -239,10 +262,10 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
             # A mixed normal-tool + invalid ScoutReview response can end the
             # native tool loop after the normal tools finish. Reuse the same
             # one-shot correction, after every tool call has been answered.
-            if name == "lead" or state.get("structured_response") is not None or review_repair_used or source_repair_pending:
+            if state.get("structured_response") is not None or review_repair_used or source_repair_pending:
                 return None
             activity.check()
-            if name not in source_reads or "/skills/opportunity-scouting/SKILL.md" not in skills[name]:
+            if not ready_for_review():
                 return None
             last = next((item for item in reversed(state["messages"]) if isinstance(item, AIMessage)), None)
             review_ids = {call["id"] for call in last.tool_calls if call["name"] == "ScoutReview"} if last else set()
@@ -317,7 +340,7 @@ inputs and leave selection to the user; missing inputs do not erase a useful sho
         return {"name":name,"description":"Assess sponsor constraints and separate readiness." if name=="site-evidence" else "Assess environmental opportunity and uncertainty.",
                 "runnable":build(name,[read_candidate_evidence]) | RunnableLambda(own_artifacts)}
 
-    review, status = None, "complete"
+    review, status, review_source = None, "complete", "lead"
     try:
         if not key: raise ValueError("Model not configured.")
         subagents = [specialist(name) for name in names[1:]]
@@ -338,9 +361,24 @@ inputs and leave selection to the user; missing inputs do not erase a useful sho
         research_once(in_graph=False)
         activity.event("lead","review","partial","Source research is available. Agent synthesis was incomplete; the shortlist uses the documented screening method.")
     activity.check()
+    if review is None:
+        findings, seen = [], set()
+        for candidate in (bundle or {}).get("candidates", []):
+            for name in ("domain-analysis", "site-evidence"):
+                report = validated_reports.get(name, {})
+                for finding in report.get("findings", []):
+                    signature = (finding["candidate_id"], finding["text"])
+                    if finding["candidate_id"] == candidate["id"] and signature not in seen:
+                        findings.append(finding); seen.add(signature)
+                        break
+        if findings:
+            review = {"findings": findings}
+            review_source = "specialists"
+        else:
+            review_source = "source-guidance"
     if review is not None: save("/project/scouting/review.json",review,in_graph=False)
     result = dict(bundle or {})
-    result.update({"review":review,"agentStatus":status,
+    result.update({"review":review,"agentStatus":status,"reviewSource":review_source,"reviewStale":False,
         "summary":"Choose a researched location to continue. Detailed design begins after selection."
                   if (bundle or {}).get("candidates") else "No supported locations were found in this bounded area. Try another area or select a site directly.",
         "skillsUsed":{name:sorted(paths) for name,paths in skills.items()},

@@ -319,33 +319,38 @@ def start_scout(data):
         ACTIVE_ANALYSES[activity.id] = activity
 
     def run():
+        researched = None
         try:
-            from opportunity_scout import research_candidates, refresh_traffic_candidates
+            from opportunity_scout import research_candidates
             from place_feedback import enrich_feedback
             from scout_agent import review_scout
             excluded = list({item for batch in search['batches'] for c in batch['candidates']
                 for item in [c['id'], *c.get('provenance', {}).get('groupedCandidateIds', c.get('groupedCandidateIds', []))]})
             def research():
-                return research_candidates(search['workflow'], search['bounds'], excluded,
+                nonlocal researched
+                researched = research_candidates(search['workflow'], search['bounds'], excluded,
                     check=activity.check, emit=lambda event: activity.event('lead', 'source-screen', 'running',
                         event.get('summary', event.get('message', 'Researching candidate source evidence.'))))
+                return researched
             result = review_scout(key, os.getenv('GROK_MODEL', 'grok-4.7'), search['goal'], search['workflow'],
                 research, activity, lambda path, content: store.artifact(search_id, activity.id, path, content))
             activity.check()
-            if search['workflow'] == 'street':
-                result = refresh_traffic_candidates(result, search['bounds'], check=activity.check)
-                if result.get('reviewStale'):
-                    result.pop('review', None)
-                    result.pop('agentReview', None)
-            # Rebuild actionable guidance from the final source snapshot. A
-            # missing/partial model review or a traffic refresh must never
-            # leave the planner with only an uncertainty label.
+            # Keep the evidence and the assessment from the same search-time
+            # snapshot together. The live map can update independently; it must
+            # not erase the research the planner is reading or selecting.
             result = enrich_feedback(result, search['workflow'], search['goal'])
             activity.check()
             activity.event('lead', 'shortlist', 'completed', 'Location investigation finished. Choose a location to develop it.')
             store.finish(search_id, activity.id, result)
         except RunCancelled:
-            store.finish(search_id, activity.id, status='canceled', error='Investigation canceled or time budget reached.')
+            if researched is not None and not activity.cancelled.is_set() and store.is_current(search_id, activity.id):
+                # A model time budget is not a user cancellation. Publish the
+                # completed source investigation instead of losing its advice.
+                result = enrich_feedback(researched, search['workflow'], search['goal'])
+                result.update(agentStatus='partial', reviewSource='source-guidance')
+                store.finish(search_id, activity.id, result)
+            else:
+                store.finish(search_id, activity.id, status='canceled', error='Investigation canceled or time budget reached.')
         except Exception as error:
             # Provider messages may contain request URLs/credentials. Never return them.
             print('Location investigation failed:', type(error).__name__, flush=True)

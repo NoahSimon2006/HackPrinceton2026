@@ -8,6 +8,7 @@
   const colors = ['#b4e6a7', '#83cddd', '#ebc68b'];
   let mode = planningMode, bounds = null, search = null, generation = 0;
   let posting = false, selecting = false, pollTimer = null, expiryTimer = null, request = null;
+  let freshnessItems = [];
   const post = (path, body) => json(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   const el = (tag, text, className) => {
     const node = document.createElement(tag); if(text !== undefined) node.textContent = text;
@@ -16,7 +17,23 @@
   const button = (text, fn) => { const node=el('button',text); node.type='button'; node.addEventListener('click',fn); return node; };
   const running = () => posting || search?.status === 'running';
   const expiresAt = c => typeof c.expiresAt === 'number' ? (c.expiresAt < 1e12 ? c.expiresAt*1000 : c.expiresAt) : Date.parse(c.expiresAt);
-  const expired = c => c.available === false || c.expired || !!c.resumeNotice || Number.isFinite(expiresAt(c)) && Date.now() >= expiresAt(c);
+  // A saved location remains a choice after its traffic reading stops being
+  // current. Only old tombstones without their location are unavailable.
+  const unavailable = c => c.available === false || !Array.isArray(c.center) || c.center.length!==2 || !c.center.every(Number.isFinite);
+  function snapshotText(batch) {
+    const at = batch.snapshotAt || batch.created;
+    const date = new Date(at), timestamp = Number.isFinite(date.getTime())
+      ? ` · traffic retrieved ${date.toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}` : '';
+    const stale = batch.evidenceFreshness === 'snapshot' || (batch.candidates ?? []).some(c=>Number.isFinite(expiresAt(c)) && Date.now() >= expiresAt(c));
+    return `Saved search${timestamp}. ${stale ? 'Traffic may have changed; your feedback and choices stay available.' : 'These readings describe conditions at search time.'} Refresh map traffic to check current conditions.`;
+  }
+  function updateFreshness() {
+    clearTimeout(expiryTimer);
+    for(const {batch,node} of freshnessItems) node.textContent=snapshotText(batch);
+    const nextExpiry=Math.min(...freshnessItems.flatMap(({batch})=>batch.candidates ?? []).map(expiresAt).filter(at=>Number.isFinite(at) && at>Date.now()));
+    // Update just the notice: never rebuild a card under someone reading it.
+    if(Number.isFinite(nextExpiry)) expiryTimer=setTimeout(updateFreshness,Math.max(1,nextExpiry-Date.now()+20));
+  }
   function savedId() { try { return localStorage.getItem(`planning-scout-${mode}`); } catch { return null; } }
   function remember() { try { localStorage.setItem(`planning-scout-${mode}`,search.id); } catch {} }
   function cancelRemote(id,runId) { if(id && runId) post('/api/scouts/cancel',{id,runId}).catch(()=>{}); }
@@ -82,7 +99,7 @@
     return details;
   }
   async function choose(candidate) {
-    if(running() || selecting || expired(candidate)) return;
+    if(running() || selecting || unavailable(candidate)) return;
     const current=generation, id=search.id; selecting=true; render();
     $('scout-status').textContent='Saving this location and its investigation…';
     try {
@@ -96,11 +113,11 @@
     } catch(error) { if(current===generation) { selecting=false;render();$('scout-status').textContent=error.message; } }
   }
   function card(candidate,index,currentBatch,batch) {
-    const unavailable=expired(candidate), article=el('article',undefined,'scout-card');
+    const missingLocation=unavailable(candidate), article=el('article',undefined,'scout-card');
     article.id=`scout-candidate-${candidate.id}`;
     const title=el('h3');title.append(el('span',String(index+1),'scout-number'),el('span',candidate.label || 'Previous traffic opportunity'));article.append(title);
-    if(unavailable) {
-      article.append(el('p',candidate.resumeNotice || 'This traffic observation expired. Run a fresh search before choosing it.','scout-readiness'));
+    if(missingLocation) {
+      article.append(el('p',candidate.resumeNotice || 'This older search did not save its location. Run a new search to recover a selectable place.','scout-readiness'));
       if(search?.selected?.candidateId===candidate.id) article.append(button('Open selected project',()=>map.fire('scoutselect',{project:{id:search.selected.projectId,snapshot:{workflow:mode}}})));
       return article;
     }
@@ -165,16 +182,11 @@
     return article;
   }
   function render() {
-    clearTimeout(expiryTimer); candidateLayer.clearLayers(); const output=$('scout-results');output.replaceChildren();
-    if(mode==='street') for(const batch of search?.batches ?? []) {
-      if((batch.candidates ?? []).some(expired)) {
-        batch.review=null;batch.summary=null;
-        batch.candidates=batch.candidates.map(c=>expired(c)?{id:c.id,label:'Previous traffic opportunity',available:false,
-          resumeNotice:c.resumeNotice || 'This traffic observation expired. Run a fresh search before choosing it.'}:c);
-      }
-    }
+    clearTimeout(expiryTimer);freshnessItems=[];candidateLayer.clearLayers(); const output=$('scout-results');output.replaceChildren();
     const busy=running();$('scout-start').disabled=busy || selecting;$('scout-cancel').hidden=!busy;
     const batches=search?.batches ?? [], total=batches.reduce((n,b)=>n+(b.candidates?.length || 0),0);
+    const selectable=batches.reduce((n,b)=>n+(b.candidates ?? []).filter(c=>!unavailable(c)).length,0);
+    output.setAttribute('data-selectable-count',String(selectable));
     $('scout-more').hidden=!search || !batches.length || !!search.exhausted || !!batches.at(-1)?.exhausted;
     $('scout-more').disabled=busy || selecting;
     const events=search?.events ?? []; $('scout-activity').hidden=!events.length;
@@ -182,7 +194,9 @@
     for(const event of events.slice(-12)) $('scout-events').append(el('li',event.summary || event.message || event.title || `${event.specialist || 'Agent'} · ${event.stage || event.status || 'working'}`));
     if(!search) { $('scout-status').textContent=''; return; }
     if(busy) $('scout-status').textContent='Investigating the search area, checking sources and comparing distinct opportunities…';
-    else if(search.status==='ready') $('scout-status').textContent=total ? `${total} researched ${total===1?'location':'locations'} across ${batches.length} ${batches.length===1?'search':'searches'}. Choose a location to continue.` : 'No locations found with the available data. Try a smaller or nearby area, or pick a spot directly.';
+    else if(search.status==='ready') $('scout-status').textContent=selectable ? `${selectable} researched ${selectable===1?'location':'locations'} across ${batches.length} ${batches.length===1?'search':'searches'}. Choose a location to continue.`
+      : total ? 'This older search did not retain selectable locations. Find locations again, or pick a spot directly.'
+      : 'No locations found with the available data. Try a smaller or nearby area, or pick a spot directly.';
     else $('scout-status').textContent=search.error || search.message || `Search ${search.status}. Previous research remains below.`;
     for(let index=batches.length-1;index>=0;index--) {
       const batch=batches[index], latest=index===batches.length-1;
@@ -192,11 +206,21 @@
       const goal=batch.feedbackGoal || search.goal;
       if(goal) section.append(el('p',`Your goal: ${goal}`,'scout-goal-context'));
       if(batch.summary) section.append(el('p',batch.summary));
+      if(mode==='street' && (batch.candidates ?? []).some(c=>!unavailable(c))) {
+        const notice=el('p',snapshotText(batch),'scout-snapshot');
+        freshnessItems.push({batch,node:notice});section.append(notice);
+      }
+      if(batch.goalChecks?.length) {
+        const checks=el('details',undefined,'scout-goal-checks');checks.open=false;
+        checks.append(el('summary','Checks for your goal'));
+        const items=el('ul');for(const check of batch.goalChecks) items.append(el('li',check));
+        checks.append(items);section.append(checks);
+      }
       if(batch.methodology || batch.warnings?.length || batch.agentStatus==='partial') {
         const method=el('details',undefined,'scout-method');method.open=false;
         method.append(el('summary','How locations were compared'));
         if(batch.methodology) method.append(el('p',batch.methodology,'scout-basis'));
-        if(batch.agentStatus==='partial') method.append(el('p','Some specialist reviews could not finish. Each location still includes guidance based on the available evidence.'));
+        if(batch.agentStatus==='partial') method.append(el('p','The full agent review could not finish. Available specialist findings and source-based guidance are shown for each location.'));
         for(const warning of batch.warnings ?? []) method.append(el('p',warning,'scout-notice'));
         section.append(method);
       }
@@ -204,10 +228,7 @@
       for(const [number,candidate] of (batch.candidates ?? []).entries()) section.append(card(candidate,number,latest,batch));
       output.append(section);
     }
-    if(mode==='street' && total) {
-      const nextExpiry=Math.min(...batches.flatMap(b=>b.candidates ?? []).filter(c=>!expired(c)).map(expiresAt).filter(Number.isFinite));
-      if(Number.isFinite(nextExpiry)) expiryTimer=setTimeout(render,Math.max(1,nextExpiry-Date.now()+20));
-    }
+    updateFreshness();
   }
   function schedulePoll(id,current) {
     clearTimeout(pollTimer);

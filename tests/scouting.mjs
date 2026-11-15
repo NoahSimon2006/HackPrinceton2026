@@ -80,12 +80,18 @@ function result(status='running',candidates=[]) {return {id:'search1',runId:'run
   h.requests[0].resolve(result('ready',[{id:'old',available:false,resumeNotice:'Refresh current traffic before choosing.'}]));await flush();
   assert.match(text(h.$('scout-results')),/Refresh current traffic/);assert.equal(findButton(h,'Choose this location'),null);
   assert.equal(h.groups[1].items.length,0,'archived traffic has no stale map geometry');
+  assert.equal(h.$('scout-results')['data-selectable-count'],'0');
+  assert.doesNotMatch(h.$('scout-status').textContent,/Choose a location/);
 }
 {
   const h=harness();const c={...candidate(),expiresAt:new Date(h.clock.now+5000).toISOString()};
   h.start();h.requests[0].resolve(result('ready',[c]));await flush();assert.ok(findButton(h,'Choose this location'));
   h.clock.now+=6000;const expiry=[...h.timers.values()].find(t=>t.ms!==1500);assert.ok(expiry);expiry.fn();
-  assert.equal(findButton(h,'Choose this location'),null);assert.equal(h.groups[1].items.length,0);
+  assert.ok(findButton(h,'Choose this location'),'a source reading expiring never removes the place choice');
+  assert.equal(h.groups[1].items.length,2,'the saved place remains on the map');
+  assert.match(visibleText(h.$('scout-results')),/Traffic may have changed/);
+  findButton(h,'Choose this location').events.click();
+  assert.equal(h.requests[1].url,'/api/scouts/select','a saved location can be chosen after traffic expires');
 }
 {
   const h=harness();h.start();h.requests[0].resolve(result('ready',[]));await flush();
@@ -139,12 +145,14 @@ function result(status='running',candidates=[]) {return {id:'search1',runId:'run
   const value=result('ready',[first,second]);
   value.goal='Keep delivery access <script>alert(1)</script>';
   value.batches[0].feedbackGoal=value.goal;value.batches[0].agentStatus='partial';
+  value.batches[0].goalChecks=['Keep delivery entrances clear.'];
   value.batches[0].warnings=['Only part of this map area has traffic data.'];
   value.batches[0].review={findings:[{candidate_id:'c1',text:'The entrance deserves attention for this goal.',fact_ids:['terrain']}]};
   h.requests[0].resolve(value);await flush();
   const output=h.$('scout-results'),visible=visibleText(output),method=find(output,n=>n.className==='scout-method');
   assert.match(visible,/Your goal: Keep delivery access <script>alert\(1\)<\/script>/,'the submitted goal is rendered as plain text');
   assert.equal(find(output,n=>n.tag==='script'),null);
+  assert.equal(text(output).split('Keep delivery entrances clear.').length-1,1,'shared goal checks appear once per search');
   for(const phrase of ['A specific current slowdown.','delivery-access investigation','Inspect curb activity','Retain access','The entrance deserves attention','A different source observation.','Observe the crossing']) assert.ok(visible.includes(phrase),phrase);
   assert.doesNotMatch(visible,/Only part of this map area|specialist reviews could not finish|partial agent assessment/,'data limits do not obscure advice');
   assert.match(text(method),/Only part of this map area|specialist reviews could not finish/);
@@ -153,13 +161,31 @@ function result(status='running',candidates=[]) {return {id:'search1',runId:'run
 }
 {
   const h=harness();h.start();const c=candidate();
-  c.expiresAt=h.clock.now+1000;c.feedback={headline:'Transient slowdown',observation:'Expired speed observation.',nextStep:'Transient evidence action.',factIds:['terrain']};
-  const value=result('ready',[c]);value.batches[0].summary='Transient speed comparison.';
-  value.batches[0].review={findings:[{candidate_id:'c1',text:'Transient specialist finding.',fact_ids:['terrain']}]};
+  c.expiresAt=h.clock.now+1000;c.feedback={headline:'Saved slowdown',observation:'At search time, traffic was slower here.',nextStep:'Check the entrances along this stretch.',factIds:['terrain']};
+  const value=result('ready',[c]);value.batches[0].summary='Saved speed comparison.';
+  value.batches[0].snapshotAt='2026-11-15T12:32:31Z';
+  value.batches[0].review={findings:[{candidate_id:'c1',text:'Saved specialist finding.',fact_ids:['terrain']}]};
   h.requests[0].resolve(value);await flush();
-  assert.match(visibleText(h.$('scout-results')),/Expired speed observation/);
+  const article=find(h.$('scout-results'),n=>n.tag==='article');
+  const investigation=find(article,n=>n.className==='scout-investigation');
+  findButton(h,'[1]').events.click();
+  assert.equal(investigation.open,true);
+  assert.match(visibleText(h.$('scout-results')),/At search time, traffic was slower here/);
   h.clock.now+=2000;[...h.timers.values()].find(t=>t.ms!==1500).fn();
-  assert.doesNotMatch(text(h.$('scout-results')),/Transient|Expired speed observation|Terrain area/,'all expired source guidance and summary are removed');
-  assert.match(visibleText(h.$('scout-results')),/Run a fresh search/);
+  assert.strictEqual(find(h.$('scout-results'),n=>n.tag==='article'),article,'source expiry updates only its notice, leaving reading position and focus intact');
+  assert.equal(investigation.open,true,'expiry does not close supporting evidence');
+  for(const phrase of ['Saved speed comparison.','Saved specialist finding.','At search time, traffic was slower here.','Check the entrances along this stretch.','Terrain area'])
+    assert.ok(text(h.$('scout-results')).includes(phrase),`expiry retains ${phrase}`);
+  assert.match(visibleText(h.$('scout-results')),/traffic retrieved/);
+  assert.match(visibleText(h.$('scout-results')),/your feedback and choices stay available/);
+  assert.ok(findButton(h,'Choose this location'));
+  assert.equal(h.requests.length,1,'source expiry makes no automatic provider or agent request');
+  const restored=harness('search1');value.batches[0].evidenceFreshness='snapshot';
+  restored.requests[0].resolve(value);await flush();
+  assert.match(visibleText(restored.$('scout-results')),/Saved specialist finding/,'reload preserves the saved answer');
+  assert.match(visibleText(restored.$('scout-results')),/feedback and choices stay available/);
+  assert.equal(restored.$('scout-results')['data-selectable-count'],'1');
+  findButton(restored,'Choose this location').events.click();
+  assert.equal(restored.requests[1].url,'/api/scouts/select','restored source snapshots remain selectable');
 }
-console.log('PASS: scouting publication, explicit selection, area/cancel/workflow races, history, restore, live expiry and empty coverage');
+console.log('PASS: scouting publication, explicit selection, area/cancel/workflow races, saved feedback across expiry and reload, and empty coverage');
