@@ -29,7 +29,7 @@ MAX_BYTES = 8_000_000
 MAX_LOCAL_BYTES = 128_000_000
 RADIUS_M = 180
 MAX_ANCHORS = 16
-VERSION = "road-context-v1"
+VERSION = "road-context-v2-junctions"
 ROAD_KINDS = ["curb_extension", "crossing", "pedestrian_island", "bike_lane", "pedestrian_space", "lane_marking"]
 MOTOR_ROADS = {"primary", "secondary", "tertiary", "residential", "unclassified", "living_street", "service",
               "primary_link", "secondary_link", "tertiary_link"}
@@ -88,7 +88,7 @@ def _clip_line(line, origin):
 
 
 def _anchor(identifier, line, width, basis, origin, label, source_hash, *, surface=None, kind="road"):
-    if not isinstance(line, LineString) or line.length < 4 or not line.is_simple or line.distance(origin) > 80:
+    if not isinstance(line, LineString) or line.length < 4 or not line.is_simple or line.distance(origin) > 150:
         return None
     line = _clip_line(line, origin)
     if line.length < 4:
@@ -135,6 +135,9 @@ def _from_osm(raw, origin, *, local=False):
                          tags.get("name") or "Mapped " + tags["highway"].replace("_", " ") + " road", digest)
         if anchor:
             anchor["traffic_direction"] = "source_direction" if tags.get("oneway") in ("yes", "1", "true", "-1") else "two_way"
+            anchor["topology"] = {"family": "osm", "way_id": way.get("id"),
+                                  "node_refs": refs[::-1] if tags.get("oneway") == "-1" else refs,
+                                  "road_class": tags["highway"], "junction_type": tags.get('junction')}
             anchors.append(anchor)
     timestamps = [way.get("timestamp") for way in root.findall("way") if way.get("timestamp")]
     return anchors, max(timestamps, default=None)
@@ -185,9 +188,10 @@ def _from_sumo(raw, origin):
         if center.geom_type != "LineString":
             continue
         surface = unary_union([line.buffer(w / 2, cap_style="flat") for line, w in lanes])
-        if center.distance(origin) <= 80:
+        if center.distance(origin) <= 150:
             records.append({"edge_id": edge.get("id", ""), "from": edge.get("from"), "to": edge.get("to"),
                             "line": center, "width": width, "surface": surface,
+                            "road_class": highway,
                             "label": edge.get("name") or "Mapped road approach"})
     # Opposite directed edges with reversed junction IDs represent the two
     # carriageways of one physical segment. Combine their span for crosswalks;
@@ -220,6 +224,8 @@ def _from_sumo(raw, origin):
                 if anchor:
                     anchor["crossing_basis"] = "paired_opposing_carriageways"
                     anchor["traffic_direction"] = "two_way"
+                    anchor["topology"] = {"family": "sumo", "from": record["from"], "to": record["to"],
+                                          "edge_ids": [record["edge_id"], reverse["edge_id"]], "road_class": record["road_class"]}
                     anchors.append(anchor)
                     consumed.update((record["edge_id"], reverse["edge_id"]))
                     continue
@@ -230,6 +236,8 @@ def _from_sumo(raw, origin):
             anchor["supported_kinds"] = [kind for kind in ROAD_KINDS if kind != "crossing"]
             anchor["crossing_basis"] = "unpaired_carriageway_use_a_marked_crossing"
             anchor["traffic_direction"] = "source_direction"
+            anchor["topology"] = {"family": "sumo", "from": record["from"], "to": record["to"],
+                                  "edge_ids": [record["edge_id"]], "road_class": record["road_class"]}
             anchors.append(anchor)
         consumed.add(record["edge_id"])
     return anchors
@@ -292,7 +300,7 @@ def prepare_street_context(lon, lat, markings=None, *, activity=None, network_pa
     if anchors:
         sources.append({"provider": "Planner map markings", "source_hash": canonical_hash(markings),
                         "observed_at": None, "retrieved_at": None, "url": None})
-    mapped = []
+    mapped, selected_raw, selected_family = [], None, None
     for family, path in (("sumo", Path(network_path) if network_path is not None else ROOT / "sim/dtla.net.xml"),
                          ("osm", Path(osm_path) if osm_path is not None else ROOT / "sim/sources/dtla-roads.osm")):
         _check(activity)
@@ -307,6 +315,7 @@ def prepare_street_context(lon, lat, markings=None, *, activity=None, network_pa
             parsed, observed = (_from_sumo(raw, origin), None) if family == "sumo" else _from_osm(raw, origin, local=True)
             if parsed:
                 mapped = parsed
+                selected_raw, selected_family = raw, family
                 sources.append(_source("OSM-derived local street network" if family == "sumo" else "OpenStreetMap local extract", raw,
                                        observed_at=observed, url="https://www.openstreetmap.org/copyright"))
                 source_status.append({"source": family, "status": "ready"})
@@ -327,13 +336,20 @@ def prepare_street_context(lon, lat, markings=None, *, activity=None, network_pa
             mapped, observed = _from_osm(raw, origin)
             source_status.append({"source": "osm_public", "status": "ready" if mapped else "no_nearby_roads"})
             if mapped:
+                selected_raw, selected_family = raw, 'osm'
                 sources.append(_source("OpenStreetMap bounded map extract", raw, observed_at=observed,
                                        retrieved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                        url="https://www.openstreetmap.org/copyright"))
         except (ValueError, OSError, ET.ParseError, KeyError, TypeError, IndexError):
             source_status.append({"source": "osm_public", "status": "unavailable"})
     _check(activity)
-    anchors += sorted(mapped, key=lambda a: (a["distance_m"], a["id"]))[:MAX_ANCHORS - len(anchors)]
+    from junction_context import build_junction_context
+    junction_data = build_junction_context(selected_raw, selected_family, mapped, origin) if selected_raw else {"junctions": [], "anchors": []}
+    # Preserve all legs of the selected connected junction before nearby
+    # independent corridors. Otherwise a dense map can silently lose a leg.
+    preferred = junction_data['anchors']
+    preferred_ids = {a['id'] for a in preferred}
+    anchors += (preferred + sorted((a for a in mapped if a['id'] not in preferred_ids), key=lambda a: (a["distance_m"], a["id"])))[:MAX_ANCHORS - len(anchors)]
     anchors = anchors[:MAX_ANCHORS]
     roads = [{"type": "Feature", "id": anchor["id"], "geometry": anchor["surface"],
               "properties": {"kind": "road", "role": "existing", "label": anchor["label"],
@@ -345,7 +361,8 @@ def prepare_street_context(lon, lat, markings=None, *, activity=None, network_pa
     context = {"schema_version": 1, "compiler_version": VERSION, "status": "ready" if anchors else "unavailable", "reason": reason,
                "origin": {"lon": lon, "lat": lat, "crs": "EPSG:32611", "easting": origin.x, "northing": origin.y},
                "anchors": anchors, "roads": roads, "keep_clear": keep_clear, "crossings": crossings,
-               "sources": sources, "source_status": source_status, "assumptions": assumptions}
+               "sources": sources, "source_status": source_status, "assumptions": assumptions,
+               "junctions": junction_data['junctions']}
     # Retrieval time is provenance, not a geometry identity; identical extracts retain stable hashes.
     stable = {**context, "sources": [{k: v for k, v in source.items() if k != "retrieved_at"} for source in sources]}
     context["context_hash"] = canonical_hash(stable)
@@ -358,4 +375,6 @@ def prepare_street_context(lon, lat, markings=None, *, activity=None, network_pa
     context["model_context"] = {"status": context["status"], "context_hash": context["context_hash"], "reason": reason,
                                 "anchors": curated, "limitations": assumptions,
                                 "placement": "Road offset_m starts at anchor start; length_m is along-road length. Road crossing uses length_m for band thickness (1.5–6 m), width_m defaults to the road span. A marked_crossing anchor is the walking alignment; its length_m is the marked span and width_m is band thickness. Left/right are relative to anchor direction. Omit dimensions to use bounded conceptual defaults."}
+    from junction_context import model_junction_context
+    context['model_context'].update(model_junction_context(context['junctions'], anchors))
     return json.loads(json.dumps(context, allow_nan=False))

@@ -19,6 +19,20 @@ def compact_evaluation(payload):
 # or permission to apply published aggregate safety effects to a selected intersection.
 ROAD_GUIDANCE = (
     {
+        'id': 'road-guidance-intersection', 'label': 'Connected intersection and corner design guidance',
+        'url': 'https://highways.dot.gov/safety/speed-management/traffic-calming-eprimer/module-3-part-2',
+        'kinds': ['intersection_redesign'],
+        'summary': 'Corner extensions continue the sidewalk into available street space. A complete intersection concept coordinates the roadway, pedestrian waiting areas, crossings and the paths into adjoining streets.',
+        'checks': 'Connect crossings to pedestrian space and review access, turning vehicles, bicycle routes and available roadway width together. A detached stripe or decorative island is not a complete redesign.',
+    },
+    {
+        'id': 'road-guidance-roundabout', 'label': 'Roundabout layout and site selection guidance',
+        'url': 'https://highways.dot.gov/safety/intersection-safety/intersection-types/roundabouts',
+        'kinds': ['intersection_redesign'],
+        'summary': 'Roundabouts organize vehicle paths around a central island with coordinated entries, exits and pedestrian crossings. Suitability depends on the available footprint and the connected approaches.',
+        'checks': 'Do not force a circular layout into a constrained junction or treat a drawn circle as verified vehicle circulation. Check space, accessible crossings, large-vehicle paths and the intersection control choice before recommending construction.',
+    },
+    {
         'id': 'road-guidance-crossing', 'label': 'Crosswalk visibility guidance',
         'url': 'https://highways.dot.gov/safety/proven-safety-countermeasures/crosswalk-visibility-enhancements',
         'kinds': ['crossing', 'lane_marking'],

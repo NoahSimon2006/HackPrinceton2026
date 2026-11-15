@@ -1,4 +1,5 @@
 """The real Deep Agents graph must research and publish a map concept without counts."""
+import copy
 import json
 from pathlib import Path
 import tempfile
@@ -9,13 +10,27 @@ from langchain_core.messages import AIMessage
 
 from agent_activity import Activity
 from site_agent import analyze_site
-from street_context import prepare_street_context
+from street_context import canonical_hash, prepare_street_context
 from test_site_agent import call, calls, lead_model, message, read, specialist_model
 
 
 LON, LAT = -118.25, 34.05
 IDENTITY = {'site_id': 'road-agent-site', 'revision': 1, 'input_revision': 0}
 EMPTY = {'findings': [], 'recommendations': [], 'questions': ['Verify source alignment on site?']}
+
+
+def legacy_context(value):
+    """Retained v1 source shape for existing component/retention regressions."""
+    context = copy.deepcopy(value)
+    context.pop('junctions', None)
+    context['compiler_version'] = 'road-context-v1'
+    for key in ('junctions', 'design_mode', 'design_instruction', 'selected_junction_id', 'junction_distance_m', 'approach_count'):
+        context['model_context'].pop(key, None)
+    stable = {k:v for k,v in context.items() if k not in ('context_hash', 'model_context')}
+    stable['sources'] = [{k:v for k,v in s.items() if k != 'retrieved_at'} for s in stable['sources']]
+    context['context_hash'] = canonical_hash(stable)
+    context['model_context']['context_hash'] = context['context_hash']
+    return context
 
 
 def review(payload=None):
@@ -44,9 +59,9 @@ class RoadConceptAgentTest(unittest.TestCase):
           <tag k="highway" v="residential"/><tag k="name" v="PRIVATE ROAD NAME"/>
           <tag k="lanes" v="2"/></way></osm>'''.encode()
         self.raw = raw
-        self.context = prepare_street_context(LON, LAT,
+        self.context = legacy_context(prepare_street_context(LON, LAT,
             network_path=Path(self.temp.name) / 'missing.net.xml',
-            osm_path=Path(self.temp.name) / 'missing.osm', fetch_osm=lambda _: raw)
+            osm_path=Path(self.temp.name) / 'missing.osm', fetch_osm=lambda _: raw))
         self.anchor = self.context['model_context']['anchors'][0]
         self.components = [
             {'id': 'crossing-a', 'kind': 'crossing', 'anchor_id': self.anchor['id'],
@@ -114,9 +129,9 @@ class RoadConceptAgentTest(unittest.TestCase):
     def test_mixed_user_marking_and_osm_anchors_keep_their_own_provenance(self):
         marking = {'kind': 'crossing', 'geometry': {'type': 'LineString',
                    'coordinates': [[LON, LAT - .00005], [LON, LAT + .00005]]}}
-        context = prepare_street_context(LON, LAT, [marking],
+        context = legacy_context(prepare_street_context(LON, LAT, [marking],
             network_path=Path(self.temp.name) / 'missing.net.xml',
-            osm_path=Path(self.temp.name) / 'missing.osm', fetch_osm=lambda _: self.raw)
+            osm_path=Path(self.temp.name) / 'missing.osm', fetch_osm=lambda _: self.raw))
         self.assertEqual(context['sources'][0]['provider'], 'Planner map markings')
         models = researched_models([self.compile_call(), review()])
         result = self.run_graph(models, fetch_street_context=lambda: context)
@@ -232,6 +247,65 @@ class RoadConceptAgentTest(unittest.TestCase):
                 self.assertEqual(result['conceptHistory'], history)
                 self.assertFalse(any(item['id'].startswith('road-concept-') for item in result['facts']))
                 self.assertFalse(any(event['stage'] == 'road-concept' and event['status'] == 'completed' for event in events))
+
+
+class CoordinatedIntersectionAgentTest(unittest.TestCase):
+    setUp = RoadConceptAgentTest.setUp
+    compile_call = RoadConceptAgentTest.compile_call
+    run_graph = RoadConceptAgentTest.run_graph
+
+    def whole_context(self):
+        from tests.test_junction_context import junction_context
+        context = junction_context(selected_offset=0)
+        junction = context['junctions'][0]
+        return context, {'id': 'intersection', 'kind': 'intersection_redesign',
+                         'junction_id': junction['id'], 'anchor_id': junction['approaches'][0]['anchor_id']}
+
+    def test_whole_plan_replaces_isolated_treatment_and_keeps_coordinates_local(self):
+        context, component = self.whole_context()
+        isolated = {'id': 'stripe', 'kind': 'lane_marking', 'anchor_id': component['anchor_id'], 'length_m': 10.}
+        models = researched_models([
+            self.compile_call(components=[isolated], refs=['road-context-status', 'road-guidance-crossing']),
+            self.compile_call(components=[component], refs=['road-context-status', 'road-guidance-intersection']), review()])
+        result = self.run_graph(models, fetch_street_context=lambda: context)
+        self.assertIsNone(result['analysisError'])
+        self.assertEqual(result['concept']['components'][0]['kind'], 'intersection_redesign')
+        self.assertEqual(result['concept']['checks'][0]['crossing_count'], 4)
+        self.assertTrue(result['concept']['checks'][0]['connected'])
+        sent = ' '.join(str(item.content) for model in models for messages in model.seen for item in messages)
+        self.assertIn('not a complete redesign', sent)
+        self.assertIn('junctions', sent)
+        self.assertNotIn('"coordinates":', sent)
+        self.assertNotIn(str(LON), sent)
+        ids = {item['id'] for item in result['facts']}
+        self.assertIn('road-concept-intersection-crossing_count', ids)
+
+    def test_source_roads_without_a_supported_junction_ask_for_placement(self):
+        context = copy.deepcopy(self.context)
+        context['model_context']['design_mode'] = 'needs_placement'
+        context['model_context']['design_instruction'] = 'Select the connected intersection; this point has no supported junction.'
+        models = researched_models([review()])
+        result = self.run_graph(models, fetch_street_context=lambda: context)
+        self.assertIsNone(result['concept'])
+        self.assertEqual(result['conceptGap'], context['model_context']['design_instruction'])
+        self.assertNotIn('create_or_revise_road_concept', models[0].tool_names)
+
+    def test_upgrade_legacy_components_is_explicit_and_retains_their_history(self):
+        from road_concept import build_road_concept
+        previous = build_road_concept(self.context, self.components, identity=IDENTITY)
+        context, component = self.whole_context()
+        changes = [{'id': old['id'], 'op': 'remove'} for old in previous['components']]
+        changes.append({**component, 'op': 'add'})
+        models = researched_models([self.compile_call(changes=changes, refs=['road-context-status', 'road-guidance-intersection']), review()])
+        history = [{'concept': previous, 'savedAt': '2026-11-15T10:00:00Z'}]
+        project = {'id': 'a'*32, 'threadId': 'upgrade-test', 'instructions': [],
+                   'result': {'concept': previous}, 'conceptHistory': history}
+        result = self.run_graph(models, project=project, fetch_street_context=lambda: context,
+                                analysis_identity={**IDENTITY, 'revision': 2, 'input_revision': 1})
+        self.assertIsNone(result['analysisError'])
+        self.assertEqual(len(result['concept']['components']), 1)
+        self.assertEqual(result['concept']['parent']['input_hash'], previous['input_hash'])
+        self.assertEqual(result['conceptHistory'], history)
 
 
 if __name__ == '__main__':

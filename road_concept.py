@@ -19,10 +19,11 @@ from shapely.ops import substring
 from site_measurements import PROJECT, projected
 from street_context import TO_GEO, canonical_hash, _geographic
 
-VERSION = "road-concept-v1"
-KINDS = ("curb_extension", "crossing", "pedestrian_island", "bike_lane", "pedestrian_space", "lane_marking")
+LEGACY_VERSION = "road-concept-v1"
+VERSION = "road-concept-v2"
+KINDS = ("curb_extension", "crossing", "pedestrian_island", "bike_lane", "pedestrian_space", "lane_marking", "intersection_redesign")
 LABELS = {"curb_extension": "Curb extension", "crossing": "Marked crossing", "pedestrian_island": "Pedestrian refuge island",
-          "bike_lane": "Protected bicycle space", "pedestrian_space": "Pedestrian space", "lane_marking": "Lane separator"}
+          "bike_lane": "Protected bicycle space", "pedestrian_space": "Pedestrian space", "lane_marking": "Lane separator", "intersection_redesign": "Intersection redesign"}
 PHYSICAL = {"curb_extension", "pedestrian_island", "pedestrian_space"}
 
 
@@ -33,13 +34,19 @@ class ConceptPlacementError(ValueError):
 class RoadComponent(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
     id: str = Field(pattern=r"^[a-z][a-z0-9-]{0,47}$")
-    kind: Literal["curb_extension", "crossing", "pedestrian_island", "bike_lane", "pedestrian_space", "lane_marking"]
+    kind: Literal["curb_extension", "crossing", "pedestrian_island", "bike_lane", "pedestrian_space", "lane_marking", "intersection_redesign"]
     anchor_id: str = Field(pattern=r"^road-[a-f0-9]{12}$")
     side: Literal["left", "right", "center"] | None = None
     offset_m: float | None = Field(default=None, ge=0, le=400)
     length_m: float | None = Field(default=None, gt=0, le=150)
     width_m: float | None = Field(default=None, gt=0, le=40)
     label: str | None = Field(default=None, min_length=1, max_length=100)
+    junction_id: str | None = Field(default=None, pattern=r"^junction-[a-f0-9]{12}$")
+    layout: Literal["compact", "roundabout"] | None = None
+    approach_length_m: float | None = Field(default=None, ge=15, le=60)
+    curb_extension_m: float | None = Field(default=None, ge=.6, le=3)
+    crossing_setback_m: float | None = Field(default=None, ge=2, le=10)
+    crossing_width_m: float | None = Field(default=None, ge=2, le=5)
 
 
 def _identity(identity):
@@ -82,7 +89,7 @@ def _context(context):
         raise ConceptPlacementError("The saved road context changed or is invalid. Refresh the road geometry before drafting.") from error
 
 
-def _components(context, components, changes, previous, identity):
+def _components(context, components, changes, previous, identity, *, legacy=False):
     anchors = {anchor["id"]: anchor for anchor in context["anchors"]}
     if (components is None) == (changes is None):
         raise ConceptPlacementError("Supply either complete components or named changes, never both.")
@@ -112,7 +119,7 @@ def _components(context, components, changes, previous, identity):
                 if identifier not in values or len(change) < 3:
                     raise ConceptPlacementError("Update an existing component and at least one parameter.")
                 values[identifier].update({k: v for k, v in change.items() if k != "op"})
-                if "anchor_id" in change:
+                if "anchor_id" in change or "junction_id" in change:
                     reanchored.add(identifier)
             elif operation == "add":
                 if identifier in values:
@@ -127,6 +134,11 @@ def _components(context, components, changes, previous, identity):
             fields = ("geometry", "width_m", "kind", "supported_kinds", "traffic_direction")
             if after is None or canonical_hash({key: before.get(key) for key in fields}) != canonical_hash({key: after.get(key) for key in fields}):
                 raise ConceptPlacementError(f"The mapped road for this {LABELS[old['kind']].lower()} changed. Confirm realigning this feature to the updated road, or remove it. Other design choices will be preserved.")
+            if old["kind"] == "intersection_redesign":
+                old_junction = next((j for j in saved["context"].get("junctions", []) if j["id"] == old["junction_id"]), None)
+                new_junction = next((j for j in context.get("junctions", []) if j["id"] == old["junction_id"]), None)
+                if canonical_hash(old_junction) != canonical_hash(new_junction):
+                    raise ConceptPlacementError("The sourced junction changed. Confirm its junction_id or anchor_id when revising the plan so the full intersection is rechecked.")
         components = list(values.values())
     if not isinstance(components, list) or not 1 <= len(components) <= 16:
         raise ConceptPlacementError("A road concept needs one to sixteen components.")
@@ -143,6 +155,18 @@ def _components(context, components, changes, previous, identity):
         anchor = anchors.get(c["anchor_id"])
         if not anchor or c["kind"] not in anchor["supported_kinds"]:
             raise ConceptPlacementError(f"{c['id']}: choose a current road anchor supporting {c['kind']}.")
+        if c["kind"] == "intersection_redesign":
+            if legacy:
+                raise ConceptPlacementError("Legacy concepts cannot contain intersection packages.")
+            from junction_design import normalize_intersection
+            try:
+                normalized.append(normalize_intersection(context, c))
+            except ValueError as error:
+                raise ConceptPlacementError(str(error)) from error
+            continue
+        for key in ("junction_id", "layout", "approach_length_m", "curb_extension_m", "crossing_setback_m", "crossing_width_m"):
+            if c.pop(key) is not None:
+                raise ConceptPlacementError(f"{c['id']}: {key} is only supported by an intersection_redesign package.")
         marked = anchor["kind"] == "marked_crossing"
         defaults = {"curb_extension": (8., 2., "right"), "crossing": (3., anchor["width_m"], "center"),
                     "pedestrian_island": (6., 1.5, "center"), "bike_lane": (30., 1.8, "right"),
@@ -177,6 +201,8 @@ def _components(context, components, changes, previous, identity):
         if c["kind"] == "pedestrian_island" and anchor["width_m"] - c["width_m"] < 6:
             raise ConceptPlacementError(f"{c['id']}: a center island needs room for a conceptual 3 m road corridor on each side.")
         normalized.append(c)
+    if any(c["kind"] == "intersection_redesign" for c in normalized) and len(normalized) != 1:
+        raise ConceptPlacementError("An intersection redesign is one coordinated package. Revise its parameters rather than stacking separate strips over the same intersection.")
     # Multiple individually valid edge strips must not jointly consume the road.
     for anchor_id in anchors:
         rows = [c for c in normalized if c["anchor_id"] == anchor_id and c["kind"] in ("curb_extension", "bike_lane", "pedestrian_space", "pedestrian_island")]
@@ -304,7 +330,7 @@ def _constraint_context(context, markings, evidence):
     return result
 
 
-def _compile(context, components, constraints, revision):
+def _compile_legacy(context, components, constraints, revision):
     anchors = {anchor["id"]: anchor for anchor in context["anchors"]}
     rows = []
     clear = unary_union([projected(f["geometry"]) for f in constraints["keep_clear"]])
@@ -356,6 +382,28 @@ def _compile(context, components, constraints, revision):
     return features, measured
 
 
+
+def _compile(context, components, constraints, revision, *, legacy=False):
+    if not legacy and components[0]["kind"] == "intersection_redesign":
+        from junction_design import compile_intersection
+        try:
+            features, checks = compile_intersection(context, components[0], constraints, revision)
+        except ValueError as error:
+            raise ConceptPlacementError(str(error)) from error
+        return features, [checks]
+    # All contexts returned by the new source reader include junction metadata.
+    # Bare pre-junction contexts remain replayable for archived v1 concepts.
+    if not legacy and "junctions" in context:
+        for c in components:
+            anchor = next(a for a in context["anchors"] if a["id"] == c["anchor_id"])
+            if c["kind"] != "crossing" or anchor["kind"] == "marked_crossing":
+                continue
+            approaches = [a for j in context["junctions"] for a in j["approaches"] if a["anchor_id"] == c["anchor_id"]]
+            if not any(abs(c["offset_m"]-a.get("crossing_offset_m", -100)) <= 4 for a in approaches):
+                raise ConceptPlacementError("A crossing needs a sourced junction mouth with connected landings or an explicit user-marked crossing. Use intersection_redesign to draw the full intersection.")
+    return _compile_legacy(context, components, constraints, revision)
+
+
 def build_road_concept(context, components=None, *, changes=None, previous=None, identity,
                        markings=None, evidence=None):
     """Compile a full concept or apply explicit stable-ID add/update/remove edits."""
@@ -377,7 +425,11 @@ def build_road_concept(context, components=None, *, changes=None, previous=None,
               "assumptions": [*context["assumptions"], *dict.fromkeys(anchor["width_basis"] for anchor in context["anchors"] if anchor["id"] in {c["anchor_id"] for c in normalized}),
                               "Proposed dimensions and a minimum clear corridor are screening choices, not adopted engineering standards.",
                               "Road-side placement and source widths require field checks; no turn paths, parking demand, utilities or traffic signals are modeled.",
-                              "Bicycle arrows illustrate right-hand traffic along the source alignment; verify permitted travel direction before use."],
+                              "Bicycle arrows illustrate right-hand traffic along the source alignment; verify permitted travel direction before use.",
+                              *(["The compact intersection proposes one through lane in each direction; any former parking or extra lane space is shown as proposed pedestrian space. Capacity and parking impacts are unassessed.",
+                                 "Curb extension is a requested maximum. Checked effective dimensions may be smaller to preserve the source corridor and two conceptual 3 m through lanes.",
+                                 "The conceptual pedestrian path and crossing landing screening minimum is 1.2 m. This design choice is not an accessibility compliance assessment or adopted local standard.",
+                                 "Crossings join proposed pedestrian landings within the source street envelope. Mapped walking paths locate the envelope; exact curb positions and accessibility need a field survey."] if any(c["kind"] == "intersection_redesign" for c in normalized) else [])],
               "checks": checks, "evaluation": {"status": "unassessed", "reference": None,
                                                 "reason": "Spatial concept only; traffic performance, emissions and safety benefits have not been evaluated."}}
     result = json.loads(json.dumps(result, allow_nan=False))
@@ -393,7 +445,7 @@ def validate_road_concept(value, identity=None):
         own = _identity({key: value[key] for key in ("site_id", "revision", "input_revision")})
         if identity is not None and own != _identity(identity):
             raise ConceptPlacementError("The concept does not match this saved project revision.")
-        if value["schema_version"] != 1 or value["compiler_version"] != VERSION or value["workflow"] != "street" or value["status"] != "conceptual":
+        if value["schema_version"] != 1 or value["compiler_version"] not in (VERSION, LEGACY_VERSION) or value["workflow"] != "street" or value["status"] != "conceptual":
             raise ValueError("schema")
         digest = canonical_hash({key: item for key, item in value.items() if key != "input_hash"})
         if digest != value["input_hash"] or not re.fullmatch(r"[a-f0-9]{64}", value["input_hash"]):
@@ -401,10 +453,11 @@ def validate_road_concept(value, identity=None):
         context = _context(value["context"])
         if context["context_hash"] != value["context_hash"]:
             raise ValueError("context")
-        normalized = _components(context, value["components"], None, None, own)
+        legacy = value["compiler_version"] == LEGACY_VERSION
+        normalized = _components(context, value["components"], None, None, own, legacy=legacy)
         if normalized != value["components"]:
             raise ValueError("components")
-        features, checks = _compile(context, normalized, value["constraints"], own["revision"])
+        features, checks = _compile(context, normalized, value["constraints"], own["revision"], legacy=legacy)
         if canonical_hash(features) != canonical_hash(value["geometry"]) or checks != value["checks"]:
             raise ValueError("geometry")
         if value["evaluation"] != {"status": "unassessed", "reference": None, "reason": "Spatial concept only; traffic performance, emissions and safety benefits have not been evaluated."}:

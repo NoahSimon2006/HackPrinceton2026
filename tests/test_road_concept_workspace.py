@@ -126,7 +126,12 @@ class RoadConceptWorkspaceTest(unittest.TestCase):
             self.store.artifact(self.project['id'], '/project/brief.json', 'x' * 200_001)
 
     def test_http_analysis_publishes_concept_and_read_only_project_restores_it(self):
-        c = concept()
+        from tests.test_junction_context import junction_context
+        source = junction_context(selected_offset=0)
+        junction = source['junctions'][0]
+        c = build_road_concept(source, [{'id': 'intersection', 'kind': 'intersection_redesign',
+            'anchor_id': junction['approaches'][0]['anchor_id'], 'junction_id': junction['id']}],
+            identity={'site_id': 'workspace-test', 'revision': 1, 'input_revision': 0})
         h = handler('/api/site-analysis', {**self.project['snapshot'],
             'projectId': self.project['id'], 'projectVersion': self.project['version']})
         with patch.dict('os.environ', {'GROK_API_KEY': 'test-only'}), \
@@ -137,6 +142,7 @@ class RoadConceptWorkspaceTest(unittest.TestCase):
         self.assertEqual(h.send_json.call_args.args[0], 200)
         returned = h.send_json.call_args.args[1]
         self.assertEqual(returned['concept']['input_hash'], c['input_hash'])
+        self.assertEqual(returned['concept']['checks'][0]['crossing_count'], 4)
         self.assertTrue(returned['conceptSavedAt'])
         self.assertEqual(len(returned['conceptHistory']), 1)
         self.assertTrue(callable(analyze.call_args.kwargs['fetch_street_context']))

@@ -37,6 +37,58 @@ const concept=(revision=1,input_revision=0)=>({schema_version:1,site_id:'site',w
   evaluation:{status:'unassessed',reason:'Verified turning counts are unavailable.'}});
 const event=(c=concept(),extra={})=>({projectId:'f'.repeat(32),siteId:'site',workflow:'street',revision:c.revision,inputRevision:c.input_revision,
   concept:c,conceptHistory:[],follow:true,...extra});
+const intersection=(revision=2,input_revision=0)=>{
+  const c=concept(revision,input_revision);
+  c.components=[{id:'junction',kind:'intersection_redesign',label:'Coordinated intersection',approach_length_m:35,curb_extension_m:1.2,crossing_setback_m:4,crossing_width_m:3}];
+  c.geometry=['roadway','sidewalk','curb','planting','centerline','crosswalk','stop_line','lane_arrow'].map((surface,index)=>({
+    type:'Feature',id:`junction-${surface}`,geometry:c.geometry[0].geometry,
+    properties:{component_id:'junction',kind:'intersection_redesign',surface,role:index<4?'proposed':'marking',revision,label:surface},
+  }));
+  c.checks=[{component_id:'junction',area_m2:500,roadway_area_m2:350,sidewalk_area_m2:150,approach_count:4,crossing_count:4,connected:true,road_fit:'checked',keep_clear:'no_markings',building_overlap:'unassessed'}];
+  return c;
+};
+
+// Complete designs cover only their exact supplied plan geometry. Materials
+// replace the aerial inside that plan, with crisp markings and no invented fill.
+{
+  const h=harness();h.select();const c=intersection();h.map.fire('roadconceptresult',event(c));
+  const plan=h.active();assert.ok(plan);assert.deepEqual(plan.data.features,c.geometry,'backend order, holes and coordinates remain authoritative');
+  assert.equal(h.$('road-concept-opacity').value,'100');assert.equal(h.$('road-concept-opacity-value').textContent,'100%');
+  assert.ok(plan.styles.every(style=>style.fillOpacity===1));
+  assert.equal(plan.styles[0].fillColor,'#3b4145');assert.equal(plan.styles[1].fillColor,'#dcd4c1');
+  assert.equal(plan.styles[2].fillColor,'#f0e9d8');assert.equal(plan.styles[3].fillColor,'#7c956a');
+  assert.equal(plan.styles[4].fillColor,'#e9c85b');assert.equal(plan.styles[5].fillColor,'#faf7ed');
+  assert.ok(plan.styles.slice(4).every(style=>style.stroke===false),'marking strokes must not inflate the compiled lane widths');
+  assert.equal(h.$('road-concept-title').textContent,'Intersection redesign');
+  assert.equal(h.$('road-concept-scope').textContent,'COORDINATED CONCEPT');
+  assert.match(text(h.$('road-concept-legend')),/Roadway.*Sidewalk.*Concrete curb.*Planting.*Centerlines.*Crossings/);
+  assert.match(text(plan.features[0].popup),/Maximum approach length 35 m.*Maximum curb extension 1.2 m.*Crossing setback 4 m.*Crossing width 3 m/);
+  assert.match(text(h.$('road-concept-basis')),/4 approaches.*4 crossings.*Road layout connected.*Roadway 350 m².*Sidewalk 150 m²/);
+  h.click('road-concept-existing');assert.equal(h.active(),undefined);h.click('road-concept-proposed');assert.equal(h.active(),plan);
+  assert.equal(h.fits.length,0,'comparison never changes the underlying map camera');
+  h.$('road-concept-opacity').value='60';h.click('road-concept-opacity','input');assert.ok(plan.styles.every(style=>style.fillOpacity===.6));
+  const bad=intersection(3);bad.geometry[0].properties.surface='arbitrary-overlay';h.map.fire('roadconceptresult',event(bad));
+  assert.equal(h.active(),plan);assert.equal(h.$('road-concept-state').textContent,'Concept unavailable');
+}
+{
+  const h=harness();h.select();const c=intersection(),old=concept();
+  h.map.fire('roadconceptresult',event(c,{conceptHistory:[{concept:old}]}));
+  h.$('road-concept-history').children[0].events.click[0]();
+  assert.equal(h.$('road-concept-opacity').value,'85','legacy geometry retains its earlier display default');
+  assert.match(h.$('road-concept-title').textContent,/Earlier component concept/);
+  assert.equal(h.$('road-concept-scope').textContent,'COMPONENT CONCEPT');
+  h.click('road-concept-return');assert.equal(h.$('road-concept-opacity').value,'100');
+  assert.deepEqual(h.active().data.features,c.geometry);
+}
+for(const distance of [29.535,10]) {
+  const h=harness();h.select();const c=intersection();c.components[0].junction_id='junction-selected';
+  c.context={junctions:[{id:'junction-other',distance_m:300,approach_count:3},{id:'junction-selected',distance_m:distance,approach_count:4}]};
+  h.map.fire('roadconceptresult',event(c));
+  const location=h.$('road-concept-location');assert.equal(location.hidden,false);assert.match(location.textContent,/Connected junction · 4 approaches/);
+  if(distance>10){assert.match(location.textContent,/30 m from your selected point/);assert.match(text(h.$('road-concept-basis')),/30 m from your selected point/);}
+  else assert.doesNotMatch(location.textContent,/from your selected point/);
+  assert.doesNotMatch(location.textContent,/300|3 approaches/,'the displayed offset belongs to the chosen junction, not another nearby node');
+}
 
 // A concept renders exact supplied geographic features even when no traffic
 // evaluation exists. It never replaces the map or fetches another service.

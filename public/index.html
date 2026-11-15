@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=27">
+  <link rel="stylesheet" href="/styles.css?v=28">
   <script defer src="/vendor/leaflet.js"></script>
   <script defer src="/vector-zoom.js?v=1"></script>
   <script defer src="/app.js?v=20"></script>
   <script defer src="/proposal.js?v=9"></script>
-  <script defer src="/road-concept.js?v=1"></script>
+  <script defer src="/road-concept.js?v=2"></script>
   <script defer src="/concept-scene.js?v=1"></script>
   <script defer src="/analysis-stream.js?v=2"></script>
   <script defer src="/site-view.js?v=4"></script>
@@ -233,11 +233,13 @@
 
             <div class="tab" data-tab="design">
               <section id="road-concept-review" class="card road-concept-review" hidden aria-labelledby="road-concept-title">
+                <div class="road-concept-heading"><span id="road-concept-scope">COORDINATED CONCEPT</span>
                 <span id="road-concept-state" class="road-concept-state" role="status">Concept ready</span>
+                </div>
                 <h3 id="road-concept-title">Proposed road concept</h3>
                 <p id="road-concept-summary"></p>
+                <p id="road-concept-location" class="road-concept-location" hidden></p>
                 <p id="road-concept-warning" class="analysis-stale" role="status" hidden></p>
-                <div class="road-concept-performance"><strong>Performance unavailable</strong><p id="road-concept-performance"></p></div>
                 <div id="road-concept-details">
                   <div class="switch road-concept-modes" role="group" aria-label="Road concept comparison">
                     <button id="road-concept-existing" type="button" aria-pressed="false">Existing</button>
@@ -251,9 +253,10 @@
                     <input id="road-concept-opacity" type="range" min="20" max="100" step="5" value="85">
                   </div>
                   <ul id="road-concept-legend" class="road-concept-legend" aria-label="Road concept legend"></ul>
-                  <details><summary>Features, dimensions &amp; basis</summary><ul id="road-concept-components"></ul><ul id="road-concept-basis"></ul></details>
+                  <details class="road-concept-basis"><summary>Design dimensions &amp; source basis</summary><ul id="road-concept-components"></ul><ul id="road-concept-basis"></ul></details>
                   <p id="road-concept-revision" class="fine-print"></p>
                 </div>
+                <details class="road-concept-performance"><summary>Performance not evaluated</summary><p id="road-concept-performance"></p></details>
                 <details id="road-concept-history-box" hidden><summary>Earlier road concepts</summary><div id="road-concept-history" class="road-concept-history"></div></details>
                 <button id="road-concept-return" type="button" hidden>Return to current concept</button>
               </section>

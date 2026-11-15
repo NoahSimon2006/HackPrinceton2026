@@ -154,6 +154,9 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     previous_traffic = latest_evaluation(project) if workflow == 'street' else None
     concept_requested = workflow == 'street' and fetch_street_context is not None and analysis_identity is not None
     road_context, road_concept, concept_gap = None, None, None
+    def road_design_ready():
+        model = (road_context or {}).get('model_context', {})
+        return model.get('status') == 'ready' and model.get('design_mode') != 'needs_placement'
     concept_publication_error = None
     concept_attempts = 0
     previous_concept = previous_result.get('concept')
@@ -319,20 +322,30 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                             method = 'Conceptual default thickness; the planner marking specifies the crossing alignment, not its width.'
                         items.append(fact(f'road-anchor-{identifier}-{field}', f'Anchor {identifier} {label}', anchor[field], 'm', item_origin,
                             basis=basis, method=method, note=width_basis))
+            for junction in model.get('junctions', []):
+                identifier = junction['id']
+                for field, label, unit in (('distance_m', 'distance from selected point', 'm'),
+                                           ('approach_count', 'connected road approaches', 'approaches')):
+                    value = junction.get(field)
+                    if isinstance(value, (int, float)):
+                        items.append(fact(f'road-junction-{identifier}-{field}', f'Mapped intersection {label}', value, unit,
+                            source('Local sourced road topology'), basis='reported',
+                            method='Connectivity and distance derived from mapped junctions and their incident roads.',
+                            note='The selected point may lie along an approach; the design is anchored to the actual connected intersection.'))
             return items, list(model.get('limitations', []))
         def store(data):
             nonlocal road_context
             road_context = data
         result = collect('street_context', fetch_street_context, measure, store)
         model = (road_context or {}).get('model_context', {})
-        if model.get('status') == 'ready':
+        if road_design_ready():
             required.add('concept')
         else:
-            concept_gap = (model.get('question') or model.get('reason') or
+            concept_gap = (model.get('question') or model.get('reason') or model.get('design_instruction') or
                 next(iter(result.get('warnings', [])), None) or
                 'Select a mapped road or mark the intended crossing so the redesign can be positioned.')
         # This curated inventory is the only spatial context exposed to the model.
-        safe = {key: model[key] for key in ('status', 'context_hash', 'anchors', 'placement', 'limitations', 'question', 'reason') if key in model}
+        safe = {key: model[key] for key in ('status', 'context_hash', 'anchors', 'junctions', 'design_mode', 'design_instruction', 'selected_junction_id', 'junction_distance_m', 'approach_count', 'placement', 'limitations', 'question', 'reason') if key in model}
         result = {**result, 'design_context': safe}
         cached['street_context'] = result
         backend.put('/project/evidence/street-design-context.json', result['facts'])
@@ -377,7 +390,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                 'full_evidence_artifact': '/project/history/previous-traffic-evaluation.json'}
             facts.update((item['id'], item) for item in prior['facts'])
         if concept_requested:
-            context['deliverable'] = 'A proposed road/intersection layout over the existing map. Geometric placement is independent of traffic performance.'
+            context['deliverable'] = 'A coordinated proposed road/intersection plan over the existing map: continuous road surfaces, connected walking space and crossings, curbs and lane markings. Use the actual mapped junction, not an arbitrary point along a road. Geometric placement is independent of traffic performance.'
             if previous_concept:
                 from road_concept import concept_model_summary
                 context['previous_road_concept'] = concept_model_summary(previous_concept)
@@ -576,11 +589,11 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                     phase_tools.discard("task")
                     if not (traffic and traffic.ready and not traffic.evaluated):
                         phase_tools.discard("evaluate_designs")
-                    if concept_requested and not road_concept and (road_context or {}).get('model_context', {}).get('status') == 'ready':
+                    if concept_requested and not road_concept and road_design_ready():
                         phase_tools.discard('evaluate_designs')
                     if "draft" in attempted:
                         phase_tools.discard("draft_rain_garden")
-                    if road_concept or concept_attempts >= 3 or (road_context or {}).get('model_context', {}).get('status') != 'ready':
+                    if road_concept or concept_attempts >= 3 or not road_design_ready():
                         phase_tools.discard('create_or_revise_road_concept')
             model_calls += 1
             activity.event(name, "model-request", "started", f"Requesting the scoped agent response, call {model_calls} of 12.")
@@ -629,7 +642,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         activity.check()
         if not {"site-evidence", "domain-analysis"} <= summaries.keys() or not {"outlines", "detections", "property", "traffic"} <= attempted:
             payload = {"status": "investigation_required", "message": "Read both saved specialist reports before evaluating designs."}
-        elif concept_requested and not road_concept and (road_context or {}).get('model_context', {}).get('status') == 'ready':
+        elif concept_requested and not road_concept and road_design_ready():
             payload = {'status': 'concept_required', 'message': 'Create the primary map concept before an optional separate traffic comparison.'}
         else:
             try:
@@ -710,6 +723,17 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                                      evidence_fact_ids: list[str] | None = None) -> dict:
         """Create the proposed 2D road layout after site and guidance research; traffic counts are not required.
 
+        When design_context.design_mode is junction, create one coordinated
+        intersection_redesign component with id, kind, anchor_id, junction_id,
+        layout="compact". Use a returned junction ID and one of its approach
+        anchor IDs. Optional dimensions: approach_length_m 15–60 (default 28),
+        curb_extension_m 0.6–3 (default 1.2), crossing_setback_m 2–10 (omit to use
+        the source-derived mouth/landing position, bounded 2–4),
+        crossing_width_m 2–5 (default 3). These are proposed choices. The compiler
+        creates the connected roadway, pedestrian landings, curbs and markings
+        together, aligned to the actual intersection. Never choose arbitrary road
+        offsets as a substitute for locating a junction or crossing connection.
+
         First design: components with stable id, kind, anchor_id and optional side
         left/right/center, offset_m, length_m, width_m. Kinds: curb_extension,
         crossing, pedestrian_island, bike_lane, pedestrian_space, lane_marking.
@@ -740,13 +764,13 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             return {'status': 'needs_placement', 'question': concept_gap}
         concept_attempts += 1
         try:
-            if (road_context or {}).get('model_context', {}).get('status') != 'ready':
+            if not road_design_ready():
                 raise ConceptPlacementError('Select a mapped road or mark the intended crossing before placing the design.')
             refs = set(evidence_fact_ids or [])
             if refs - facts.keys():
                 raise ConceptPlacementError('Use only fact IDs returned by the current source tools.')
             if not any(key.startswith('road-guidance-') for key in refs) or not any(
-                    key.startswith('road-anchor-') or key == 'road-context-status' for key in refs):
+                    key.startswith(('road-anchor-', 'road-junction-')) or key == 'road-context-status' for key in refs):
                 raise ConceptPlacementError('Cite at least one mapped road fact and one relevant road-guidance fact in evidence_fact_ids.')
             if previous_concept and components is not None:
                 raise ConceptPlacementError('Revise the saved concept using explicit component-ID changes so unspecified choices are preserved.')
@@ -755,6 +779,11 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                 'designGuidance': [item for item in evidence.get('designGuidance', []) if item['id'] in refs]}
             compiled = build_road_concept(road_context, components, changes=changes, previous=previous_concept,
                 identity=analysis_identity, markings=markings, evidence=compiler_evidence)
+            mode = road_context.get('model_context', {}).get('design_mode')
+            if mode == 'junction' and not any(item['kind'] == 'intersection_redesign' for item in compiled['components']):
+                raise ConceptPlacementError('Design the connected intersection as one intersection_redesign component using a returned junction and approach anchor. A crossing or lane stripe by itself is not a complete redesign. To replace an earlier component concept, remove its named components and add the intersection redesign in the same changes list.')
+            if mode == 'marked_crossing' and any(item['kind'] == 'crossing' and next((a for a in road_context['anchors'] if a['id'] == item['anchor_id']), {}).get('kind') != 'marked_crossing' for item in compiled['components']):
+                raise ConceptPlacementError('Use the explicitly marked crossing alignment so both ends are located. Do not place an unrelated crossing at a road offset.')
             guidance_kinds = {kind for item in ROAD_GUIDANCE if item['id'] in refs for kind in item['kinds']}
             chosen_kinds = {item['kind'] for item in compiled['components']}
             missing_guidance = chosen_kinds - guidance_kinds
@@ -790,10 +819,27 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                 f"{description.capitalize()} on anchor {component['anchor_id']}.", '', origin,
                 basis='modeled', method='Agent-selected treatment compiled against the mapped anchor and current constraints.',
                 note='Proposed design choice; no site-specific performance improvement has been calculated.'))
-            for key, label in (('length_m', 'length'), ('width_m', 'width'), ('offset_m', 'offset')):
+            for key, label in (('length_m', 'length'), ('width_m', 'width'), ('offset_m', 'offset'),
+                               ('approach_length_m', 'maximum approach treatment length'), ('curb_extension_m', 'maximum requested curb extension depth'),
+                               ('crossing_setback_m', 'crossing setback'), ('crossing_width_m', 'crossing band width')):
                 if isinstance(component.get(key), (int, float)):
                     items.append(fact(f'road-concept-{identifier}-{key}', f'Proposed {description} {label}', component[key], 'm',
                                       origin, basis='modeled', method='Authored design parameter used by the local geometry compiler.'))
+            for check in compiled.get('checks', []):
+                if check.get('component_id') != identifier:
+                    continue
+                for field, label, unit in (('approach_count', 'connected approaches', 'approaches'),
+                                           ('crossing_count', 'connected crossings', 'crossings'),
+                                           ('roadway_area_m2', 'proposed roadway area', 'm²'),
+                                           ('sidewalk_area_m2', 'proposed pedestrian area', 'm²'),
+                                           ('effective_curb_extension_min_m', 'smallest compiled curb extension', 'm'),
+                                           ('effective_curb_extension_max_m', 'largest compiled curb extension', 'm'),
+                                           ('through_lanes_per_direction', 'proposed through lanes per direction', 'lanes per direction'),
+                                           ('access_openings_preserved', 'mapped access openings retained', 'openings')):
+                    if isinstance(check.get(field), (int, float)):
+                        items.append(fact(f'road-concept-{identifier}-{field}', label, check[field], unit, origin,
+                            basis='modeled', method='Count or area derived from the compiled intersection geometry.',
+                            note='Proposed concept geometry; not a measured performance benefit.'))
         payload = {'status': 'concept_ready', 'concept': summary, 'facts': items,
                    'research_fact_ids': sorted(refs), 'performance': 'Unassessed; the overlay does not establish emissions, delay or safety benefits.'}
         # The agent can read the scalar summary. Raw canonical geometry goes only
@@ -853,6 +899,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     instruction = shared + "\nYou are the lead. Read the proposal-publication skill and canonical brief/constraints. Write a short /project/plan.md. Delegate site-evidence and domain-analysis using TWO native task calls in the SAME response so their investigations overlap. Each assignment specifies its question, /project/source-brief.json, evidence references, allowed tools/scope, and report path. Keep prior design history in the lead context, not specialist task prompts. Read BOTH saved specialist reports before the final review. Reports include exact fact indexes. Read a full evidence artifact only for a specific unresolved source detail; do not reread whole evidence inventories by default. Do not attempt specialist source tools yourself. Preserve the selected site and user constraints. Environmental impact has priority, then feasibility and disruption; data readiness is separate. Use supported source alternatives on gaps and preserve partial work. Do not repeat failed calls unchanged. Never use general-purpose delegation, shell or external filesystem access."
     if traffic and concept_requested:
         instruction += " Your PRIMARY deliverable is a proposed road/intersection layout over the existing map. Read the traffic-concept skill and both saved specialist reports. Use the reports' design_context anonymous anchors and the reviewed FHWA guidance to choose concrete treatments matching the user's goal. When anchors are ready you MUST call create_or_revise_road_concept before the final review. Missing traffic counts do not block this tool. Create one coherent layout using complementary changes where supported; do not draw a generic box or change sites. Proposed dimensions are choices you may pass to the compiler, and the returned facts are the only dimensions you may state in prose. Cite current mapped road and guidance facts in evidence_fact_ids. For continuation use explicit changes against previous_road_concept object IDs; preserve unspecified choices and all current markings. If geometry validation fails, correct the specific constraint in at most two retries; if no spatial basis exists ask the returned placement question. Explain the visible physical changes and their cited rationale. A conceptual treatment is not a validated safety, emissions or delay benefit."
+        instruction += " If design_context.design_mode is junction, publish one intersection_redesign package with layout compact, a returned junction_id and one of its approach anchor IDs. The compiler draws connected road, sidewalk/curb, crossing and marking surfaces together. Defaults are useful proposed dimensions; use only the documented package parameter names. Do not replace this deliverable with isolated crossing/lane_marking components. When upgrading an earlier component concept, explicitly remove its named old parts and add the package in the same changes list. The selected point may be midblock; use the actual source-connected junction and disclose any shift in the design's focus. If design_mode is needs_placement, explain its specific missing spatial connection. Write the final explanation using physical changes and source facts; do not print anonymous anchor IDs or internal parameter names."
         instruction += " Traffic simulation is optional and separate from the map concept. Only call evaluate_designs if the user explicitly asks for a quantitative traffic comparison and the inputs are ready; create the map concept first. That tool supports only its bounded lane_reallocation layouts. Never attach results from a different evaluated layout to this concept. Do not claim bicycle or pedestrian performance is simulated. If no evaluation is requested, finish with the useful overlay and mark performance unassessed."
     elif traffic:
         instruction += " When traffic inputs are ready, you MUST call evaluate_designs before the final review. Supply two or three distinct layouts in one call: use generic names, kind lane_reallocation, a mapped approach nb/sb/eb/wb, lanes_removed 1 or 2 while leaving at least one traffic lane, length_m between 20 and 200 within mapped approach length, and new_use curb_extension, bike_lane or pedestrian_space. Distinct alternatives must change different approaches, lane counts, or lengths by at least 20 m; changing use labels alone is not a different traffic test. Use sponsor facts and planner constraints to choose plausible options. Design dimensions are proposed choices, not observed measurements. For a saved revision, read previous_traffic_evaluation in the brief and prefer the changes argument to evaluate_designs: name the prior alternative and supply only revised parameters. Preserve omitted parameters and alternatives; use prior rejection reasons and the new user request to choose a bounded change. Current keep-clear and crossing markings are hard constraints. Only one evaluation is permitted per request; never rerun to seek a favorable random outcome. After evaluation recommend only the selected eligible alternative, citing its verdict and relevant metric facts. If no alternative is recommended, return no recommendations and explain why in findings; place missing-data next steps in questions. If traffic inputs are unavailable, report that gap and do not invent a design or impacts. Do not imply bicycle or pedestrian performance is simulated."

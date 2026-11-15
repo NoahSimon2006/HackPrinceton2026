@@ -28,8 +28,15 @@ def osm_fixture(angle=0, width=12):
 
 
 def road_context(angle=0, width=12, markings=None):
-    return prepare_street_context(LON, LAT, markings, network_path="/missing/network.net.xml", osm_path="/missing/roads.osm",
-                                  fetch_osm=lambda bbox: osm_fixture(angle, width))
+    context = prepare_street_context(LON, LAT, markings, network_path="/missing/network.net.xml", osm_path="/missing/roads.osm",
+                                     fetch_osm=lambda bbox: osm_fixture(angle, width))
+    # This helper exercises archived individual-strip geometry. Fresh production
+    # contexts retain junction metadata and must pass the connected-placement gate.
+    context.pop("junctions", None)
+    stable = {k: v for k, v in context.items() if k not in ("context_hash", "model_context")}
+    stable["sources"] = [{k: v for k, v in source.items() if k != "retrieved_at"} for source in stable["sources"]]
+    context["context_hash"] = canonical_hash(stable)
+    return context
 
 
 def identity(revision=1, input_revision=0):
@@ -116,11 +123,12 @@ class StreetContextTests(unittest.TestCase):
         self.assertEqual(anchor["crossing_basis"], "paired_opposing_carriageways")
         self.assertAlmostEqual(anchor["width_m"], 16.)
         self.assertLess(anchor["distance_m"], .01)
-        concept = build_road_concept(context, [component(context, "crossing", "full-crossing")], identity=identity())
-        footprint = projected(concept["geometry"][0]["geometry"])
+        footprint = projected(anchor["surface"])
         self.assertAlmostEqual(footprint.bounds[1], Y - 8, places=3)
         self.assertAlmostEqual(footprint.bounds[3], Y + 8, places=3)
-        self.assertAlmostEqual(footprint.area, 48, places=3)
+        # A full-width carriageway still needs junction or user crossing placement.
+        with self.assertRaisesRegex(ConceptPlacementError, "sourced junction mouth"):
+            build_road_concept(context, [component(context, "crossing", "full-crossing")], identity=identity())
 
     def test_far_source_and_oversized_response_rejected(self):
         raw = osm_fixture().replace(b'lat="34.', b'lat="34.9')
