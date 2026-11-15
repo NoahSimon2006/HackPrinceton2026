@@ -26,7 +26,7 @@ python3 -m venv .venv
 PORT=8003 .venv/bin/python server.py
 ```
 
-Open <http://127.0.0.1:8003>. Use a free port or stop the server you started before restarting. After backend changes, restart Python and reload the page. Local JavaScript/CSS revalidate on reload. Vexcel imagery and optional Esri labels require network access. Discovery reads local prebuilt source snapshots; missing snapshots produce an explicit unavailable state, never substitute data. A Grok key is needed for agent scouting and site analysis. Traffic comparisons also require the local OSM network, verified turning-sheet discovery data, and the original official CARB export at `sim/sources/emfac2025-la-2026.csv`. The new readiness report records the restored inputs, hashes and remaining source gaps.
+Open <http://127.0.0.1:8003>. Use a free port or stop the server you started before restarting. After backend changes, restart Python and reload the page. Local JavaScript/CSS revalidate on reload. Vexcel imagery and optional Esri labels require network access. Discovery reads local prebuilt source snapshots; missing snapshots produce an explicit unavailable state, never substitute data. A Grok key enables specialist scouting reviews and is required for site analysis; place searches still provide guidance from available sources when specialist reviews are unavailable. Traffic comparisons also require the local OSM network, verified turning-sheet discovery data, and the original official CARB export at `sim/sources/emfac2025-la-2026.csv`. The new readiness report records the restored inputs, hashes and remaining source gaps.
 
 ## Build discovery data
 

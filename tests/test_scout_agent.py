@@ -25,8 +25,9 @@ def bundle():
             "modelContext":{"environmental":"A terrain screening signal; capture unassessed.","evidence":[FACT]}}]}
 
 
-def review(text="The terrain signal is 901.00 m²; investigate drainage connectivity.", ids=None):
-    return message(call("ScoutReview",{"findings":[{"candidate_id":"candidate-a","text":text,"fact_ids":ids or ["terrain-signal"]}]}))
+def review(text="The terrain signal is 901.00 m²; investigate drainage connectivity.", ids=None, candidates=None):
+    return message(call("ScoutReview",{"findings":[{"candidate_id":candidate_id,"text":text,"fact_ids":ids or ["terrain-signal"]}
+        for candidate_id in (candidates if candidates is not None else ["candidate-a"])]}))
 
 
 class ParallelModel(ScriptedModel):
@@ -99,6 +100,42 @@ class ScoutAgentTest(unittest.TestCase):
         self.assertIn("Cite only returned fact IDs",sent)
         self.assertIn("Use only exact numbers",sent)
         self.assertNotIn("9999",str(result["review"]))
+
+    def test_empty_and_placeholder_reviews_retry_for_useful_cited_feedback(self):
+        for unusable in (review(candidates=[]), review("Impact unassessed. Further investigation is needed."), review(" ")):
+            with self.subTest(unusable=unusable):
+                result,models,_,_,_=self.run_graph([specialist(),specialist(),lead(final=[unusable,review()])])
+                self.assertEqual(result["agentStatus"],"complete")
+                self.assertEqual(len(result["review"]["findings"]),1)
+                self.assertIn("investigate drainage connectivity",result["review"]["findings"][0]["text"])
+                self.assertEqual(len(models[-1].seen),5,"invalid status-only feedback must receive a structured retry")
+
+    def test_review_must_cover_every_candidate_with_evidence(self):
+        value=bundle(); second=json.loads(json.dumps(value["candidates"][0])); second["id"]="candidate-b"
+        value["candidates"].append(second)
+        complete=lambda:review(candidates=["candidate-a","candidate-b"])
+        models=[specialist([complete()]),specialist([complete()]),lead(final=[review(),complete()])]
+        result,models,_,_,_=self.run_graph(models,research=Mock(return_value=value))
+        self.assertEqual(result["agentStatus"],"complete")
+        self.assertEqual({finding["candidate_id"] for finding in result["review"]["findings"]},{"candidate-a","candidate-b"})
+        self.assertIn("every candidate with source facts",str(models[-1].seen))
+
+    def test_no_candidates_can_finish_with_empty_review_without_fabrication(self):
+        value=bundle(); value["candidates"]=[]
+        result,_,_,_,_=self.run_graph([specialist([review(candidates=[])]),specialist([review(candidates=[])]),
+                                      lead(final=[review(candidates=[])])],research=Mock(return_value=value))
+        self.assertEqual(result["agentStatus"],"complete")
+        self.assertEqual(result["review"],{"findings":[]})
+        self.assertEqual(result["candidates"],[])
+
+    def test_missing_model_key_preserves_research_without_attempting_model(self):
+        research=Mock(side_effect=bundle)
+        with patch("scout_agent.ChatXAI") as model:
+            result=review_scout("","fake","Preserve access while reducing emissions","street",research)
+        model.assert_not_called()
+        research.assert_called_once()
+        self.assertEqual(result["agentStatus"],"partial")
+        self.assertEqual(result["candidates"],bundle()["candidates"])
 
     def test_model_failure_preserves_real_candidates_and_sanitizes_failure(self):
         models=[specialist(),specialist(),ScriptedModel(responses=[RuntimeError("PRIVATE TOKEN ERROR")])]
@@ -213,7 +250,9 @@ class ScoutAgentTest(unittest.TestCase):
     def test_readiness_never_reorders_candidates_and_no_design_is_created(self):
         value=bundle(); second=json.loads(json.dumps(value["candidates"][0])); second["id"]="candidate-b"
         second["readiness"]={"summary":"Ready to draft","missing":[]}; value["candidates"].append(second)
-        result,_,_,_,_=self.run_graph(research=Mock(return_value=value))
+        complete=lambda:review(candidates=["candidate-a","candidate-b"])
+        result,_,_,_,_=self.run_graph([specialist([complete()]),specialist([complete()]),lead(final=[complete()])],
+                                    research=Mock(return_value=value))
         self.assertEqual([c["id"] for c in result["candidates"]],["candidate-a","candidate-b"])
         self.assertNotIn("proposal",result)
         self.assertNotIn("selectedCandidate",result)

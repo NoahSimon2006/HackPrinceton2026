@@ -303,8 +303,6 @@ def start_scout(data):
     from scout_store import validate_search
     validate_search(data)
     key = os.getenv('GROK_API_KEY', '').strip()
-    if not key:
-        raise ValueError('Set GROK_API_KEY to use the planning agent.')
     if not ANALYSIS_SLOTS.acquire(blocking=False):
         raise ProjectConflict('Two planning investigations are already running. Try again shortly.')
     store = scout_store()
@@ -323,6 +321,7 @@ def start_scout(data):
     def run():
         try:
             from opportunity_scout import research_candidates, refresh_traffic_candidates
+            from place_feedback import enrich_feedback
             from scout_agent import review_scout
             excluded = list({item for batch in search['batches'] for c in batch['candidates']
                 for item in [c['id'], *c.get('provenance', {}).get('groupedCandidateIds', c.get('groupedCandidateIds', []))]})
@@ -336,9 +335,13 @@ def start_scout(data):
             if search['workflow'] == 'street':
                 result = refresh_traffic_candidates(result, search['bounds'], check=activity.check)
                 if result.get('reviewStale'):
-                    result['summary'] = 'Current flow was refreshed after investigation. The source screen is current; earlier agent commentary has been discarded.'
                     result.pop('review', None)
                     result.pop('agentReview', None)
+            # Rebuild actionable guidance from the final source snapshot. A
+            # missing/partial model review or a traffic refresh must never
+            # leave the planner with only an uncertainty label.
+            result = enrich_feedback(result, search['workflow'], search['goal'])
+            activity.check()
             activity.event('lead', 'shortlist', 'completed', 'Location investigation finished. Choose a location to develop it.')
             store.finish(search_id, activity.id, result)
         except RunCancelled:

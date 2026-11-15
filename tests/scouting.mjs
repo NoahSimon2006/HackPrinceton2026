@@ -16,13 +16,14 @@ function harness(saved=null) {
   const L={layerGroup:()=>{const value=layer();groups.push(value);return value;},rectangle:layer,geoJSON:layer,circleMarker:layer,marker:layer,divIcon:x=>x};
   const storage=new Map(saved?[['planning-scout-street',saved]]:[]);
   vm.runInNewContext(source,{$,map,L,planningMode:'street',json:(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject})),
-    document:{createElement:element},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},Date:TestDate,AbortController,
+    document:{createElement:element,getElementById:id=>find($('scout-results'),node=>node.id===id)},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},Date:TestDate,AbortController,
     setTimeout:(fn,ms)=>{timers.set(++timer,{fn,ms});return timer;},clearTimeout:id=>timers.delete(id)});
   return {$,map,requests,events,timers,groups,clock,storage,
     start:()=> $('scout-form').events.submit({preventDefault(){}}),
     poll:async()=>{const entry=[...timers].find(([,v])=>v.ms===1500);assert.ok(entry,'expected a polling timer');timers.delete(entry[0]);entry[1].fn();await flush();}};
 }
 const text=node=>[node.textContent,...node.children.map(text)].join(' ');
+const visibleText=node=>[node.textContent,...(node.tag==='details' && !node.open?node.children.filter(child=>child.tag==='summary'):node.children).map(visibleText)].join(' ');
 function find(node,predicate) {if(predicate(node))return node;for(const child of node.children){const result=find(child,predicate);if(result)return result;}return null;}
 const findButton=(h,label)=>find(h.$('scout-results'),n=>n.tag==='button' && n.textContent===label);
 const candidate=(id='c1')=>({id,label:`Location ${id}`,center:[-118.298,34.06],geometry:{type:'Point',coordinates:[-118.298,34.06]},
@@ -35,7 +36,9 @@ function result(status='running',candidates=[]) {return {id:'search1',runId:'run
   const h=harness();h.start();assert.equal(h.requests[0].url,'/api/scouts');
   h.requests[0].resolve(result());await flush();assert.equal(h.$('scout-start').disabled,true);
   await h.poll();h.requests[1].resolve(result('ready',[candidate()]));await flush();
-  assert.match(text(h.$('scout-results')),/Evidence available/);
+  assert.match(visibleText(h.$('scout-results')),/Start here/);
+  assert.match(visibleText(h.$('scout-results')),/Terrain collection warrants investigation/);
+  assert.doesNotMatch(visibleText(h.$('scout-results')),/impact unassessed|Evidence available/);
   assert.match(text(h.$('scout-results')),/USGS/);assert.equal(h.groups[1].items.length,2,'extent and numbered marker shown');
   assert.equal(h.events.filter(e=>e.type==='scoutselect').length,0,'publishing a shortlist does not choose or design a site');
   findButton(h,'Choose this location').events.click();assert.equal(h.requests[2].url,'/api/scouts/select');
@@ -86,7 +89,8 @@ function result(status='running',candidates=[]) {return {id:'search1',runId:'run
 }
 {
   const h=harness();h.start();h.requests[0].resolve(result('ready',[]));await flush();
-  assert.match(h.$('scout-status').textContent,/No supported locations/);
+  assert.match(h.$('scout-status').textContent,/No locations found with the available data/);
+  assert.match(visibleText(h.$('scout-results')),/pick a spot directly/);
   h.map.getBounds=()=>({getWest:()=>-119,getSouth:()=>34,getEast:()=>-118,getNorth:()=>35});
   h.$('scout-area').events.click();assert.match(h.$('scout-status').textContent,/Zoom in/);
 }
@@ -100,8 +104,13 @@ function result(status='running',candidates=[]) {return {id:'search1',runId:'run
   assert.equal(findButton(h,'[1]').title,'Terrain area');assert.equal(h.$('scout-more').hidden,true);
   const card=find(h.$('scout-results'),n=>n.tag==='article'),investigation=find(card,n=>n.className==='scout-investigation');
   assert.equal(investigation.open,false,'full investigation starts collapsed for desktop scanning');
-  assert.match(text(investigation),/goal-specific/);assert.match(text(investigation),/Feasibility/);assert.match(text(investigation),/Field drainage/);
-  assert.ok(card.children.find(n=>n.className==='scout-readiness'),'readiness remains visible outside investigation');
+  assert.match(visibleText(card),/goal-specific/,'agent advice is visible without opening evidence');
+  assert.doesNotMatch(text(investigation),/goal-specific/);assert.match(text(investigation),/Feasibility/);assert.match(text(investigation),/Field drainage/);
+  assert.match(text(investigation),/Evidence available/,'readiness belongs with detailed evidence');
+  assert.ok(card.children.find(n=>n.className==='scout-next-step'),'next action remains visible outside investigation');
+  findButton(h,'[1]').events.click();
+  assert.equal(investigation.open,true,'citation opens the supporting evidence');
+  assert.ok(find(investigation,n=>n.id==='scout-evidence-c1-terrain').scrolled,'citation brings its exact fact into view');
   assert.ok(card.children.find(n=>n.className==='scout-actions'),'selection actions remain visible outside investigation');
   assert.match(text(card),/Map location 1 · 34.06000, -118.29800/,'unmatched locations remain unambiguous');
   assert.equal(find(h.$('scout-results'),n=>n.className==='scout-method').open,false,'comparison method does not dominate the shortlist');
@@ -109,7 +118,10 @@ function result(status='running',candidates=[]) {return {id:'search1',runId:'run
 {
   const h=harness();h.start();const value=result('ready',[candidate()]);
   value.batches[0].review={findings:[{candidate_id:'c1',text:'Stale agent interpretation.',fact_ids:['terrain']}]};value.batches[0].reviewStale=true;
+  value.batches[0].candidates[0].feedback={headline:'Check the current slowdown',observation:'Speed is now 45% of free flow.',relevance:'Compare the slow approach with your access goal.',nextStep:'Check the loading entrance first.',tradeoff:'Keep deliveries possible.',factIds:['terrain']};
   h.requests[0].resolve(value);await flush();assert.doesNotMatch(text(h.$('scout-results')),/Stale agent interpretation/);
+  assert.match(visibleText(h.$('scout-results')),/Speed is now 45%/,'fresh source guidance survives stale agent review');
+  assert.match(visibleText(h.$('scout-results')),/Check the loading entrance first/);
 }
 {
   const h=harness();h.start();h.requests[0].resolve(result('ready',[candidate()]));await flush();
@@ -119,5 +131,35 @@ function result(status='running',candidates=[]) {return {id:'search1',runId:'run
   h.requests[1].resolve({...result(),runId:'older-run',batches:result('ready',[candidate()]).batches});await flush();
   assert.equal(h.requests[3].url,'/api/scouts/cancel');assert.equal(JSON.parse(h.requests[3].options.body).runId,'older-run');
   assert.equal(h.$('scout-start').disabled,true,'late old response does not change current running UI');
+}
+{
+  const h=harness();h.start();const first=candidate(),second=candidate('c2');
+  first.feedback={headline:'Investigate the loading approach',observation:'A specific current slowdown.',relevance:'This helps target your delivery-access investigation.',nextStep:'Inspect curb activity at the entrance.',tradeoff:'Retain access for delivery vehicles.',factIds:['terrain']};
+  second.feedback={headline:'Check the second approach',observation:'A different source observation.',relevance:'A second option for the same goal.',nextStep:'Observe the crossing before changing signals.',tradeoff:'Retain pedestrian crossing time.',factIds:['unknown']};
+  const value=result('ready',[first,second]);
+  value.goal='Keep delivery access <script>alert(1)</script>';
+  value.batches[0].feedbackGoal=value.goal;value.batches[0].agentStatus='partial';
+  value.batches[0].warnings=['Only part of this map area has traffic data.'];
+  value.batches[0].review={findings:[{candidate_id:'c1',text:'The entrance deserves attention for this goal.',fact_ids:['terrain']}]};
+  h.requests[0].resolve(value);await flush();
+  const output=h.$('scout-results'),visible=visibleText(output),method=find(output,n=>n.className==='scout-method');
+  assert.match(visible,/Your goal: Keep delivery access <script>alert\(1\)<\/script>/,'the submitted goal is rendered as plain text');
+  assert.equal(find(output,n=>n.tag==='script'),null);
+  for(const phrase of ['A specific current slowdown.','delivery-access investigation','Inspect curb activity','Retain access','The entrance deserves attention','A different source observation.','Observe the crossing']) assert.ok(visible.includes(phrase),phrase);
+  assert.doesNotMatch(visible,/Only part of this map area|specialist reviews could not finish|partial agent assessment/,'data limits do not obscure advice');
+  assert.match(text(method),/Only part of this map area|specialist reviews could not finish/);
+  const secondCard=find(output,n=>n.id==='scout-candidate-c2');
+  assert.equal(find(secondCard,n=>n.className==='scout-citation'),null,'unknown source feedback citations are omitted');
+}
+{
+  const h=harness();h.start();const c=candidate();
+  c.expiresAt=h.clock.now+1000;c.feedback={headline:'Transient slowdown',observation:'Expired speed observation.',nextStep:'Transient evidence action.',factIds:['terrain']};
+  const value=result('ready',[c]);value.batches[0].summary='Transient speed comparison.';
+  value.batches[0].review={findings:[{candidate_id:'c1',text:'Transient specialist finding.',fact_ids:['terrain']}]};
+  h.requests[0].resolve(value);await flush();
+  assert.match(visibleText(h.$('scout-results')),/Expired speed observation/);
+  h.clock.now+=2000;[...h.timers.values()].find(t=>t.ms!==1500).fn();
+  assert.doesNotMatch(text(h.$('scout-results')),/Transient|Expired speed observation|Terrain area/,'all expired source guidance and summary are removed');
+  assert.match(visibleText(h.$('scout-results')),/Run a fresh search/);
 }
 console.log('PASS: scouting publication, explicit selection, area/cancel/workflow races, history, restore, live expiry and empty coverage');

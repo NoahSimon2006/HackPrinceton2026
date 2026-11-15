@@ -34,6 +34,12 @@ def expired_candidate(candidate):
 def archive_batch(batch, workflow):
     if workflow != 'street':
         return deepcopy(batch)
+    if not batch['candidates']:
+        # An empty search has no live observation to expire. Keep actionable
+        # application copy, without persisting source or model narratives.
+        return {'id': batch['id'], 'created': batch['created'], 'candidates': [],
+                'summary': 'No additional traffic locations could be confirmed in this map area. Try a smaller or nearby area, or pick a spot on the map to investigate it directly.',
+                'agentStatus': batch.get('agentStatus'), 'exhausted': batch.get('exhausted', False), 'warnings': []}
     # Even model prose, provider geometry and derived metrics can encode feed history.
     return {'id': batch['id'], 'created': batch['created'], 'candidates': [expired_candidate(c) for c in batch['candidates']],
             'summary': REFRESH_NOTICE, 'agentStatus': batch.get('agentStatus'), 'exhausted': batch.get('exhausted', False),

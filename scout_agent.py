@@ -1,6 +1,7 @@
 """Native, bounded area investigation. Local geometry never enters model context."""
 import json
 import logging
+import re
 from threading import RLock
 from agent_activity import Activity, RunCancelled
 from agent_workspace import WorkspaceBackend, FILESYSTEM_TOOLS, skill_files, permissions, tool_guard, serializable_response
@@ -23,6 +24,21 @@ class ScoutFinding(BaseModel):
     candidate_id: str = Field(min_length=1, max_length=160)
     text: str = Field(min_length=1, max_length=700)
     fact_ids: list[str] = Field(min_length=1, max_length=6)
+
+
+def _only_placeholder(text):
+    """Reject empty status copy without rejecting limits paired with an action."""
+    placeholders = {
+        'impact unassessed', 'environmental impact unassessed', 'impact is unassessed',
+        'impact remains to be established', 'benefit unverified', 'benefits unverified',
+        'impact unknown', 'impact is unknown', 'benefit is unknown', 'benefits are unknown',
+        'evidence unavailable', 'insufficient evidence', 'not enough information',
+        'further investigation is needed', 'further investigation needed',
+        'more research is needed', 'more information is needed',
+        'not yet established', 'requires site investigation',
+    }
+    sentences = [sentence.strip() for sentence in re.split(r'[.!?;]+', text.lower()) if sentence.strip()]
+    return not sentences or all(sentence in placeholders for sentence in sentences)
 
 
 def review_scout(key, model_name, goal, workflow, research, activity=None, persist_artifact=None):
@@ -103,8 +119,15 @@ Readiness never adds priority points. Terrain accumulation is not verified drain
 runoff capture or flooding. Live slowdown is not recurring congestion, measured
 emissions or a redesign benefit. Use CoStar operating context and Vexcel spatial
 facts to motivate practical next checks; do not invent a sponsor contribution.
-Missing evidence does not prove no opportunity. Explain what can be done next.
-Return concise ScoutReview findings with candidate_id and supporting fact_ids.
+Missing evidence does not prove no opportunity. Return at least one concise
+ScoutReview finding for EVERY candidate that has source facts, with candidate_id
+and supporting fact_ids. In each finding explain what the candidate's specific
+evidence means for the user's stated goal, then give a concrete next action or
+practical tradeoff. Use plain language the planner can act on. Do not merely
+repeat a measurement, say 'impact unassessed', or list missing data. Pair each
+uncertainty with the useful check it calls for. A suggested check is not a
+promise of benefit. If the goal asks for something the facts cannot establish,
+say so and identify what the available evidence does help the user decide.
 Use only exact numbers from those facts. Do not invent thresholds, dimensions,
 benefits, source identifiers or URLs. Do not move, reorder or select candidates,
 produce a proposal, call simulations or recommend construction. Wait for explicit
@@ -135,7 +158,13 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
                         raise ValueError("Write the investigation plan to /project/plan.md first.")
                 elif name not in source_reads:
                     raise ValueError("Call read_candidate_evidence before completing the assessment.")
+                required = {candidate_id for candidate_id, facts in evidence.items() if facts}
+                covered = {finding.candidate_id for finding in self.findings}
+                if required - covered:
+                    raise ValueError("Give at least one useful, cited finding for every candidate with source facts; explain its relevance to the goal and a concrete next check.")
                 for finding in self.findings:
+                    if _only_placeholder(finding.text):
+                        raise ValueError("A status such as 'impact unassessed' is not feedback. Explain what the cited evidence means for the goal and give a concrete next check.")
                     facts = evidence.get(finding.candidate_id)
                     if facts is None or not set(finding.fact_ids) <= facts.keys():
                         raise ValueError("Cite only returned fact IDs for that candidate.")
@@ -164,7 +193,9 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
         review_correction = (
             "Your candidate investigation is complete, but plain text did not save a report. "
             "Finish now with the ScoutReview tool, using only the candidate facts already returned and their exact cited values. "
-            "Do not call source or filesystem tools. Omit unsupported conclusions; an empty findings list is allowed.")
+            "Do not call source or filesystem tools. Give every candidate with source facts a useful cited finding connecting the goal, "
+            "the evidence and a concrete next check. Do not invent benefits or return only missing-evidence disclaimers. "
+            "An empty findings list is allowed only when no candidate has source facts.")
 
         def correct_review():
             nonlocal review_repair_used, review_repair_pending

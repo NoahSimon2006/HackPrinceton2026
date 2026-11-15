@@ -99,42 +99,51 @@
     const unavailable=expired(candidate), article=el('article',undefined,'scout-card');
     article.id=`scout-candidate-${candidate.id}`;
     const title=el('h3');title.append(el('span',String(index+1),'scout-number'),el('span',candidate.label || 'Previous traffic opportunity'));article.append(title);
-    // A research candidate, never a design: say so without shouting.
-    article.append(el('p','Opportunity · impact unassessed','scout-stage'));
     if(unavailable) {
       article.append(el('p',candidate.resumeNotice || 'This traffic observation expired. Run a fresh search before choosing it.','scout-readiness'));
       if(search?.selected?.candidateId===candidate.id) article.append(button('Open selected project',()=>map.fire('scoutselect',{project:{id:search.selected.projectId,snapshot:{workflow:mode}}})));
       return article;
     }
-    article.append(el('h4','Environmental opportunity'),el('p',candidate.environmental?.summary || 'Impact remains to be established.'));
-    if(candidate.direction) article.append(el('p',`Explore: ${candidate.direction}`));
-    const readiness=el('section',undefined,'scout-readiness');
-    readiness.append(el('h4','Evidence available'),el('p',candidate.readiness?.summary || 'Further investigation is needed.'));
-    article.append(readiness);
     const investigation=el('details',undefined,'scout-investigation');investigation.open=false;
     investigation.append(el('summary','Investigation and evidence'));
-    if(!candidate.propertyId && candidate.center?.every(Number.isFinite))
-      investigation.append(el('p',`Map location ${index+1} · ${candidate.center[1].toFixed(5)}, ${candidate.center[0].toFixed(5)}`,'scout-basis'));
-    investigation.append(el('p','Evidence availability is reported separately and does not raise a location’s priority.','scout-basis'));
-    if(candidate.environmental?.basis) investigation.append(el('p',candidate.environmental.basis,'scout-basis'));
-    if(candidate.reason) investigation.append(el('p',candidate.reason,'scout-reason'));
     const citations=evidence(candidate), facts=new Map((candidate.evidence ?? []).map((fact,index)=>[fact.id,{fact,index}]));
+    function citedParagraph(value,ids=[]) {
+      const paragraph=el('p',value);
+      for(const id of ids.filter(id=>facts.has(id))) {
+        const {fact,index}=facts.get(id),reference=button(`[${index+1}]`,()=>{
+          investigation.open=true;document.getElementById(`scout-evidence-${candidate.id}-${id}`)?.scrollIntoView({block:'nearest'});
+        });
+        reference.className='scout-citation';reference.title=fact.label || id;reference.setAttribute('aria-label',`Inspect evidence: ${fact.label || id}`);paragraph.append(reference);
+      }
+      return paragraph;
+    }
+    // Saved searches can predate structured feedback. Their actual evidence and
+    // next action still provide a useful card when specialist review is absent.
+    const feedback=candidate.feedback ?? {}, street=mode==='street';
+    article.append(el('h4',feedback.headline || (street?'Investigate this slow approach':'Explore this collection area'),'scout-feedback-title'));
+    article.append(citedParagraph(feedback.observation || candidate.environmental?.summary ||
+      (street?'Use this mapped location to check traffic flow and nearby access.':'Use this mapped location to trace where rainwater collects.'),feedback.factIds || []));
+    const relevance=feedback.relevance || candidate.reason;
+    if(relevance) article.append(el('h4','Why consider it'),el('p',relevance));
     const findings=batch.reviewStale ? [] : (batch.review?.findings ?? []).filter(finding=>
       finding.candidate_id===candidate.id && finding.text && finding.fact_ids?.length && finding.fact_ids.every(id=>facts.has(id)));
     if(findings.length) {
       const assessment=el('section',undefined,'scout-assessment');assessment.append(el('h4','Agent assessment'));
-      for(const finding of findings) {
-        const paragraph=el('p',finding.text);
-        for(const id of finding.fact_ids) {
-          const {fact,index}=facts.get(id),reference=button(`[${index+1}]`,()=>{
-            investigation.open=true;document.getElementById(`scout-evidence-${candidate.id}-${id}`)?.scrollIntoView({block:'nearest'});
-          });
-          reference.className='scout-citation';reference.title=fact.label || id;reference.setAttribute('aria-label',`Inspect evidence: ${fact.label || id}`);paragraph.append(reference);
-        }
-        assessment.append(paragraph);
-      }
-      investigation.append(assessment);
+      for(const finding of findings) assessment.append(citedParagraph(finding.text,finding.fact_ids));
+      article.append(assessment);
     }
+    const nextStep=el('section',undefined,'scout-next-step');
+    nextStep.append(el('h4','Start here'),el('p',feedback.nextStep || candidate.direction ||
+      (street?'Choose this location, then check the slow approach, crossings and property entrances before proposing a change.':
+        'Choose this location, then trace the nearest inlet and check space for planting before sizing a rain garden.')));
+    article.append(nextStep);
+    const tradeoff=feedback.tradeoff || candidate.disruption || candidate.feasibility;
+    if(tradeoff) article.append(el('h4','What to weigh'),el('p',tradeoff));
+    if(!candidate.propertyId && candidate.center?.every(Number.isFinite))
+      investigation.append(el('p',`Map location ${index+1} · ${candidate.center[1].toFixed(5)}, ${candidate.center[0].toFixed(5)}`,'scout-basis'));
+    investigation.append(el('p','Evidence availability is reported separately and does not raise a location’s priority.','scout-basis'));
+    if(candidate.environmental?.basis) investigation.append(el('p',candidate.environmental.basis,'scout-basis'));
+    if(candidate.readiness?.summary) investigation.append(el('h4','Evidence available'),el('p',candidate.readiness.summary));
     const considerations=el('dl',undefined,'scout-considerations');
     considerations.append(el('dt','Feasibility'),el('dd',candidate.feasibility || 'Not yet established.'),el('dt','Disruption'),el('dd',candidate.disruption || 'Requires site investigation.'));
     investigation.append(considerations);
@@ -159,7 +168,7 @@
     clearTimeout(expiryTimer); candidateLayer.clearLayers(); const output=$('scout-results');output.replaceChildren();
     if(mode==='street') for(const batch of search?.batches ?? []) {
       if((batch.candidates ?? []).some(expired)) {
-        batch.review=null;
+        batch.review=null;batch.summary=null;
         batch.candidates=batch.candidates.map(c=>expired(c)?{id:c.id,label:'Previous traffic opportunity',available:false,
           resumeNotice:c.resumeNotice || 'This traffic observation expired. Run a fresh search before choosing it.'}:c);
       }
@@ -173,22 +182,25 @@
     for(const event of events.slice(-12)) $('scout-events').append(el('li',event.summary || event.message || event.title || `${event.specialist || 'Agent'} · ${event.stage || event.status || 'working'}`));
     if(!search) { $('scout-status').textContent=''; return; }
     if(busy) $('scout-status').textContent='Investigating the search area, checking sources and comparing distinct opportunities…';
-    else if(search.status==='ready') $('scout-status').textContent=total ? `${total} researched ${total===1?'location':'locations'} across ${batches.length} ${batches.length===1?'search':'searches'}. Choose a location to continue.` : 'No supported locations found in this area. Change the area or try again when sources are available.';
+    else if(search.status==='ready') $('scout-status').textContent=total ? `${total} researched ${total===1?'location':'locations'} across ${batches.length} ${batches.length===1?'search':'searches'}. Choose a location to continue.` : 'No locations found with the available data. Try a smaller or nearby area, or pick a spot directly.';
     else $('scout-status').textContent=search.error || search.message || `Search ${search.status}. Previous research remains below.`;
     for(let index=batches.length-1;index>=0;index--) {
       const batch=batches[index], latest=index===batches.length-1;
       const section=el(latest?'section':'details',undefined,'scout-batch');
       if(!latest) section.append(el('summary',`Earlier locations · search ${index+1}`));
       else section.append(el('h3',batches.length>1?`More locations · search ${index+1}`:'Researched locations','scout-batch-title'));
+      const goal=batch.feedbackGoal || search.goal;
+      if(goal) section.append(el('p',`Your goal: ${goal}`,'scout-goal-context'));
       if(batch.summary) section.append(el('p',batch.summary));
-      if(batch.methodology) {
+      if(batch.methodology || batch.warnings?.length || batch.agentStatus==='partial') {
         const method=el('details',undefined,'scout-method');method.open=false;
-        method.append(el('summary',batch.agentStatus==='partial'?'Comparison method · partial agent assessment':'How locations were compared'),el('p',batch.methodology,'scout-basis'));
-        if(batch.agentStatus==='partial') method.append(el('p','Some specialist synthesis was incomplete. These locations retain actual source research; missing assessments do not imply verified feasibility.'));
+        method.append(el('summary','How locations were compared'));
+        if(batch.methodology) method.append(el('p',batch.methodology,'scout-basis'));
+        if(batch.agentStatus==='partial') method.append(el('p','Some specialist reviews could not finish. Each location still includes guidance based on the available evidence.'));
+        for(const warning of batch.warnings ?? []) method.append(el('p',warning,'scout-notice'));
         section.append(method);
       }
-      for(const warning of batch.warnings ?? []) section.append(el('p',warning,'scout-notice'));
-      if(!batch.candidates?.length) section.append(el('p',batch.resumeNotice || 'No further supported locations in this bounded search.'));
+      if(!batch.candidates?.length) section.append(el('p',batch.resumeNotice || 'Try a smaller or nearby map area, or pick a spot directly to investigate a location you know.'));
       for(const [number,candidate] of (batch.candidates ?? []).entries()) section.append(card(candidate,number,latest,batch));
       output.append(section);
     }
