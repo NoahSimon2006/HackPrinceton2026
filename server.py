@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 
 from hydrology import RAINFALL, WATERSHEDS, rainfall_at, rainfall_contours, watershed_at
 from site_evidence import imagery_evidence
+from parcel_tiles import ParcelTiles, validate_tile
 from site_measurements import validate_inputs
 from site_identity import resolve_site
 
@@ -28,6 +29,7 @@ ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
 LA_BOUNDS = (-118.67, 33.70, -118.10, 34.35)  # west, south, east, north
 LAYERS = "urban,urban-r,wide-area,urban-g"
+PARCEL_TILES = ParcelTiles(ROOT / "private/cache/parcel-tiles-v1", LA_BOUNDS, LAYERS)
 VEXCEL = "https://api.vexcelgroup.com/v2"
 ANALYSIS_SLOTS = BoundedSemaphore(2)
 ACTIVE_ANALYSES = {}
@@ -35,6 +37,7 @@ ANALYSIS_LOCK = Lock()
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
           "/discovery.js": "discovery.js", "/analysis-stream.js": "analysis-stream.js", "/planner.js": "planner.js", "/proposal.js": "proposal.js",
           "/site-view.js": "site-view.js", "/projects.js": "projects.js", "/scouting.js": "scouting.js",
+          "/parcels.js": "parcels.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
           "/vendor/leaflet.css": "vendor/leaflet.css"}
 
@@ -658,6 +661,15 @@ class Handler(BaseHTTPRequestHandler):
                                              "source": WATERSHEDS})
                 except (OSError, ValueError, KeyError, TypeError):
                     self.send_json(503, {"error": "LA County hydrology data is temporarily unavailable."})
+            elif re.fullmatch(r"/api/parcels/\d{1,2}/\d{1,7}/\d{1,7}\.json", path.path):
+                _, _, _, z, x, filename = path.path.split("/")
+                z, x, y = int(z), int(x), int(filename[:-5])
+                try:
+                    validate_tile(z, x, y, LA_BOUNDS)
+                except ValueError as error:
+                    self.send_json(400, {"error": str(error)})
+                    return
+                self.send_json(200, PARCEL_TILES.get(z, x, y, vexcel_request))
             elif re.fullmatch(r"/api/tiles/\d{1,2}/\d{1,7}/\d{1,7}\.jpg", path.path):
                 _, _, _, z, x, filename = path.path.split("/")
                 z, x, y = int(z), int(x), int(filename[:-4])

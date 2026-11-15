@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/styles.css?v=22">
   <script defer src="/vendor/leaflet.js"></script>
   <script defer src="/app.js?v=19"></script>
+  <script defer src="/parcels.js?v=1"></script>
   <script defer src="/proposal.js?v=7"></script>
   <script defer src="/analysis-stream.js?v=2"></script>
   <script defer src="/site-view.js?v=1"></script>
@@ -213,6 +214,12 @@
         <div class="layer base"><span class="layer-icon">▧</span><div><strong>Vexcel aerial</strong><small>Base imagery</small></div><span class="active-dot" aria-label="On"></span></div>
         <label class="layer toggle-row" for="labels"><span class="layer-icon">⌖</span><span class="layer-copy"><strong>Place labels</strong><small>Esri reference layer</small></span><input id="labels" type="checkbox" role="switch"><span class="switch"></span></label>
         <label class="layer toggle-row" for="properties"><span class="layer-icon">●</span><span class="layer-copy"><strong>CoStar properties</strong><small>Visible from neighborhood zoom</small></span><input id="properties" type="checkbox" role="switch"><span class="switch"></span></label>
+        <label class="layer toggle-row" for="parcels"><span class="layer-icon">▱</span><span class="layer-copy"><strong>Parcels &amp; buildings</strong><small>Vexcel outlines · zoom in to explore</small></span><input id="parcels" type="checkbox" role="switch" aria-describedby="parcel-status" checked><span class="switch"></span></label>
+        <div class="parcel-info" id="parcel-info">
+          <div class="parcel-legend"><span><i class="parcel-key"></i>Parcels</span><span><i class="building-key"></i>Buildings</span></div>
+          <p id="parcel-status" role="status" aria-live="polite">Zoom in to level 17 to see outlines.</p>
+          <button id="parcel-retry" type="button" hidden>Retry outlines</button>
+        </div>
         <label id="emissions-layer-row" class="layer toggle-row" for="emissions-layer" hidden><span class="layer-icon">≋</span><span class="layer-copy"><strong>Road emissions unavailable</strong><small>Requires a supported traffic simulation</small></span><input id="emissions-layer" type="checkbox" role="switch" disabled><span class="switch"></span></label>
         <div id="layer-note" class="layer-note" hidden>Zoom in to level 15 to see property points.</div>
         <div class="divider"></div>

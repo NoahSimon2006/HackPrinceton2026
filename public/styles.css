@@ -443,3 +443,10 @@ button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-vi
 .scout-assessment{border-top:1px solid #38503e;margin-top:10px;padding-top:4px}
 .scout-investigation>summary,.scout-method>summary{font-size:11px;cursor:pointer;color:#a5cba8;line-height:1.5}
 .scout-investigation{margin:10px 0}.scout-method{margin:8px 0}
+
+/* Citywide reference outlines, independent of selected-site evidence. */
+.parcel-info{padding:0 0 8px 44px;color:#a9c5ad;font-size:11px;line-height:1.4}
+.parcel-info p{margin:7px 0}.parcel-legend{display:flex;gap:14px;flex-wrap:wrap}
+.parcel-legend span{display:flex;align-items:center;gap:6px}.parcel-legend i{display:inline-block;width:13px;height:9px;border:1.5px solid #8ebeff;border-radius:1px}.parcel-legend .building-key{border-color:#a7e5a3}
+.parcel-info button{font:inherit;background:#26372b;color:#dcebe0;border:1px solid #48644d;border-radius:5px;padding:5px 9px;cursor:pointer}
+.parcel-info button:focus-visible{outline:2px solid #a7e5a3;outline-offset:2px}

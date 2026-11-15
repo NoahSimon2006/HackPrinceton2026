@@ -24,6 +24,34 @@ PORT=8003 .venv/bin/python server.py
 
 Open <http://127.0.0.1:8003>. Use a free port or stop the server you started before restarting. After backend changes, restart Python and reload the page. Local JavaScript/CSS revalidate on reload. Vexcel imagery and optional Esri labels require network access. Discovery reads local prebuilt source snapshots; missing snapshots produce an explicit unavailable state, never substitute data. A Grok key is needed only when **Analyze site** is selected. Traffic comparisons also require the local OSM network, verified turning-sheet discovery data, and the original official CARB export at `sim/sources/emfac2025-la-2026.csv`. The new readiness report records the restored inputs, hashes and remaining source gaps.
 
+## Parcels and buildings while browsing
+
+**Map layers & status → Parcels & buildings** is enabled by default and appears
+at zoom 17 or closer in either workspace. Blue lines show parcels; green lines
+show building footprints. The toggle is remembered in the browser. Outlines load
+as you pan, independently of CoStar property points and selected-site analysis.
+Selected-site evidence remains visible when the browsing layer is switched off.
+
+The layer fetches existing Vexcel property data for visible, fixed zoom-17 cells
+through `/api/parcels/17/{x}/{y}.json`, limited to the configured LA bounds. It
+uses two concurrent requests, a short pan debounce, deduplication across cells,
+and a bounded browser cache. The server keeps up to 256 cells in memory and
+persists fetched cells for seven days under ignored `private/cache/parcel-tiles-v1/`.
+Delete that cache directory to refresh saved data immediately. Dense capped
+responses are subdivided with bounded recursion; any remaining truncation is
+shown as partial coverage and cached for only five minutes. Invalid source
+geometries are excluded and disclosed as partial coverage, leaving valid nearby
+outlines visible. Failed requests are
+not cached as empty results and can be retried from the layer controls.
+
+This is on-demand coverage throughout the LA map, not a precomputed export of
+all LA properties. Vexcel source gaps remain gaps. These reference outlines do
+not represent completed environmental analysis or verified property ownership.
+No additional key is required beyond the existing `VEXCEL_API_KEY`.
+
+Checks: `python -m unittest discover -s tests -p test_parcel_tiles.py` and
+`node tests/parcels.mjs`.
+
 ## Build discovery data
 
 Terrain discovery needs `requirements-discovery.txt` and its source-validated cached raster. The base map and draft workflow can run independently of the broader terrain build.
