@@ -57,6 +57,19 @@ def comparison(recommended="north-curb"):
 
 
 class TrafficAdapterTest(unittest.TestCase):
+    def test_plan_keeps_source_gaps_separate_and_omits_private_inputs(self):
+        adapter = TrafficAnalysis(context(), IDENTITY, Activity(), allow_generated_timing=True, policy="environmental-priority-v1")
+        adapter.comparison = comparison(None)
+        adapter.comparison["status"] = "completed"
+        adapter.comparison["ranking"]["verdicts"]["north-curb"]["readiness"] = {"status":"partial", "gaps":["property access remains unassessed"]}
+        adapter.comparison["checks"]["north-curb"]["access_conflicts"] = None
+        plan = adapter.plan()
+        self.assertEqual(plan["readiness"]["missing"], ["property access remains unassessed"])
+        self.assertEqual(plan["policy"], "environmental-priority-v1")
+        self.assertTrue(any("unassessed" in row["decision"] for row in plan["sourceDecisions"]))
+        for forbidden in ("PRIVATE", "coordinates", "node_id", "north_south", "east_west"):
+            self.assertNotIn(forbidden, json.dumps(plan))
+
     def test_input_gate_retains_verified_counts_and_never_runs_assumed_signal_simulation(self):
         with patch("traffic_analysis.Study") as builder, patch("traffic_analysis.evaluate") as evaluate:
             adapter = TrafficAnalysis(context(), IDENTITY, Activity())

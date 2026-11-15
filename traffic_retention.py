@@ -14,7 +14,7 @@ def without_live_facts(facts):
 
 
 def archive_artifact(path, content):
-    if path in ("/project/brief.json", "/project/constraints.json", "/project/evaluations/traffic.json", "/project/comparison.json"):
+    if path in ("/project/brief.json", "/project/source-brief.json", "/project/constraints.json", "/project/history/previous-traffic-evaluation.json", "/project/evaluations/traffic.json", "/project/comparison.json"):
         return content
     if path.startswith("/project/evidence/") or path == "/project/evidence.json":
         return json.dumps(without_live_facts(json.loads(content)))

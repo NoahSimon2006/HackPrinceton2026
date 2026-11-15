@@ -164,6 +164,50 @@ class TrafficAnalysis:
             self.activity.event("domain-analysis", "traffic-network", "failed", "Traffic comparison inputs are incomplete; retrieved counts are preserved.")
         return self.facts, self.warnings
 
+    def plan(self):
+        """Curated design/evaluation summary; no raw geometry, coordinates or source paths."""
+        comparison = self.comparison or {}
+        ranking = comparison.get("ranking", {})
+        missing, decisions = [], []
+        fact_ids = {item["id"] for item in self.facts}
+        completed = comparison.get("status") == "completed"
+        for name, verdict in ranking.get("verdicts", {}).items():
+            for reason in verdict.get("readiness", {}).get("gaps", []):
+                if reason not in missing:
+                    missing.append(reason)
+            check = comparison.get("checks", {}).get(name, {})
+            for field, label, origin, unit in (
+                ("building_overlap_m2", "mapped building overlap", "Vexcel outlines", "m²"),
+                ("parcel_overlap_m2", "mapped parcel overlap", "Vexcel outlines", "m²"),
+                ("access_conflicts", "reported frontage access conflicts", "CoStar frontages", "frontages"),
+                ("candidate_crosswalk_overlaps", "unverified crossing candidate overlaps", "Vexcel detection", "candidates"),
+                ("candidate_driveway_overlaps", "unverified driveway candidate overlaps", "Vexcel detection", "candidates"),
+            ):
+                value = check.get(field)
+                decision = (f"{name}: {label} is unassessed; it cannot be treated as clear."
+                            if value is None else f"{name}: {label} = {value} {unit}. " +
+                            ("A positive overlap/conflict remains a recommendation blocker." if value and field != "parcel_overlap_m2"
+                             else "Parcel overlap is a coordination impact, not ownership or permission." if field == "parcel_overlap_m2"
+                             else "No conflict was returned by this source check; unmapped features remain unverified."))
+                evidence = check.get("access_evidence" if field == "access_conflicts" else
+                                     "candidate_evidence" if field.startswith("candidate_") else "parcel_evidence", [])
+                decisions.append({"source": origin, "decision": decision, "evidence_ids": evidence,
+                                  "fact_id": f"traffic-{name}-{field}" if f"traffic-{name}-{field}" in fact_ids else None, "layout": name})
+        if not completed:
+            missing = [ranking.get("reason") or next((item["value"] for item in reversed(self.facts)
+                                                      if item["id"] == "traffic-comparison-status"),
+                                                     "A validated traffic comparison is not available.")]
+        ready_label = ("Historical-demand comparison complete; site checks remain incomplete." if completed and missing else
+                       "Historical-demand comparison complete; all required source checks are assessed." if completed else
+                       "Quantitative traffic evaluation is unavailable with the current inputs.")
+        return {"revisionSummary": "Compared bounded alternatives under the same counted demand and simulation basis." if completed else "Input investigation retained; no evaluated design is claimed.",
+                "readiness": {"status": "partial" if missing else "evaluated", "label": ready_label, "missing": missing,
+                              "basis": {"countDate": comparison.get("count_date"), "period": comparison.get("period"),
+                                        "peakHour": comparison.get("peak_hour"), "generatedTiming": self.allowed},
+                              "liveTraffic": "Current flow is a separate transient discovery signal; it is not the historical simulation demand."},
+                "sourceDecisions": decisions, "policy": ranking.get("policy") or self.policy,
+                "settings": {"layouts": list(comparison.get("layouts", {}).values()), "policy": ranking.get("policy") or self.policy}}
+
     def run(self, layouts, *, outlines=None, frontages=None, keep_clear=None, detections=None, crossings=None,
             nearby_properties=None):
         self.activity.check()
@@ -351,5 +395,9 @@ def comparison_facts(comparison):
     ranking = comparison["ranking"]
     facts.append(fact("traffic-ranking", "Comparison decision", ranking.get("recommended") or ranking.get("reason") or "No layout recommended.", "",
                       origin, basis="calculated", method="Recommend only an eligible alternative selected by the fixed comparison policy.",
-                      note="A negative result is valid: never force a winner or recommend a rejected alternative."))
+                      note="A negative result is valid: never force a winner or recommend a rejected alternative. " + ranking.get("selection_reason", "")))
+    if ranking.get("policy"):
+        facts.append(fact("traffic-selection-policy", "Traffic selection method", ranking["policy"], "", origin,
+            basis="calculated", method="; ".join(ranking.get("selection_order", ["Historical strict eligibility gates followed by the original weighted ranking."])),
+            note=ranking.get("co2_tie_tolerance", {}).get("method", "Historical comparison retained under its original selection policy.")))
     return facts

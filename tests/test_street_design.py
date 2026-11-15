@@ -26,6 +26,41 @@ def checked():
 
 
 class RankingTest(unittest.TestCase):
+    def test_environmental_priority_cannot_trade_better_co2_for_weighted_convenience(self):
+        results = {"baseline": metrics(), "lower-carbon": metrics(co2=350, delay=66),
+                   "less-disruption": metrics(co2=360, delay=40)}
+        checks = {"lower-carbon": {**checked(), "parcel_overlap_m2": 40, "footprint_m2": 180},
+                  "less-disruption": {**checked(), "footprint_m2": 80}}
+        self.assertEqual(rank(results, checks, policy="strict-v1")["recommended"], "less-disruption")
+        ranked = rank(results, checks, policy="environmental-priority-v1")
+        self.assertEqual(ranked["recommended"], "lower-carbon")
+        self.assertIsNone(ranked["verdicts"]["lower-carbon"]["score"])
+        self.assertEqual(ranked["co2_tie_tolerance"]["tied_layouts"], ["lower-carbon"])
+
+    def test_paired_variability_tie_uses_disruption_and_exposes_its_basis(self):
+        def seeded(values):
+            return {**metrics(co2=sum(values)/len(values)),
+                    "paired_co2_kg_per_hour": [{"seed": seed, "value": value} for seed, value in zip((11,23,37), values)]}
+        results = {"baseline": metrics(), "lower-carbon": seeded([350,360,340]), "less-disruption": seeded([345,365,346])}
+        checks = {"lower-carbon": {**checked(), "parcel_overlap_m2": 10, "footprint_m2": 180},
+                  "less-disruption": {**checked(), "footprint_m2": 80}}
+        ranked = rank(results, checks, policy="environmental-priority-v1")
+        self.assertEqual(ranked["recommended"], "less-disruption")
+        self.assertGreater(ranked["co2_tie_tolerance"]["tolerances"]["less-disruption"], 2)
+        self.assertIn("not a confidence interval", ranked["co2_tie_tolerance"]["method"])
+        results["less-disruption"].pop("paired_co2_kg_per_hour")
+        self.assertEqual(rank(results, checks, policy="environmental-priority-v1")["recommended"], "lower-carbon")
+
+    def test_environmental_policy_blocks_reported_access_conflict(self):
+        results = {"baseline": metrics(), "blocked": metrics(co2=200), "clear": metrics(co2=350)}
+        checks = {"blocked": {**checked(), "access_conflicts": 1}, "clear": checked()}
+        ranked = rank(results, checks, policy="environmental-priority-v1")
+        self.assertFalse(ranked["verdicts"]["blocked"]["eligible"])
+        self.assertEqual(ranked["recommended"], "clear")
+        # Source completeness and physical eligibility are separate explanations.
+        self.assertEqual(ranked["verdicts"]["blocked"]["readiness"]["status"], "evaluated")
+        self.assertEqual(rank(results, checks, policy="strict-v1")["recommended"], "blocked")
+
     def test_invalid_partial_sponsor_geometry_and_counts_stay_unassessed(self):
         design=box(X,Y,X+10,Y+4)
         parcel={'geometry':geo(design),'properties':{'label':'Parcel boundary'}}

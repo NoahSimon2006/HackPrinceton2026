@@ -77,6 +77,9 @@ class ProjectStore:
                 CREATE TABLE IF NOT EXISTS water_designs (
                   project_id TEXT, input_hash TEXT, revision INTEGER, payload TEXT, created TEXT,
                   PRIMARY KEY(project_id, input_hash));
+                CREATE TABLE IF NOT EXISTS traffic_designs (
+                  project_id TEXT, input_hash TEXT, revision INTEGER, payload TEXT, created TEXT,
+                  PRIMARY KEY(project_id, input_hash));
             """)
             if "instructions" not in {row[1] for row in db.execute("PRAGMA table_info(projects)")}:
                 db.execute("ALTER TABLE projects ADD COLUMN instructions TEXT NOT NULL DEFAULT '[]'")
@@ -133,11 +136,12 @@ class ProjectStore:
             events = [json.loads(r[0]) for r in db.execute("SELECT payload FROM events WHERE run_id=? ORDER BY sequence", (run[0],))] if run else []
             artifacts = [dict(r) for r in db.execute("SELECT path,updated FROM artifacts WHERE project_id=? ORDER BY path", (project_id,))]
             designs = [json.loads(r[0]) for r in db.execute('SELECT payload FROM water_designs WHERE project_id=? ORDER BY revision,created', (project_id,))]
+            traffic_designs = [json.loads(r[0]) for r in db.execute('SELECT payload FROM traffic_designs WHERE project_id=? ORDER BY revision,created', (project_id,))]
         return {"id": row["id"], "threadId": row["thread_id"], "version": row["version"],
                 "snapshot": json.loads(row["snapshot"]), "status": row["status"], "updated": row["updated"],
                 "activeRun": row["active_run"], "result": json.loads(row["result"]) if row["result"] else None,
                 "resultVersion": row["result_version"], "events": events, "artifacts": artifacts,
-                "instructions": json.loads(row["instructions"]), 'designHistory': designs[-30:]}
+                "instructions": json.loads(row["instructions"]), 'designHistory': designs[-30:], 'trafficDesignHistory': traffic_designs[-30:]}
 
     def list(self):
         with self.connect() as db:
@@ -207,6 +211,14 @@ class ProjectStore:
             if json.loads(row["snapshot"])["workflow"] == "street":
                 from traffic_retention import archive_result
                 result=archive_result(result)
+                if result and (result.get('comparison') or {}).get('status') == 'completed' and status == 'ready' and not result.get('analysisError'):
+                    from traffic_workspace import evaluation_record
+                    record = evaluation_record(result, json.loads(row['snapshot']))
+                    digest = record['comparison']['input_hash']
+                    previous = [json.loads(r[0]) for r in db.execute('SELECT payload FROM traffic_designs WHERE project_id=? AND input_hash!=? ORDER BY revision,created', (project_id, digest))]
+                    result['trafficDesignHistory'] = previous[-30:]
+                    db.execute('INSERT OR IGNORE INTO traffic_designs VALUES(?,?,?,?,?)',
+                               (project_id, digest, record['revision'], json.dumps(record, allow_nan=False), now()))
             elif result and result.get('proposal') and status == 'ready' and not result.get('analysisError'):
                 from proposal import Proposal
                 proposal = Proposal.model_validate(result['proposal']).model_dump()

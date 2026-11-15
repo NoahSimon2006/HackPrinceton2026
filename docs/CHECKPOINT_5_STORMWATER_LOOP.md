@@ -1,6 +1,6 @@
 # Checkpoint 5 — stormwater design and revision loop
 
-Implemented November 15, 2026 on `codex/checkpoint-5-stormwater-loop`; left uncommitted for review. Checkpoint 4 was committed as `26e3639` (`Add researched area opportunities and location selection`) and pushed to `origin/main` by a fast-forward. This report uses the revised implementation plan's numbering. Checkpoint 6 has not started.
+Implemented November 15, 2026 and committed as `abf6ef3` (`Complete sourced stormwater design and revision loop`), then pushed to `origin/main`. Checkpoint 4 was committed as `26e3639` (`Add researched area opportunities and location selection`) and pushed to `origin/main` by a fast-forward. This report uses the revised implementation plan's numbering. Checkpoint 6 has not started.
 
 ## Delivered behavior
 
@@ -51,4 +51,4 @@ Validation completed:
 
 ## Next boundary
 
-Checkpoint 5 is ready for review and remains local. Checkpoint 6 is the traffic design/evaluation/revision loop. Its acceptance still requires source-verified demand, reproducible comparisons, inspectable failed alternatives and pursuit of an eligible real recommendation. Conceptual 3D and final core-release verification remain later work. The existing interior-tour exclusion and selected-property exterior association are preserved.
+Checkpoint 5 is committed and pushed. The next milestone is the traffic design/evaluation/revision loop; see its current report and the revised implementation plan. Its acceptance still requires source-verified demand, reproducible comparisons, inspectable failed alternatives and pursuit of an eligible real recommendation. Conceptual 3D and final core-release verification remain later work. The existing interior-tour exclusion and selected-property exterior association are preserved.

@@ -524,18 +524,18 @@ class Handler(BaseHTTPRequestHandler):
                     property_context, hydrology_context,
                     lon=lon, lat=lat, scenario=scenario, activity=activity, discovery=selected_discovery,
                     traffic_context=traffic, analysis_identity=identity, allow_generated_timing=True,
-                    ranking_policy="strict-v1",
+                    ranking_policy="environmental-priority-v1",
                     fetch_discovery=lambda: area_facts(workflow, lon, lat),
                     project=project, checkpointer=saver,
                     persist_artifact=(lambda path, content: project_store().artifact(project["id"], path, content, activity.id)) if project else None,
                     stormwater_settings=water_settings,
                 )
             if activity.cancelled.is_set():
-                result.update(proposal=None, comparison=None, alternatives={}, report=None, waterPlan=None)
+                result.update(proposal=None, comparison=None, alternatives={}, report=None, waterPlan=None, trafficPlan=None)
             if project:
                 status = "canceled" if activity.cancelled.is_set() else "failed" if result.get("analysisError") else "needs_input" if result.get("draftQuestion") else "ready"
                 if not project_store().finish(project["id"], activity.id, result, status):
-                    result.update(proposal=None, comparison=None, alternatives={}, report=None, waterPlan=None,
+                    result.update(proposal=None, comparison=None, alternatives={}, report=None, waterPlan=None, trafficPlan=None,
                                   analysisError="This run belongs to earlier inputs. Continue the latest saved project.")
                 result["projectVersion"] = project["version"]
             if streaming:

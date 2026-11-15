@@ -33,6 +33,7 @@ class AccountingTest(unittest.TestCase):
         candidate={**base,'mean_delay_s':66.001,'co2_sumo_g':350000.}
         before=summarise([base],1000,{'CO2':1.,'NOx':1.});after=summarise([candidate],1000,{'CO2':1.,'NOx':1.})
         self.assertEqual(after['mean_delay_s'],66.001)
+        self.assertEqual(after['paired_co2_kg_per_hour'], [{'seed':11,'value':350.}])
         self.assertFalse(rank({'baseline':before,'candidate':after},{'candidate':checked()})['verdicts']['candidate']['eligible'])
         incomplete={**base,'seed':23,'max_noise_db':{'nb':None}}
         self.assertIsNone(summarise([base,incomplete],1000,{'CO2':1.,'NOx':1.})['max_noise_db']['nb'])

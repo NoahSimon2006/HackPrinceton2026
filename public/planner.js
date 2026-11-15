@@ -161,6 +161,28 @@
   function restoreResult(selected, mode, value) {
     const record=selected[mode], result=value.result;
     record.activity=value.events ?? [];
+    const restorePreviousTraffic=()=>{
+      if(mode!=='street')return;
+      const history=value.trafficDesignHistory ?? result?.trafficDesignHistory ?? [];
+      const saved=history.filter(entry=>entry.comparison?.status==='completed' &&
+        entry.comparison.site_id===selected.key && entry.comparison.workflow==='street' &&
+        Number.isInteger(entry.revision) && entry.revision<=(record.proposalRevision ?? 0) &&
+        (entry.inputRevision ?? entry.comparison.input_revision)<=(record.revision ?? 0))
+        .sort((a,b)=>b.revision-a.revision)[0];
+      if(!saved)return;
+      // The failed attempt's source ledger is still visible. Historical source
+      // decisions may be read, but must not link to those newer fact IDs.
+      const plan=saved.trafficPlan?{...saved.trafficPlan,sourceDecisions:(saved.trafficPlan.sourceDecisions ?? []).map(decision=>{
+        if(typeof decision!=='object' || !decision)return decision;
+        const {fact_id,...archived}=decision;return archived;
+      })}:null;
+      record.stale=true;
+      record.evidenceError=[record.evidenceError,'Earlier evaluated layouts remain available below as a saved reference; this attempt did not update them.'].filter(Boolean).join(' ');
+      map.fire('plannerrestore',{siteId:selected.key,workflow:mode,
+        inputRevision:saved.inputRevision ?? saved.comparison.input_revision,revision:saved.revision,
+        proposal:saved.proposal,comparison:saved.comparison,alternatives:saved.alternatives ?? {},trafficPlan:plan,
+        trafficDesignHistory:history});
+    };
     if (result) {
       Object.assign(record,{evidence:result.evidence,report:result.report,facts:result.facts ?? [],
         synthesisWarning:result.synthesisWarning || '',
@@ -170,11 +192,17 @@
       if(value.resultVersion === value.version && !result.analysisError && (result.proposal || result.comparison || result.draftQuestion))
         map.fire('plannerresult',{siteId:selected.key,workflow:mode,inputRevision:record.revision ?? 0,
           revision:record.proposalRevision,proposal:result.proposal,comparison:result.comparison,
-          alternatives:result.alternatives ?? {},draftQuestion:result.draftQuestion,waterPlan:result.waterPlan,designHistory:result.designHistory ?? value.designHistory ?? []});
+          alternatives:result.alternatives ?? {},draftQuestion:result.draftQuestion,waterPlan:result.waterPlan,designHistory:result.designHistory ?? value.designHistory ?? [],
+          trafficPlan:result.trafficPlan,trafficDesignHistory:result.trafficDesignHistory ?? value.trafficDesignHistory ?? []});
       else if(mode==='water' && result.proposal) map.fire('plannerrestore',{
         siteId:selected.key,workflow:mode,inputRevision:result.proposal.input_revision,revision:result.proposal.revision,
         proposal:result.proposal,alternatives:result.alternatives ?? {},waterPlan:result.waterPlan,
         designHistory:result.designHistory ?? value.designHistory ?? []});
+      else if(mode==='street' && !result.analysisError && result.comparison) map.fire('plannerrestore',{
+        siteId:selected.key,workflow:mode,inputRevision:result.comparison.input_revision,revision:result.comparison.revision,
+        proposal:result.proposal,comparison:result.comparison,alternatives:result.alternatives ?? {},trafficPlan:result.trafficPlan,
+        trafficDesignHistory:result.trafficDesignHistory ?? value.trafficDesignHistory ?? []});
+      else if(result.analysisError)restorePreviousTraffic();
     } else {
       const facts = new Map();
       for (const event of record.activity) for (const fact of event.facts ?? []) facts.set(fact.id,fact);
@@ -183,6 +211,7 @@
         record.evidenceError='The previous run stopped. Saved constraints and retrieved evidence are available; continue when ready.';
         record.stale=true;
       }
+      restorePreviousTraffic();
     }
     showEvidence(); showRainfall(); showProject(record);
   }
@@ -586,7 +615,8 @@
         map.fire("plannerresult", {siteId:selected.key, workflow:mode, inputRevision:revision,
           revision:proposalRevision, proposal:result.proposal ?? null, comparison:result.comparison ?? null,
           alternatives:result.alternatives ?? {}, draftQuestion:result.draftQuestion ?? null,
-          waterPlan:result.waterPlan,designHistory:result.designHistory ?? []});
+          waterPlan:result.waterPlan,designHistory:result.designHistory ?? [],trafficPlan:result.trafficPlan,
+          trafficDesignHistory:result.trafficDesignHistory ?? []});
       }
     } catch (error) {
       if (activeAnalysis !== run) return;

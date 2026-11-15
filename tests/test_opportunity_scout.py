@@ -117,6 +117,39 @@ class OpportunityTests(unittest.TestCase):
         self.assertEqual(result['candidates'][0]['evidence'][0]['value'],45)
         self.assertEqual(result['candidates'][0]['provenance']['version'],'v2')
 
+    def test_unique_flow_intersection_choice_preserves_priority_extent_and_refresh_identity(self):
+        node = {'id': 'verified-node', 'properties': {'center': [-118.301,34.06], 'label': 'Private intersection name'}}
+        inventory = {'version': 'counts-v1', 'layers': [{'id':'turning','features':[node]}]}
+        strongest = feature('unlinked-strongest', -118.308, 10, workflow='street', y=34.07)
+        linked = feature('linked', -118.299, 25, workflow='street')
+        linked['geometry']['coordinates'] = [[-118.302,34.06],[-118.299,34.06]]
+        snapshot = data([linked,strongest],'street')
+        with patch.object(scout,'load_discovery',return_value=inventory), patch.object(scout,'traffic_context_at_site',return_value={'sheet':{'date':'2015-02-03'}}), patch.object(scout,'map_discovery',return_value=snapshot), patch.object(scout,'_research_site',return_value=sponsor()):
+            bundle=scout.research_candidates('street',BOUNDS)
+            self.assertEqual([c['environmental']['metrics'][0]['value'] for c in bundle['candidates']],[10,25])
+            candidate=bundle['candidates'][1]
+            self.assertEqual(candidate['center'],node['properties']['center'])
+            self.assertEqual(candidate['geometry'],linked['geometry'])
+            self.assertEqual(candidate['provenance']['evaluationLink']['sourceCenter'],linked['properties']['center'])
+            self.assertIn('historical',candidate['readiness']['summary'])
+            self.assertNotIn('Private intersection name',json.dumps(candidate['modelContext']))
+            self.assertNotIn('-118.301',json.dumps(candidate['modelContext']))
+            refreshed=scout.refresh_traffic_candidates(bundle,BOUNDS)
+            self.assertEqual(refreshed['candidates'][1]['id'],candidate['id'])
+            self.assertEqual(sum(f['id'].endswith('-historical-demand-date') for f in refreshed['candidates'][1]['evidence']),1)
+            moved=deepcopy(snapshot); moved['layers'][0]['features'][0]['geometry']['coordinates']=[[-118.296,34.06],[-118.295,34.06]]
+            with patch.object(scout,'map_discovery',return_value=moved):
+                self.assertEqual(len(scout.refresh_traffic_candidates(bundle,BOUNDS)['candidates']),1)
+            # Multiple nearby nodes, an unavailable source, or no geometric link
+            # must retain the original location rather than borrow turning demand.
+            ambiguous=deepcopy(inventory); ambiguous['layers'][0]['features'].append({'id':'second','properties':{'center':[-118.3009,34.06]}})
+            with patch.object(scout,'load_discovery',return_value=ambiguous):
+                ordinary=scout.research_candidates('street',BOUNDS)['candidates'][1]
+                self.assertEqual(ordinary['center'],linked['properties']['center'])
+                self.assertNotIn('evaluationLink',ordinary['provenance'])
+            with patch.object(scout,'traffic_context_at_site',return_value=None):
+                self.assertEqual(scout.research_candidates('street',BOUNDS)['candidates'][1]['center'],linked['properties']['center'])
+
     def test_cancellation_propagates(self):
         with patch.object(scout,'map_discovery') as fetch:
             with self.assertRaises(RuntimeError):

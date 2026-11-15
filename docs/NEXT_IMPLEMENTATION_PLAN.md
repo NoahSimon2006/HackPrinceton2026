@@ -2,7 +2,7 @@
 
 Prepared November 14, 2026. Product decisions approved; implementation proceeds one authorized checkpoint at a time.
 
-**Current implementation:** Checkpoints 0–4 are pushed to `main` through `26e3639` (Checkpoint 4), following `3515bd1`, `07c57af` and `e8fed6a`. [Checkpoint 5 stormwater design and revision](CHECKPOINT_5_STORMWATER_LOOP.md) is implemented and uncommitted on `codex/checkpoint-5-stormwater-loop`. A researched location now produces a sourced, revisable 2D concept with internal alternatives, explicit what-if calculations and saved design history. Historical count layers remain removed; verified sheets remain internal simulation inputs. Desktop is the priority. Checkpoint 6 has not started.
+**Current implementation:** Checkpoints 0–5 are pushed to `main` through `abf6ef3`, following `26e3639` and `3515bd1`. [Checkpoint 6 traffic design/evaluation/revision](CHECKPOINT_6_TRAFFIC_LOOP.md) is included in this release with the model reliability improvements. Environmental-first policy, named revisions and saved traffic history are implemented. A real native comparison produced three valid rejections; the formerly rate-limited native revision now completes with the same key after the model reliability fix. No eligible real traffic recommendation has been established. Desktop remains the priority; Checkpoint 7 has not started.
 
 Sustainability Map will help Los Angeles urban planners and traffic engineers discover environmental improvement opportunities, choose a location, and develop an inspectable physical concept through conversation. The primary workflow begins with a goal and a map area. The agent investigates that area, presents up to three supported locations, and waits for the user to choose one before developing and evaluating designs.
 
@@ -380,7 +380,7 @@ Connect discovery and sponsor-association tools to the lead's scouting procedure
 
 ### Checkpoint 5 Complete the stormwater design loop
 
-**Implemented for review:** See [Checkpoint 5 verification](CHECKPOINT_5_STORMWATER_LOOP.md). Real scout/select/draft/revision and explicit what-if passed, including both sponsor effects, direct-rain reservation and restart restoration. 213 Python tests and eight JavaScript test files pass. Changes remain uncommitted.
+**Committed and pushed:** See [Checkpoint 5 verification](CHECKPOINT_5_STORMWATER_LOOP.md). Real scout/select/draft/revision and explicit what-if passed, including both sponsor effects, direct-rain reservation and restart restoration. Commit `abf6ef3`; that checkpoint passed 213 Python tests and eight JavaScript test files.
 
 **Outcome:** A selected opportunity becomes a sourced, revisable physical concept.
 
@@ -389,6 +389,8 @@ Develop candidate-specific treatment geometry, internal alternatives, explicit e
 **Acceptance:** Complete scout → select → draft → inspect → revise at a real site. Verify storage math, direct-rain reservation, contributing-area union and unknown capture. Show one constraint that changes the geometry and cite the sponsor evidence that influenced it. An explicit what-if can demonstrate capture, but the UI must preserve its assumptions.
 
 ### Checkpoint 6 Complete the traffic design loop
+
+**Implemented; live acceptance partial:** See [Checkpoint 6 verification](CHECKPOINT_6_TRAFFIC_LOOP.md). Native historical comparison, exact rejected geometry and a complete live conversational revision passed. Shared pacing/retries and compact context resolved the observed demo blockage. A live anchored scout journey and eligible recommendation remain acceptance gaps. Implementation is included in this release; those live acceptance gaps remain open.
 
 **Outcome:** A selected traffic opportunity yields inspectable alternatives and reproducible evaluations where supported.
 

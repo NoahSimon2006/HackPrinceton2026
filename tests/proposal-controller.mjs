@@ -223,3 +223,48 @@ assert.doesNotMatch(text($('water-design-decisions')),/Preserved the mapped curb
 $('water-return-current').events.click();assert.equal($('proposal-area').textContent,'60.0 m²');
 map.fire('plannerrestore',{...study,siteId:'wrong'});assert.equal($('proposal-area').textContent,'60.0 m²');
 console.log('PASS: restored stale geometry, selected-alternative parity and clearly rejected footprint inspection');
+
+// CP6 keeps complete earlier evaluations inspectable without replacing the
+// canonical current result, and separates priority from source readiness.
+select('a','street',2);
+const olderTraffic=result(7,1,null), latestTraffic=result(8,2);
+latestTraffic.comparison.ranking.policy='environmental-priority-v1';
+latestTraffic.comparison.ranking.selection_order=['Total CO₂ reduction','Feasibility and disruption'];
+latestTraffic.trafficPlan={revisionSummary:'Shortened the eastbound reallocation while preserving keep-clear areas.',
+  readiness:{status:'partial',label:'The count cohort is reproducible; field access remains unresolved.',missing:['Confirm loading access.']},
+  sourceDecisions:[{source:'Vexcel and CoStar',decision:'The eastbound footprint avoids the mapped operational frontage.',fact_id:'traffic-frontage'}]};
+latestTraffic.trafficDesignHistory=[{revision:7,inputRevision:1,proposal:null,comparison:olderTraffic.comparison,alternatives:olderTraffic.alternatives,
+  trafficPlan:{readiness:{label:'Earlier count-based evaluation.'}}}];
+map.fire('plannerresult',latestTraffic);
+assert.match($('comparison-policy').textContent,/Total CO₂ reduction → Feasibility and disruption/);
+assert.match($('comparison-readiness').textContent,/count cohort is reproducible/);
+assert.match(text($('comparison-missing')),/Confirm loading access/);
+assert.match(text($('comparison-alternatives')),/Environmental result: 100 kg CO₂/);
+assert.match(text($('comparison-alternatives')),/Feasibility & disruption/);
+assert.match(text($('traffic-design-decisions')),/mapped operational frontage/);
+$('traffic-design-history').children[0].events.click();
+assert.match($('comparison-revision').textContent,/Revision 7 · inputs 1 · hash7/);
+assert.equal($('proposal-review').hidden,true,'an earlier no-winner evaluation cannot retain the current winner overlay');
+assert.equal($('comparison-stale').hidden,true,'intentional history inspection is read-only, not a request to rerun');
+assert.match($('comparison-revision-summary').textContent,/Earlier evaluation · read-only inspection/);
+$('comparison-alternatives').children[1].children.find(c=>c.textContent==='Show footprint on map').events.click();
+assert.match($('proposal-map-caption').textContent,/Earlier evaluation 7 · Tested, rejected/);
+assert.equal($('proposal-stale').hidden,true);
+$('traffic-return-current').events.click();
+assert.match($('comparison-revision').textContent,/Revision 8 · inputs 2 · hash8/);
+assert.equal($('proposal-kind').textContent,'Recommended');
+map.fire('plannerinputs',{inputRevision:3});
+select('a','street',3);map.fire('plannerrestore',latestTraffic);
+assert.match($('comparison-revision').textContent,/Revision 8/);
+assert.equal($('comparison-stale').hidden,false);
+assert.match($('proposal-map-caption').textContent,/saved previous result/);
+select('a','street',4);const firstUnavailable=result(9,4,null);
+firstUnavailable.comparison.status='unavailable';firstUnavailable.comparison.results={};firstUnavailable.comparison.ranking.reason='Verified turning demand is missing.';
+firstUnavailable.trafficPlan={readiness:{label:'Turning demand is required.',missing:['A source-verified count sheet.']}};
+map.fire('plannerresult',firstUnavailable);
+assert.equal($('traffic-comparison').hidden,false);
+assert.equal($('comparison-title').textContent,'Traffic evaluation needs evidence');
+assert.equal($('comparison-table').hidden,true);
+assert.match($('comparison-readiness').textContent,/Turning demand is required/);
+assert.equal($('proposal-review').hidden,true);
+console.log('PASS: traffic environmental/readiness separation, whole-evaluation history, stale restoration and actionable unavailable state');

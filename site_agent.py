@@ -7,6 +7,8 @@ from decimal import Decimal
 from threading import RLock
 
 from agent_activity import Activity, RunCancelled, TransientSourceError
+from agent_context import fact_index, compact_evaluation
+from xai_runtime import invoke_model, classify_error
 from deepagents.backends.utils import create_file_data
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage, RemoveMessage
@@ -29,6 +31,7 @@ from stormwater_planning import plan_stormwater
 from stormwater_settings import validate_settings, effective_settings
 from street_design import Layout
 from traffic_analysis import TrafficAnalysis
+from traffic_workspace import latest_evaluation, prior_context, revised_layouts, revision_summary
 
 INSTRUCTIONS = """You assist a planner screening one selected Los Angeles site.
 Before completing a review, call find_parcel_and_buildings, detect_site_features and
@@ -147,6 +150,8 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         previous_record = previous_result
     previous_proposal = previous_record.get('proposal') if previous_record else None
     previous_water_plan = (previous_record or {}).get('waterPlan') or {}
+    previous_traffic = latest_evaluation(project) if workflow == 'street' else None
+    traffic_plan = None
     nearby_properties = []
     draft_requested = workflow == "water" and analysis_identity is not None
     traffic = TrafficAnalysis(traffic_context, analysis_identity, activity,
@@ -285,6 +290,11 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     if traffic:
         from traffic_retention import without_live_facts
         context["planner_facts"] = without_live_facts(context["planner_facts"])
+        prior = prior_context(previous_traffic)
+        if prior:
+            context['previous_traffic_evaluation'] = {**prior, 'facts': fact_index([item for item in prior['facts'] if item['id'] != 'previous-traffic-model-assumptions'], include_source=False),
+                'full_evidence_artifact': '/project/history/previous-traffic-evaluation.json'}
+            facts.update((item['id'], item) for item in prior['facts'])
     user_instructions = (project or {}).get("instructions", [])
     context["user_instructions"] = user_instructions if len(user_instructions) <= 5 else user_instructions[:1] + user_instructions[-4:]
     context["full_constraints_reference"] = "/project/constraints.json"
@@ -309,7 +319,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             ('searchId', 'candidateId', 'goal', 'selection', 'direction', 'readiness') if key in selection}
         context['selected_opportunity']['next_step'] = 'The user has already chosen this location. Develop the selected site when asked; refresh current evidence rather than searching for other locations.'
     brief = json.dumps(context)
-    messages = [{"role": "user", "content": f"Planning context: {brief}\nQuestion: {question}"}]
+    messages = [{"role": "user", "content": "Read the canonical /project/brief.json and /project/constraints.json before planning. The current request and saved revision context are in those files."}]
     if traffic and discovery:
         messages[0]["content"] += "\nTemporary selected traffic evidence: " + json.dumps(facts.get("discovery-selection"))
     files = {**skill_files(), "/project/brief.json": create_file_data(brief),
@@ -319,6 +329,12 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                  "marked_constraints": context["planner_facts"], "ranking": ["environmental impact", "feasibility", "disruption"],
                  "data_readiness": "reported separately; never a benefit score"})),
              "/project/plan.md": create_file_data("Awaiting the lead's investigation plan.")}
+    # Specialists investigate current inputs; prior design history belongs to the lead.
+    source_context = {key: value for key, value in context.items()
+                      if key not in ('previous_traffic_evaluation', 'previous_stormwater_concept')}
+    files['/project/source-brief.json'] = create_file_data(json.dumps(source_context))
+    if workflow == 'street' and previous_traffic:
+        files['/project/history/previous-traffic-evaluation.json'] = create_file_data(json.dumps(prior))
     if persist_artifact:
         for path, value in files.items():
             if path.startswith("/project/"):
@@ -332,7 +348,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
 
     def model():
         return ChatXAI(model=model_name, api_key=key, base_url="https://api.x.ai/v1", timeout=35, max_retries=0,
-                       max_tokens=2400, reasoning_effort="low")
+                       max_tokens=2400, reasoning_effort="low", include_response_headers=True)
 
     models = {name: model() for name in ("lead", "site-evidence", "domain-analysis")}
 
@@ -359,7 +375,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             needed = {"outlines", "detections", "property", "search"} if name == "site-evidence" else {"hydrology", "traffic", "discovery"}
             scoped_facts = [f for key, value in cached.items() if key in needed for f in value["facts"]]
             payload = {"run_id": activity.id, "status": "partial" if partial else "complete", "summary": report,
-                       "facts": scoped_facts, "unresolved_sources": [key for key in needed if statuses.get(key) == "unavailable"]}
+                       "facts": fact_index(scoped_facts), "full_evidence_artifact": f"/project/evidence/{name}.json", "unresolved_sources": [key for key in needed if statuses.get(key) == "unavailable"]}
             summaries[name] = payload
         backend.put(f"/project/reports/{name}.json", payload)
         backend.put(f"/project/evidence/{name}.json", scoped_facts)
@@ -414,7 +430,8 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             model_calls += 1
             activity.event(name, "model-request", "started", f"Requesting the scoped agent response, call {model_calls} of 12.")
             try:
-                response = handler(request.override(tools=[tool for tool in request.tools if tool.name in phase_tools]))
+                response = invoke_model(handler, request.override(tools=[tool for tool in request.tools if tool.name in phase_tools]),
+                    activity=activity, specialist=name, model_name=model_name, key=key)
                 activity.check()
             except RunCancelled:
                 raise
@@ -438,12 +455,25 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             response_format=ToolStrategy(review_schema(facts, attempted, needed, validated,
                 water_draft=name == "lead" and draft_requested)))
 
-    def evaluate_designs(layouts: list[Layout], runtime: ToolRuntime) -> Command:
-        """After investigation, evaluate two or three distinct bounded traffic layouts together, once per run. Returns scalar sourced facts; all geometry remains local."""
+    def evaluate_designs(runtime: ToolRuntime, layouts: list[Layout] | None = None, changes: list[dict] | None = None) -> Command:
+        """Evaluate two or three bounded traffic layouts once per run after investigation.
+        Supply complete layouts for a first evaluation. To revise saved alternatives,
+        prefer changes: a list of objects with the exact previous name and only changed
+        approach, lanes_removed, length_m or new_use fields. Unspecified layouts and
+        parameters stay unchanged. Supply either layouts or changes, never both.
+        Returns scalar facts; geometry remains local.
+        """
         activity.check()
         if not {"site-evidence", "domain-analysis"} <= summaries.keys() or not {"outlines", "detections", "property", "traffic"} <= attempted:
             payload = {"status": "investigation_required", "message": "Read both saved specialist reports before evaluating designs."}
         else:
+            try:
+                if (layouts is None) == (changes is None):
+                    raise ValueError('Supply either complete layouts or named changes to saved layouts.')
+                if changes is not None:
+                    layouts = revised_layouts(previous_traffic, changes)
+            except (ValueError, TypeError) as failure:
+                return Command(update={'messages': [ToolMessage(content=json.dumps({'status': 'invalid_layouts', 'message': str(failure)}), tool_call_id=runtime.tool_call_id)]})
             payload = traffic.run(layouts,
                 outlines=evidence["outlines"] if statuses.get("outlines") != "unavailable" else None,
                 frontages=evidence["frontages"] if statuses.get("property") != "unavailable" else None,
@@ -461,7 +491,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                    "/project/comparison.json": create_file_data(json.dumps(payload))}
         files.update(virtual)
         backend.put("/project/evaluations/traffic.json", payload)
-        return Command(update={"files": virtual, "messages": [ToolMessage(content=json.dumps(payload), tool_call_id=runtime.tool_call_id)]})
+        return Command(update={"files": virtual, "messages": [ToolMessage(content=json.dumps(compact_evaluation(payload)), tool_call_id=runtime.tool_call_id)]})
 
     def draft_rain_garden(storage_depth_m: float | None = None, runoff_coefficient: float | None = None,
                           protect_driveway: bool | None = None, target_area_m2: float | None = None,
@@ -516,7 +546,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     for name, tools, needed in [
         ("site-evidence", site_tools, {"outlines", "detections", "property"}),
         ("domain-analysis", domain_tools, required - {"outlines", "detections", "property", "draft", "comparison"})]:
-        prompt = shared + f"\nYou are {name}. Read /project/brief.json and the relevant skill first. Use your scoped source tools to collect the mandatory evidence. Return a concise cited SiteReview within your scope; the application saves /project/reports/{name}.json. Other specialists handle other sources. Never claim their tool results. Save optional notes only in /project/notes/{name}/."
+        prompt = shared + f"\nYou are {name}. Read /project/source-brief.json and the relevant skill first. Prior design history is for the lead; focus on current source inputs. Use your scoped source tools to collect the mandatory evidence. Return at most three concise cited findings and one necessary question within your scope; avoid restating every available measurement; the application saves /project/reports/{name}.json. Other specialists handle other sources. Never claim their tool results. Save optional notes only in /project/notes/{name}/."
         prompt += " Finish with the SiteReview structured-output tool on EVERY run, including continuations. A prior saved report does not complete this run; plain prose or an empty final response does not save your current findings."
         prompt += " Mandatory source tools: " + ", ".join(tool.__name__ for tool in (tools[:3] if name == "site-evidence" else tools)) + "."
         if name == "domain-analysis" and traffic:
@@ -537,9 +567,9 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                              if path in allowed_paths or path.startswith(f"/project/notes/{specialist}/")}}
         subagents.append({"name": name, "description": "Read Vexcel and CoStar site context and save a cited report." if name == "site-evidence" else "Investigate domain inputs and neighborhood signals; save a cited report.",
                           "runnable": build_agent(name, tools, prompt, needed) | RunnableLambda(own_artifacts)})
-    instruction = shared + "\nYou are the lead. Read the proposal-publication skill and canonical brief/constraints. Write a short /project/plan.md. Delegate site-evidence and domain-analysis using TWO native task calls in the SAME response so their investigations overlap. Each assignment specifies its question, brief and evidence references, allowed tools/scope, and report path. Read BOTH saved specialist reports and relevant evidence files before the final review. Do not attempt specialist source tools yourself. Preserve the selected site and user constraints. Environmental impact has priority, then feasibility and disruption; data readiness is separate. Use supported source alternatives on gaps and preserve partial work. Do not repeat failed calls unchanged. Never use general-purpose delegation, shell or external filesystem access."
+    instruction = shared + "\nYou are the lead. Read the proposal-publication skill and canonical brief/constraints. Write a short /project/plan.md. Delegate site-evidence and domain-analysis using TWO native task calls in the SAME response so their investigations overlap. Each assignment specifies its question, /project/source-brief.json, evidence references, allowed tools/scope, and report path. Keep prior design history in the lead context, not specialist task prompts. Read BOTH saved specialist reports before the final review. Reports include exact fact indexes. Read a full evidence artifact only for a specific unresolved source detail; do not reread whole evidence inventories by default. Do not attempt specialist source tools yourself. Preserve the selected site and user constraints. Environmental impact has priority, then feasibility and disruption; data readiness is separate. Use supported source alternatives on gaps and preserve partial work. Do not repeat failed calls unchanged. Never use general-purpose delegation, shell or external filesystem access."
     if traffic:
-        instruction += " When traffic inputs are ready, you MUST call evaluate_designs before the final review. Supply two or three distinct layouts in one call: use generic names, kind lane_reallocation, a mapped approach nb/sb/eb/wb, lanes_removed 1 or 2 while leaving at least one traffic lane, length_m between 20 and 200 within mapped approach length, and new_use curb_extension, bike_lane or pedestrian_space. Distinct alternatives must change different approaches, lane counts, or lengths by at least 20 m; changing use labels alone is not a different traffic test. Use sponsor facts and planner constraints to choose plausible options. Design dimensions are proposed choices, not observed measurements. Only one evaluation is permitted; never rerun to seek a favorable answer. After evaluation recommend only the selected eligible alternative, citing its verdict and relevant metric facts. If no alternative is recommended, return no recommendations and explain why in findings; place missing-data next steps in questions. If traffic inputs are unavailable, report that gap and do not invent a design or impacts. Do not imply bicycle or pedestrian performance is simulated."
+        instruction += " When traffic inputs are ready, you MUST call evaluate_designs before the final review. Supply two or three distinct layouts in one call: use generic names, kind lane_reallocation, a mapped approach nb/sb/eb/wb, lanes_removed 1 or 2 while leaving at least one traffic lane, length_m between 20 and 200 within mapped approach length, and new_use curb_extension, bike_lane or pedestrian_space. Distinct alternatives must change different approaches, lane counts, or lengths by at least 20 m; changing use labels alone is not a different traffic test. Use sponsor facts and planner constraints to choose plausible options. Design dimensions are proposed choices, not observed measurements. For a saved revision, read previous_traffic_evaluation in the brief and prefer the changes argument to evaluate_designs: name the prior alternative and supply only revised parameters. Preserve omitted parameters and alternatives; use prior rejection reasons and the new user request to choose a bounded change. Current keep-clear and crossing markings are hard constraints. Only one evaluation is permitted per request; never rerun to seek a favorable random outcome. After evaluation recommend only the selected eligible alternative, citing its verdict and relevant metric facts. If no alternative is recommended, return no recommendations and explain why in findings; place missing-data next steps in questions. If traffic inputs are unavailable, report that gap and do not invent a design or impacts. Do not imply bicycle or pedestrian performance is simulated."
     elif draft_requested:
         instruction += " You MUST call draft_rain_garden after investigation. Use the previous concept metrics/settings to interpret revisions: propose a changed target_area_m2 or layout when asked for a smaller/larger/longer concept; use placement away_from_previous when asked for a different location. Explicit planner controls take priority. The tool internally compares bounded alternatives and returns the selected geometry with matching calculations. If asked to keep a driveway or loading entrance clear, set protect_driveway true. Never infer access locations, ownership or drainage connections. The tool may place a provisional nearby host concept while preserving the selected opportunity identity; explain that host assumption if returned. Cite the sponsor decision facts that changed siting, not just availability. Capture requires the explicit marked-connected what-if and coefficient in planner controls; otherwise capture stays unknown while a useful spatial concept can still be shown. Explain the selected physical change and the practical next check in concise sentences. Do not repeat every limitation. If placement is unavailable, ask the tool's one specific question and give no unsupported placement recommendation."
     else:
@@ -590,10 +620,22 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         error = "Analysis canceled or time budget reached. Retrieved measurements are preserved."
     except Exception as failure:
         logging.getLogger(__name__).warning("Site review failed (%s)", type(failure).__name__)
-        error = "The agent could not finish a source-validated review. Available measurements are shown below; retry the analysis."
+        failure_category = getattr(failure, 'provider_diagnostic', None) or classify_error(failure)
+        error = {
+            'quota_or_billing': 'The model account has reached a credit or spending limit. Check its billing settings; saved inputs and evaluated designs are retained.',
+            'authentication': 'The model credential was rejected. Check the configured API key; saved work is retained.',
+            'permission': 'The model account cannot access the configured model. Check its model permissions; saved work is retained.',
+            'rate_limit': 'The model provider is still rate-limiting requests after bounded retries. Saved inputs and earlier evaluated designs are retained; retry later.',
+            'capacity_wait': 'The provider needs a longer cooldown than this run permits. Saved inputs and evaluated designs are retained; retry later.',
+        }.get(failure_category['category'], 'The agent could not finish a source-validated review. Available measurements are shown below; retry the analysis.')
         try:
             activity.check()
-            if workflow == 'water' and 'draft' in attempted and (draft or draft_gap):
+            if traffic and traffic.comparison and traffic.comparison.get('status') == 'completed':
+                error = None
+                synthesis_warning = 'The narrative review was incomplete. The validated traffic evaluation, tested footprints and rejection reasons remain available.'
+                report = {'findings': [], 'recommendations': [], 'questions': []}
+                activity.event('lead', 'review', 'partial', synthesis_warning)
+            elif workflow == 'water' and 'draft' in attempted and (draft or draft_gap):
                 error = None
                 synthesis_warning = 'The narrative review was incomplete. The local geometry, source decisions and calculations remain available for inspection.'
                 report = {'findings': [], 'recommendations': [], 'questions': [draft_gap] if draft_gap else []}
@@ -620,19 +662,26 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             durable_agent.update_state(config, {"files":archived, "structured_response":None,
                 "messages":[RemoveMessage(id=REMOVE_ALL_MESSAGES), {"role":"user", "content":NOTICE}]})
     if traffic:
+        if activity.cancelled.is_set():
+            traffic.proposal, traffic.comparison, traffic.alternatives = None, None, {}
         facts.update((item["id"], item) for item in traffic.facts)
         if traffic.comparison is None:
             message = ("The agent did not complete a validated comparison. Historical counts and retrieved site evidence are preserved."
                        if traffic.ready else next((item["value"] for item in reversed(traffic.facts) if item["id"] == "traffic-comparison-status"),
                            "A validated traffic comparison was not completed in this analysis request."))
             traffic.comparison = traffic.unavailable_comparison(message)
-    return {"runId":activity.id, "report":report, "analysisError":error, 'synthesisWarning': synthesis_warning, "facts":list(facts.values()),
+        if not activity.cancelled.is_set():
+            traffic_plan = traffic.plan()
+            traffic_plan['revisionSummary'] = revision_summary(traffic.comparison, previous_traffic) if traffic.comparison.get('status') == 'completed' else 'No new evaluated design has been published.'
+    return {"runId":activity.id, "modelUsage": getattr(activity, 'model_usage', {}),
+            "modelDiagnostics": getattr(activity, 'model_diagnostics', []), "report":report, "analysisError":error, 'synthesisWarning': synthesis_warning, "facts":list(facts.values()),
             "sourceWarnings":list(dict.fromkeys(warnings)), "sourceStatus":statuses,
             "evidence":evidence, "hydrology":hydrology,
             "proposal": traffic.proposal if traffic else draft.model_dump() if draft else None,
             "comparison": traffic.comparison if traffic else None,
             "alternatives": traffic.alternatives if traffic else water_plan_local["alternatives"], "draftQuestion": draft_gap,
             "waterPlan": water_plan, "designHistory": (project or {}).get("designHistory", []),
+            "trafficPlan": traffic_plan, "trafficDesignHistory": (project or {}).get('trafficDesignHistory', []),
             "virtualFiles":sorted(path for path in files if path.startswith("/project/")),
             "specialists":{name:bool(value.get("summary")) for name,value in summaries.items()},
             "projectId":project["id"] if project else None,

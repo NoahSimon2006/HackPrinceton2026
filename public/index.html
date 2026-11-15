@@ -136,11 +136,18 @@
             <span class="section-label">TRAFFIC DESIGN COMPARISON</span>
             <h2 id="comparison-title"></h2><p id="comparison-outcome"></p>
             <p id="comparison-period" class="comparison-period"></p>
-            <p class="comparison-method">Modeled results from historical demand. These are not measured current traffic conditions or ambient pollution concentrations.</p>
+            <p id="comparison-policy" class="comparison-policy"></p>
+            <div class="comparison-readiness"><strong>Data readiness · separate from priority</strong><p id="comparison-readiness"></p><ul id="comparison-missing"></ul></div>
+            <p id="comparison-revision-summary" class="comparison-method" hidden></p>
+            <p class="comparison-method">Historical turning demand drives this simulation. The current traffic snapshot helps identify an opportunity; its speed and slowdown observations are not turning volumes, recurring congestion or measured emissions.</p>
             <p class="comparison-method">Emissions cover one hour of offered traffic, including a 15-minute clearance period. Completion is measured after clearance.</p>
             <p id="comparison-stale" class="analysis-stale" hidden>Site inputs changed. This comparison belongs to an earlier revision; analyze again.</p>
             <div id="comparison-table" class="comparison-table" role="region" aria-label="Traffic metrics before and after each layout" tabindex="0"></div>
             <div id="comparison-alternatives" class="comparison-alternatives"></div>
+            <details><summary>Sponsor evidence &amp; design decisions</summary><ul id="traffic-design-decisions"></ul></details>
+            <details><summary>Earlier traffic evaluations</summary><div id="traffic-design-history"></div></details>
+            <button id="traffic-return-current" type="button" hidden>Return to current evaluation</button>
+            <p class="comparison-method">To revise a design, describe a change to its approach, length or lane allocation in the planning brief, or add a keep-clear marking, then continue the project. The next run evaluates one bounded comparison under the same selection policy.</p>
             <details><summary>Sources &amp; simulation assumptions</summary>
               <p class="comparison-method">Delay includes waiting to enter; unfinished trips contribute a lower bound. Queue is the maximum simultaneous total along an approach. Noise is the highest hourly mean source level across approach edges and paired runs. Roadway noise is a modeled source level, not exposure at a building. A 10% noise-energy increase is about 0.414 dB; percentages are not applied directly to decibels.</p>
               <div id="comparison-sources"></div><ul id="comparison-assumptions"></ul>

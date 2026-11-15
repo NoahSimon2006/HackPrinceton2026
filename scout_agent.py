@@ -15,6 +15,7 @@ from langchain_xai import ChatXAI
 from langsmith import tracing_context
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from site_agent import numeric_tokens
+from xai_runtime import invoke_model
 
 
 class ScoutFinding(BaseModel):
@@ -161,7 +162,8 @@ Finish EVERY assignment with structured ScoutReview, not plain prose.
             nonlocal calls
             activity.check(); calls += 1
             activity.event(name,"model-request","started",f"Assessing researched opportunities, call {calls} of 8.")
-            response = handler(request.override(tools=[tool for tool in request.tools if tool.name in allowed]))
+            response = invoke_model(handler, request.override(tools=[tool for tool in request.tools if tool.name in allowed]),
+                activity=activity, specialist=name, model_name=model_name, key=key)
             activity.check()
             response = serializable_response(response)
             if response.structured_response is not None and name!="lead":
@@ -184,7 +186,7 @@ inputs and leave selection to the user; missing inputs do not erase a useful sho
                      if name=="site-evidence" else "Assess environmental signals relative to the goal; explain uncertainty and distinct reasons to investigate each location.")
             prompt = shared + f"\nYou are {name}. {scope} Call read_candidate_evidence. Finish with ScoutReview; the application saves /project/reports/{name}.json."
         return create_deep_agent(model=ChatXAI(model=model_name,api_key=key,base_url="https://api.x.ai/v1",
-                timeout=35,max_retries=0,max_tokens=2200,reasoning_effort="low"),backend=backend,
+                timeout=35,max_retries=0,max_tokens=2200,reasoning_effort="low",include_response_headers=True),backend=backend,
             tools=tools,subagents=subagents,skills=["/skills/"],permissions=permissions(name),
             middleware=[ModelCallLimitMiddleware(run_limit=8,exit_behavior="error"),scoped,boundary,
                 tool_guard(name,activity,skills,reads,assignments,backend,lambda target:save_report(target,None,partial=True))],

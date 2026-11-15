@@ -552,3 +552,31 @@ console.log('PASS: network-offline analysis releases controls and permits a succ
   assert.equal(h.$('cancel-site-analysis').hidden,true);
 }
 console.log('PASS: evidence-row and initial-render failures preserve stream completion and release controls');
+
+
+// A failed continuation cannot erase the last completed traffic evaluation on
+// reload. Restore its historical geometry as stale, keeping the failure visible.
+{
+  const prior={revision:2,inputRevision:1,proposal:null,alternatives:{failed_layout:{status:'rejected'}},
+    comparison:{status:'completed',site_id:'traffic-saved',workflow:'street',revision:2,input_revision:1,input_hash:'old-evaluation'},
+    trafficPlan:{sourceDecisions:[{source:'Vexcel',decision:'Earlier crossing check.',fact_id:'traffic-old-check'}]}};
+  const saved={id:'c'.repeat(32),version:4,resultVersion:4,status:'failed',artifacts:[],events:[],trafficDesignHistory:[prior],
+    snapshot:{workflow:'street',siteId:'traffic-saved',lon:-118.25,lat:34.05,propertyId:null,question:'Shorten the lane reallocation.',markings:[],rainfallScenario:null,inputRevision:3,proposalRevision:3},
+    result:{analysisError:'Provider rate limit interrupted this attempt.',report:null,facts:[],comparison:{status:'unavailable',revision:3}}};
+  const h=harness('street',{savedProject:saved});h.map.fire('scoutselect',{project:saved});await flush();await flush();
+  const restore=h.map.events.find(e=>e.name==='plannerrestore')?.event;
+  assert.equal(restore?.revision,2);assert.equal(restore?.inputRevision,1);
+  assert.equal(restore?.comparison.input_hash,'old-evaluation');
+  assert.equal(restore?.trafficPlan.sourceDecisions[0].fact_id,undefined,'old source IDs cannot inspect the failed run’s current ledger');
+  assert.equal(h.map.events.filter(e=>e.name==='plannerresult').length,0,'a failed revision must never publish as current');
+  assert.match(h.$('analysis-message').textContent,/Provider rate limit/);
+  assert.match(h.$('analysis-message').textContent,/saved reference/);
+  assert.equal(h.requests.filter(q=>q.url==='/api/site-analysis').length,0);
+  const empty={...saved,result:null,status:'interrupted'};
+  const r=harness('street',{savedProject:empty});r.map.fire('scoutselect',{project:empty});await flush();await flush();
+  assert.equal(r.map.events.find(e=>e.name==='plannerrestore')?.event.revision,2,'interrupted attempts without a result also restore permitted history');
+  const foreign={...saved,trafficDesignHistory:[{...prior,comparison:{...prior.comparison,site_id:'another-site'}}]};
+  const f=harness('street',{savedProject:foreign});f.map.fire('scoutselect',{project:foreign});await flush();await flush();
+  assert.equal(f.map.events.filter(e=>e.name==='plannerrestore').length,0);
+}
+console.log('PASS: failed traffic continuation retains completed history as stale without publishing failed or foreign results');

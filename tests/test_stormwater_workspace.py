@@ -27,6 +27,13 @@ def design(revision=1):
 
 
 class StormwaterWorkspaceTest(unittest.TestCase):
+    def setUp(self):
+        # Scripted models use no provider capacity; pacing has dedicated fake-clock tests.
+        from unittest.mock import patch
+        pacing = patch('xai_runtime.MIN_INTERVAL_SECONDS', 0)
+        pacing.start()
+        self.addCleanup(pacing.stop)
+
     def test_narrative_failure_keeps_valid_design_but_deadline_cannot_publish_it(self):
         from unittest.mock import patch
         from agent_activity import Activity

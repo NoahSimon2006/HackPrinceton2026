@@ -55,6 +55,13 @@ def lead(extra=(), final=None):
 
 
 class ScoutAgentTest(unittest.TestCase):
+    def setUp(self):
+        # Scripted models use no provider capacity; pacing has dedicated fake-clock tests.
+        from unittest.mock import patch
+        pacing = patch('xai_runtime.MIN_INTERVAL_SECONDS', 0)
+        pacing.start()
+        self.addCleanup(pacing.stop)
+
     def run_graph(self, models=None, research=None, activity=None):
         research = research or Mock(side_effect=bundle)
         models = models or [specialist(),specialist(),lead()]

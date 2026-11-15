@@ -84,6 +84,13 @@ def complete():
 
 
 class AgentTest(unittest.TestCase):
+    def setUp(self):
+        # Scripted models use no provider capacity; pacing has dedicated fake-clock tests.
+        from unittest.mock import patch
+        pacing = patch('xai_runtime.MIN_INTERVAL_SECONDS', 0)
+        pacing.start()
+        self.addCleanup(pacing.stop)
+
     def test_numeric_validation_suggests_available_facts_without_accepting_missing_citations(self):
         facts = {'water-footprint_area': fact('water-footprint_area', 'Footprint area', 20, 'm²', source('Local geometry')),
                  'water-captured_volume': fact('water-captured_volume', 'Temporary runoff storage', 1.984, 'm³', source('Local geometry'), precision=3)}

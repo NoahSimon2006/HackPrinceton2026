@@ -5,7 +5,7 @@
   map.getPane("proposal").style.pointerEvents = "none";
   let selected = null, published = null, comparison = null, layer = null, request = 0, controller;
   let realRevision = 0;
-  let currentWater = null;
+  let currentWater = null, currentTraffic = null;
   const show = $("show-proposal");
   const statuses = {fixture:"Development fixture", draft:"Draft concept", conditional:"Conditional treatment", recommended:"Recommended",
     tested:"Tested, eligible", rejected:"Tested, rejected"};
@@ -39,7 +39,7 @@
     controller?.abort(); ++request;
     selected = event.siteId ? event : null;
     comparison = null; realRevision = 0;
-    currentWater = null;
+    currentWater = null; currentTraffic = null;
     removeProposal();
     $("traffic-comparison").hidden = true;
     $("water-design-review").hidden = true;
@@ -211,12 +211,86 @@
     ["Maximum approach queue", "m", r => maximum(r.max_queue_m)],
     ["Maximum approach hourly noise", "dB(A)", r => maximum(r.max_noise_db)],
   ];
-  function renderComparison(c, alternatives) {
+  function trafficAlternatives(study) {
+    const c=study.comparison, site={...selected,inputRevision:study.inputRevision};
+    if(!c || !identity(c,site,study.revision) || c.workflow!=='street' || !c.ranking)throw new Error('Comparison identity mismatch.');
+    if(c.status==='unavailable') {
+      if(study.proposal)throw new Error('An unavailable comparison cannot publish a proposal.');
+      return {};
+    }
+    if(!c.results?.baseline)throw new Error('Comparison metrics are missing.');
+    const names=Object.keys(c.results).filter(name=>name!=='baseline');
+    if(!names.length)throw new Error('Tested layouts are missing.');
+    const alternatives=Object.fromEntries(names.map(name=>{
+      const layout=study.alternatives?.[name],verdict=c.ranking.verdicts?.[name];
+      const expected=name===c.ranking.recommended?'recommended':verdict?.eligible?'tested':'rejected';
+      const area=layout && validate(layout,site,study.revision,false);
+      if(!area || !verdict || layout.status!==expected || layout.input_hash!==c.input_hash ||
+          layout.geometry.some(g=>g.properties.layout!==name))throw new Error('Tested layout and comparison mismatch.');
+      return [name,[layout,area,prepareLayer(layout)]];
+    }));
+    const winner=alternatives[c.ranking.recommended];
+    if(Boolean(winner)!==Boolean(study.proposal) || winner &&
+        (!c.ranking.verdicts[c.ranking.recommended].eligible || JSON.stringify(winner[0])!==JSON.stringify(study.proposal)))
+      throw new Error('Recommended proposal and comparison mismatch.');
+    return alternatives;
+  }
+  function showTrafficEvaluation(study, alternatives, preview=false) {
+    const c=study.comparison, winner=alternatives[c.ranking.recommended];
+    renderComparison(c,alternatives,study,preview); comparison=c;
+    if(winner)publish(...winner.slice(0,2),selected,winner[2]);else removeProposal();
+    if(preview) {
+      $('comparison-stale').hidden=true;$('proposal-stale').hidden=true;
+      if(published){$('proposal-kind').textContent=`Earlier evaluation ${study.revision} · read only`;
+        $('proposal-map-caption').textContent=`Earlier evaluation ${study.revision} · read-only preview`;}
+    } else $('comparison-stale').hidden=study.inputRevision===selected.inputRevision;
+  }
+  function renderTrafficContext(study, preview) {
+    const c=study.comparison,plan=study.trafficPlan ?? {},readiness=plan.readiness ?? c.readiness;
+    const order=Array.isArray(c.ranking.selection_order)?c.ranking.selection_order.join(' → '):c.ranking.selection_order;
+    $('comparison-policy').textContent=`${order || (c.ranking.policy?.startsWith('strict')?'Earlier weighted comparison policy; inspect its recorded assumptions.':'Environmental impact first; feasibility and disruption next.')} Data readiness is shown separately. Policy: ${c.ranking.policy || plan.policy || 'Recorded with this evaluation'}.`;
+    $('comparison-readiness').textContent=typeof readiness==='string'?readiness:
+      readiness?.label || readiness?.basis || (c.status==='unavailable'?'Required simulation inputs are incomplete.':
+        'Simulation completed under the listed historical inputs. Inspect each layout’s unresolved source and feasibility checks before relying on its result.');
+    $('comparison-missing').replaceChildren();
+    for(const missing of readiness?.missing ?? [])$('comparison-missing').append(element('li',typeof missing==='string'?missing:missing.label || missing.reason || 'Required evidence remains unavailable.'));
+    const revisionText=typeof plan.revisionSummary==='string'?plan.revisionSummary:plan.revisionSummary?.text;
+    $('comparison-revision-summary').hidden=!preview && !revisionText;
+    $('comparison-revision-summary').textContent=[preview?'Earlier evaluation · read-only inspection. The current project and constraints are unchanged.':'',revisionText].filter(Boolean).join(' ');
+    $('traffic-design-decisions').replaceChildren();
+    for(const decision of plan.sourceDecisions ?? []) {
+      const item=element('li',typeof decision==='string'?decision:[decision.source,decision.decision || decision.text].filter(Boolean).join(': '));
+      if(decision.evidence_ids?.length)item.append(element('small',` Evidence: ${decision.evidence_ids.join(', ')}`));
+      if(!preview && decision.fact_id) {
+        const inspect=element('button','Inspect source evidence');inspect.type='button';
+        inspect.addEventListener('click',()=>map.fire('plannerinspectevidence',{siteId:study.siteId,evidenceIds:[decision.fact_id,...(decision.evidence_ids ?? [])]}));item.append(inspect);
+      }
+      $('traffic-design-decisions').append(item);
+    }
+    if(!$('traffic-design-decisions').children.length)$('traffic-design-decisions').append(element('li','Inspect each layout’s parcel, building, access and crossing checks below. No separate design-decision ledger was recorded.'));
+    $('traffic-design-history').replaceChildren();
+    for(const saved of currentTraffic?.trafficDesignHistory ?? []) {
+      if(!saved.comparison || saved.revision>=currentTraffic.revision)continue;
+      const inspect=element('button',`Inspect evaluation ${saved.revision}`);inspect.type='button';
+      inspect.addEventListener('click',()=>{
+        if(!selected || selected.workflow!=='street' || currentTraffic?.siteId!==selected.siteId)return;
+        try {
+          const own={...saved,siteId:currentTraffic.siteId,workflow:'street',inputRevision:saved.inputRevision ?? saved.comparison.input_revision};
+          showTrafficEvaluation(own,trafficAlternatives(own),true);
+        }catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Earlier evaluation unavailable: ${error.message}`;}
+      });$('traffic-design-history').append(inspect);
+    }
+    if(!$('traffic-design-history').children.length)$('traffic-design-history').append(element('p','This is the first saved traffic evaluation.'));
+    $('traffic-return-current').hidden=!preview;
+  }
+  function renderComparison(c, alternatives, study=currentTraffic, preview=false) {
     const names = Object.keys(c.results ?? {}).filter(name => name !== "baseline");
     const recommended = c.ranking?.recommended;
+    $("comparison-table").hidden=!names.length;
     $("traffic-comparison").hidden = false;
-    $("comparison-title").textContent = recommended ? "A layout meets the comparison rules" : "No layout recommended";
-    $("comparison-outcome").textContent = c.ranking?.reason ?? (recommended ? `${label(recommended)} is the recommended option under these simulation inputs.` : "None of the tested layouts met the recommendation rules.");
+    $("comparison-title").textContent = c.status==='unavailable'?'Traffic evaluation needs evidence':recommended ? "A layout meets the comparison rules" : "No layout recommended";
+    renderTrafficContext(study,preview);
+    $("comparison-outcome").textContent = c.ranking?.reason ?? c.ranking?.selection_reason ?? (recommended ? `${label(recommended)} is the recommended option under these simulation inputs.` : "None of the tested layouts met the recommendation rules.");
     $("comparison-period").textContent = `LADOT count: ${c.count_date ?? "date unavailable"} · ${c.peak_hour ?? c.period ?? "period unavailable"}`;
     $("comparison-stale").hidden = true;
     $("comparison-revision").textContent = `Revision ${c.revision} · inputs ${c.input_revision} · ${c.input_hash.slice(0,8)}`;
@@ -248,11 +322,23 @@
       const status = element("span", statuses[proposal.status]);
       status.className = "comparison-verdict"; summary.append(status); card.append(summary);
       if (c.descriptions?.[name]) card.append(element("p", c.descriptions[name]));
+      const before=c.results.baseline,after=c.results[name];
+      const change=finite(before.co2_kg_per_hour) && before.co2_kg_per_hour>0 && finite(after.co2_kg_per_hour)
+        ? 100*(after.co2_kg_per_hour/before.co2_kg_per_hour-1):null;
+      const environment=element('p',`Environmental result: ${number(after.co2_kg_per_hour,'kg CO₂ / demand hour')}${finite(change)?` · ${number(Math.abs(change),'%')} ${change<0?'lower':change>0?'higher':'change'} than baseline`:'. Change not assessed'}. A lower total cannot justify stranded traffic or a failed hard gate.`);
+      environment.className='comparison-environment';card.append(environment);
+      const practical=element('p',`Feasibility & disruption: ${number(after.mean_delay_s,'s / vehicle')} mean delay; ${number(finite(after.completion_share)?after.completion_share*100:null,'%')} of offered demand completed; ${number(maximum(after.max_queue_m),'m')} maximum approach queue.`);
+      practical.className='comparison-practical';card.append(practical);
+      if(finite(verdict.changes?.queue))card.append(element('p',`Worst individual approach queue change: ${verdict.changes.queue>0?'+':''}${number(verdict.changes.queue*100,'%')} versus that approach’s own baseline. This gate differs from the overall maximum shown in the table.`));
+      if(verdict.readiness)card.append(element('p',`Data readiness: ${verdict.readiness.status==='evaluated'?'required checks evaluated':'additional evidence needed'}${verdict.readiness.gaps?.length?`. ${verdict.readiness.gaps.join('; ')}`:''}. This does not increase the environmental rank.`));
       const inspect = element("button", "Show footprint on map");
       inspect.type = "button";
       inspect.addEventListener("click", () => {
         if (comparison !== c) return;
         publish(proposal, area, selected, replacement);
+        if(preview){$('proposal-kind').textContent=`Earlier evaluation ${study.revision} · ${statuses[proposal.status]}`;
+          $('proposal-map-caption').textContent=`Earlier evaluation ${study.revision} · ${statuses[proposal.status]} · read-only preview`;
+          $('proposal-stale').hidden=true;}
         focus();
       });
       card.append(inspect);
@@ -318,34 +404,17 @@
         $("proposal-result-message").hidden = false;
         $("proposal-result-message").textContent = `Comparison unavailable: ${c.ranking.reason ?? "Required evidence or simulation results could not be obtained."}${published || comparison ? " The previous result is preserved below; it has not been updated." : ""}`;
         if (published) $("proposal-map-caption").textContent = `${caption(published.input_revision !== selected.inputRevision)} · previous result`;
+        if(!comparison){currentTraffic={...event};showTrafficEvaluation(currentTraffic,trafficAlternatives(event));}
         $("load-proposal-fixture").disabled = false;
         $("revise-proposal-fixture").disabled = !published?.development_fixture;
         return;
       }
       if (!c.results?.baseline) throw new Error("Comparison metrics are missing.");
       if (c.workflow !== "street") throw new Error("Only traffic comparisons are supported. Analyze the site for a stormwater draft.");
-      {
-        const names = Object.keys(c.results).filter(name => name !== "baseline");
-        if (!names.length) throw new Error("Tested layouts are missing.");
-        const alternatives = Object.fromEntries(names.map(name => {
-          const layout = event.alternatives?.[name], verdict = c.ranking.verdicts[name];
-          const expected = name === c.ranking.recommended ? "recommended" : verdict?.eligible ? "tested" : "rejected";
-          const area = layout && validate(layout, selected, event.revision, false);
-          if (!area || !verdict || layout.status !== expected || layout.input_hash !== c.input_hash ||
-              layout.geometry.some(g => g.properties.layout !== name)) throw new Error("Tested layout and comparison mismatch.");
-          return [name, [layout, area, prepareLayer(layout)]];
-        }));
-        const winner = alternatives[c.ranking.recommended];
-        if ((Boolean(winner) !== Boolean(p)) || (winner &&
-            (!c.ranking.verdicts[c.ranking.recommended].eligible || JSON.stringify(winner[0]) !== JSON.stringify(p))))
-          throw new Error("Recommended proposal and comparison mismatch.");
-        controller?.abort(); ++request;
-        renderComparison(c, alternatives);
-        if (winner) {
-          const [proposal, area, replacement] = winner;
-          publish(proposal, area, selected, replacement);
-        } else removeProposal();
-      }
+      const prepared=trafficAlternatives(event);
+      controller?.abort(); ++request;
+      currentTraffic={...event};
+      showTrafficEvaluation(currentTraffic,prepared);
       realRevision = event.revision; comparison = c;
       $("proposal-result-message").hidden = true;
       $("load-proposal-fixture").disabled = false;
@@ -387,9 +456,23 @@
     else removeProposal();
     renderWaterStudy(currentWater);
   });
+  $('traffic-return-current').addEventListener('click',()=>{
+    if(!selected || selected.workflow!=='street' || currentTraffic?.siteId!==selected.siteId)return;
+    try{showTrafficEvaluation(currentTraffic,trafficAlternatives(currentTraffic));}
+    catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Current evaluation unavailable: ${error.message}`;}
+  });
   map.on("plannersite", clear);
   map.on("plannerresult", receive);
   map.on('plannerrestore',event=>{
+    if(selected?.workflow==='street' && event.workflow==='street' && event.siteId===selected.siteId &&
+        event.comparison && event.inputRevision<=selected.inputRevision && event.revision>=realRevision) {
+      try {
+        const prepared=trafficAlternatives(event);currentTraffic={...event};realRevision=event.revision;
+        showTrafficEvaluation(currentTraffic,prepared);$('comparison-stale').hidden=false;
+        if(published){$('proposal-stale').hidden=false;$('proposal-map-caption').textContent=`${caption(true)} · saved previous result`;}
+      }catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Saved evaluation unavailable: ${error.message}`;}
+      return;
+    }
     if(!selected || selected.workflow!=='water' || event.workflow!=='water' || event.siteId!==selected.siteId ||
       !event.proposal || event.inputRevision>selected.inputRevision || event.revision<realRevision)return;
     try {

@@ -467,6 +467,7 @@ def summarise(runs: list[dict], demand_total: int, carb_factor: dict) -> dict:
         "max_noise_db": {n: max(r["max_noise_db"][n] for r in runs)
                          if all(r["max_noise_db"].get(n) is not None for r in runs) else None for n in names},
         "co2_kg_per_hour": mean("co2_sumo_g") * carb_factor["CO2"] / 1000 * 3600 / MEASURE_S,
+        "paired_co2_kg_per_hour": [{"seed": r["seed"], "value": r["co2_sumo_g"] * carb_factor["CO2"] / 1000 * 3600 / MEASURE_S} for r in runs],
         "nox_g_per_hour": mean("nox_sumo_g") * carb_factor["NOx"] * 3600 / MEASURE_S,
         "vehicle_miles_per_hour": round(mean("vehicle_miles") * 3600 / MEASURE_S, 1),
         "co2_g_per_completed_vehicle": round(mean("co2_sumo_g") * carb_factor["CO2"] / completed, 1) if completed else None,
@@ -576,6 +577,12 @@ class Study:
                 raise
         for runs in all_runs.values():
             runs.sort(key=lambda r: r["seed"])
+            for run in runs:
+                if (run["offered"] != self.counted["total"]
+                        or run["completed"] + run["unfinished"] + run["not_inserted"] != run["offered"]
+                        or any(type(run[key]) is not int or run[key] < 0
+                               for key in ("offered", "completed", "unfinished", "not_inserted"))):
+                    raise SimulationError("Counted trip cohort accounting is invalid; no performance comparison can be published.")
         base_runs = all_runs["baseline"]
         sumo_rate = statistics.fmean(r["co2_sumo_g"] / max(r["vehicle_miles"], 1e-9) for r in base_runs)
         nox_rate = statistics.fmean(r["nox_sumo_g"] / max(r["vehicle_miles"], 1e-9) for r in base_runs)
@@ -593,6 +600,8 @@ class Study:
                                                "Roadway noise is the maximum approach hourly source level: maximum of SUMO Harmonoise hourly mean edge levels across approach edges and seeds. It is not a temporal noise peak or building exposure."],
                 "study_radius_m": RADIUS_M, "simulation_version": SIM_VERSION,
                 "turn_restriction_checks": self.restriction_checks,
+                "network_hashes": {name: file_hash(network) for name, (network, _) in prepared.items()},
+                "count_source_sha256": self.sheet["sha256"],
                 "fleet_source": {"url": FLEET_URL, "sha256": file_hash(FLEET_SOURCE), "rates_g_per_mile": rates,
                                  "method": "VMT-weighted EMFAC2025 v2.1.1 LA (SC) 2026 running-exhaust rates, derived from 133-row official CSV; baseline normalization reused for all layouts."},
                 "input_hash": sha256(json.dumps({"network": file_hash(self.net_path), "sheet": self.sheet["sha256"],

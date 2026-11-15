@@ -454,3 +454,12 @@ button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-vi
 .water-design-review details{margin:12px 0}.water-design-review ul{padding-left:17px}
 .water-alternative{border:1px solid #415a48;border-radius:8px;padding:10px;margin:9px 0}
 .water-alternative strong{font-size:12px;display:block}.water-alternative button{font-size:11px;padding:7px 9px}
+
+/* Traffic evaluation keeps environmental selection and evidence readiness distinct. */
+.comparison-policy{padding:10px 12px;border-left:2px solid #c9d995;background:#24382a;font-size:11px;line-height:1.6}
+.comparison-readiness{margin:14px 0;padding:11px 12px;border:1px solid #435a4c;border-radius:8px;background:#203027}
+.comparison-readiness strong{font-size:11px;color:#c8dfcf}.comparison-readiness p,.comparison-readiness li{font-size:11px;line-height:1.6;color:#b7c8bc}
+.comparison-readiness ul,#traffic-design-decisions{padding-left:17px}#traffic-design-decisions li{font-size:11px;line-height:1.6;margin:10px 0;color:#bccbc1}
+.comparison-alternatives .comparison-environment{color:#d2e4b6}.comparison-alternatives .comparison-practical{color:#b8d3e3}
+#traffic-design-history{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}.traffic-comparison>details{margin:12px 0}.traffic-comparison>details>summary{cursor:pointer;font-size:12px;color:#b9ddbc;line-height:1.5}
+#traffic-return-current{margin:10px 0}.comparison-preview-note{color:#efcf8f;font-size:11px}

@@ -10,7 +10,7 @@ import json
 import time
 from shapely.geometry import Point, shape, box
 from shapely import transform
-from discovery import map_discovery, query_area
+from discovery import map_discovery, query_area, load_discovery, traffic_context_at_site
 from agent_activity import TransientSourceError
 from site_identity import resolve_site
 from site_measurements import PROJECT, fact, measure_outlines, property_facts
@@ -42,6 +42,51 @@ def _origin(layer):
         'provider': source.get('label'), 'url': source.get('url'),
         'observed_at': source.get('observed_at'), 'retrieved_at': source.get('retrieved_at'),
         'collection': source.get('product')}.items() if value is not None}
+
+
+def _anchor_traffic_signals(signals, bounds):
+    """New choices may target a uniquely supported counted intersection.
+
+    Keep the environmental ordering and provider extent. This is an explicit
+    location choice before selection, never a relocation of a saved project or
+    a claim that historical demand describes today's flow.
+    """
+    try:
+        inventory = load_discovery('street')
+        layer = next((item for item in inventory['layers'] if item['id'] == 'turning'), {})
+        nodes = [(item, Point(*PROJECT.transform(*item['properties']['center'])))
+                 for item in layer.get('features', [])
+                 if box(*bounds).covers(Point(item['properties']['center']))]
+    except (OSError, ValueError, TypeError, KeyError):
+        return signals
+    result = []; anchored = {}; checked = {}
+    for signal in signals:
+        matches = [(item, point.distance(signal['_shape'])) for item, point in nodes
+                   if point.distance(signal['_shape']) <= 25]
+        if len(matches) == 1:
+            node, distance = matches[0]; node_id = node['id']; center = node['properties']['center']
+            if node_id not in checked:
+                try:
+                    checked[node_id] = traffic_context_at_site(*center)
+                except (OSError, ValueError, TypeError, KeyError):
+                    checked[node_id] = None
+            context = checked[node_id]
+            if context:
+                signal = {**signal, 'center': list(center),
+                          'evaluationLink': {'kind': 'verified_counted_intersection',
+                              'turningFeatureId': node_id, 'turningVersion': inventory['version'],
+                              'countDate': context['sheet']['date'], 'distanceToFlowM': round(distance, 1),
+                              'sourceCenter': signal['center']},
+                          '_intersectionLabel': node['properties'].get('label', 'Verified counted intersection')}
+                signal['id'] = 'street-' + sha256((signal['id'] + '|' + node_id).encode()).hexdigest()[:16]
+                signal['memberIds'] = list(dict.fromkeys([signal['id'], *signal['memberIds']]))
+                if node_id in anchored:
+                    prior = anchored[node_id]
+                    prior['memberIds'] = list(dict.fromkeys([*prior['memberIds'], *signal['memberIds']]))
+                    continue
+                anchored[node_id] = signal
+        result.append(signal)
+    return result
 
 
 def _signals(workflow, bounds, data):
@@ -109,7 +154,7 @@ def _signals(workflow, bounds, data):
                 break
         else:
             grouped.append(signal)
-    return grouped, result
+    return (_anchor_traffic_signals(grouped, bounds) if workflow == 'street' else grouped), result
 
 
 def _research_site(workflow, center, check):
@@ -181,6 +226,19 @@ def _candidate(workflow, signal, sponsor, expires):
         direction = 'Investigate signal, crossing and access operations along the slow approach; test a physical change only with a valid network and turning-demand scenario.'
         missing = ['Verified turning demand and simulation network association', 'Physical intervention geometry']
         readiness = 'Ready to investigate current slowdown; environmental performance needs a sourced, comparable simulation.'
+        if signal.get('evaluationLink'):
+            link = signal['evaluationLink']
+            evidence.append(fact(prefix + '-historical-demand-date', 'Historical turning-count date for linked intersection',
+                link['countDate'], '', {'provider': 'LADOT manual turning count',
+                    'url': 'https://navigatela.lacity.org/dot/traffic_data/', 'observed_at': link['countDate']},
+                basis='reported', method='Local original-sheet hash, parse and unique counted-intersection association checks.',
+                note='Historical demand is separate from the current flow snapshot. Network restrictions and site checks still require evaluation.'))
+            readiness = (f"A verified historical turning sheet from {link['countDate']} is linked to this intersection. "
+                         'Current flow remains a separate snapshot; network restrictions and site checks must still pass before simulation.')
+            missing = ['Simulation network/restriction and sponsor access checks', 'Physical intervention geometry',
+                       'Current turning demand; historical counts are a labeled scenario only']
+            direction = ('Investigate this explicitly selected counted intersection beside the mapped slow source. '
+                         'Use its verified historical demand for a labeled comparison if network and site checks pass.')
     for item in sponsor['facts']:
         item = deepcopy(item); item['id'] = prefix + '-' + item['id']; evidence.append(item)
     by_id = {item['id'].removeprefix(prefix + '-'): item for item in evidence}
@@ -200,6 +258,8 @@ def _candidate(workflow, signal, sponsor, expires):
     prop = sponsor['property']
     label = (prop.get('address') or prop.get('name')) if prop else None
     if not label: label = p.get('label') if workflow == 'street' else 'Terrain collection opportunity'
+    if signal.get('evaluationLink'):
+        label = signal['_intersectionLabel'] + ' · linked traffic opportunity'
     reason = ('One of the larger independent terrain-contribution signals in this search; investigate real drainage before claiming benefit.'
               if workflow == 'water' else 'One of the stronger independent slowdown signals in this search; design benefit remains unmeasured.')
     readiness_data = {'summary': readiness, 'missing': missing, 'sponsors': {'vexcel': sponsor['vexcel'], 'costar': sponsor['costar']}}
@@ -210,6 +270,8 @@ def _candidate(workflow, signal, sponsor, expires):
                                 'method': layer['method'], 'limitations': source_note, 'association': sponsor['association'],
                                 'groupedCandidateIds': signal['memberIds'], 'comparisonPolicy': POLICY, 'kind': 'opportunity'},
                  'expiresAt': expires if workflow == 'street' else None}
+    if signal.get('evaluationLink'):
+        candidate['provenance']['evaluationLink'] = deepcopy(signal['evaluationLink'])
     candidate['modelContext'] = {key: deepcopy(candidate[key]) for key in ('id', 'environmental', 'feasibility', 'disruption', 'readiness', 'direction', 'evidence')}
     return candidate
 
@@ -269,7 +331,8 @@ def refresh_traffic_candidates(bundle, bounds, *, check=lambda: None):
         if signal is None:
             changed = True; continue
         prefix = candidate['id'] + '-'
-        facts = [deepcopy(item) for item in candidate['evidence'] if 'TomTom' not in json.dumps(item.get('source', {}))]
+        facts = [deepcopy(item) for item in candidate['evidence']
+                 if 'TomTom' not in json.dumps(item.get('source', {})) and not item['id'].endswith('-historical-demand-date')]
         for item in facts: item['id'] = item['id'].removeprefix(prefix)
         sponsor = {'facts': facts, 'warnings': candidate['warnings'], 'vexcel': candidate['readiness']['sponsors']['vexcel'],
                    'costar': candidate['readiness']['sponsors']['costar'], 'association': candidate['provenance']['association'],
