@@ -21,7 +21,8 @@ def geo(polygon):
 
 
 def checked():
-    return {"parcel_overlap_m2": 0.0, "building_overlap_m2": 0.0, "access_conflicts": 0, "keep_clear_conflict": False}
+    return {"parcel_overlap_m2": 0.0, "building_overlap_m2": 0.0, "access_conflicts": 0, "keep_clear_conflict": False,
+            "detection_status": "empty", "candidate_crosswalk_overlaps": 0, "candidate_driveway_overlaps": 0}
 
 
 class RankingTest(unittest.TestCase):

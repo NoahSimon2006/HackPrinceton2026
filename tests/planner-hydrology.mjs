@@ -4,11 +4,11 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
 const source = await readFile(new URL('../public/planner.js', import.meta.url), 'utf8');
-function harness(mode = 'water') {
+function harness(mode = 'water', options = {}) {
   const elements = new Map();
   const element = () => ({ hidden: false, checked: false, disabled: false, value: '', textContent: '',
-    events: {}, style: { setProperty() {} }, classList: { toggle() {} },
-    setAttribute() {}, replaceChildren() {}, append() {}, scrollIntoView() {},
+    events: {}, children: [], attributes: {}, style: { setProperty() {} }, classList: { toggle() {} },
+    setAttribute(name, value) {this.attributes[name]=value;}, replaceChildren(...children) {this.children=children;}, append(...children) {this.children.push(...children);}, scrollIntoView() {},
     addEventListener(name, handler) { this.events[name] = handler; } });
   const $ = (id) => {
     if (!elements.has(id)) elements.set(id, element());
@@ -16,23 +16,27 @@ function harness(mode = 'water') {
   };
   $('show-watershed').checked = true;
   const layers = [];
-  const layer = () => {
+  const layer = (value) => {
     const result = { data: [], attached: false, addTo() { this.attached = true; return this; },
       remove() { this.attached = false; }, clearLayers() { this.data = []; },
-      addData(data) { this.data.push(data); }, bindTooltip() { return this; } };
+      addData(data) { this.data.push(data); }, bindTooltip() { return this; }, events:{},
+      on(name,handler){this.events[name]=handler;}, getLatLng(){return this.latlng;},latlng:value,
+      eachLayer(){},setLatLngs(){} };
     layers.push(result);
     return result;
   };
-  const map = { handlers: {}, events: [], createPane() {}, getPane: () => ({ style: {} }),
+  const map = { handlers: {}, events: [], center:{lat:34.05,lng:-118.25},createPane() {}, getPane: () => ({ style: {} }),
     on(name, handler) { this.handlers[name] = handler; },
-    fire(name, event) { this.events.push({name,event}); this.handlers[name]?.(event); }, setView() {}, closePopup() {}, getZoom: () => 17 };
+    fire(name, event) { this.events.push({name,event}); this.handlers[name]?.(event); }, setView(point) {this.center=Array.isArray(point)?{lat:point[0],lng:point[1]}:point;},getCenter(){return this.center;}, closePopup() {}, getZoom: () => 17 };
   const requests = [];
   const json = (url, options = {}) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }));
-  vm.runInNewContext(source, { $, map, json, planningMode: mode, coverage: null,
+  vm.runInNewContext(source, { $, map, json, planningMode: mode, coverage: options.coverage ?? null,
+    insideCoverage: options.insideCoverage ?? (()=>true),
     cancelSiteAnalysis: () => {},
     streamSiteAnalysis: (payload, options) => json("/api/site-analysis", {body:JSON.stringify(payload), ...options}),
     URLSearchParams, AbortController, document: { createElement: element },
-    L: { latLng: (lat,lng) => ({lat,lng}), layerGroup: layer, geoJSON: layer, circleMarker: layer } });
+    L: { latLng: (lat,lng) => {if(!Number.isFinite(lat)||!Number.isFinite(lng))throw Error('Invalid LatLng');return {lat,lng};}, layerGroup: layer, geoJSON: layer, circleMarker: layer,
+      polyline:layer,polygon:layer,marker:layer,divIcon:()=>({}),Polyline:function(){} } });
   function select(lat, lng) {
     $('pick-site').events.click();
     map.fire('click', { latlng: { lat, lng } });
@@ -209,3 +213,80 @@ console.log('PASS: discovery seeds a dated site brief and submits a reference wi
   assert.equal(h.map.events.filter(e=>e.name==='plannerresult').length,1,'superseded site analysis must not emit a proposal');
 }
 console.log('PASS: turning-count brief, proposal identity, monotonic revisions and suppressed stale/superseded publication');
+
+// Re-selecting the active workspace is a no-op: it must not erase a published
+// proposal through a redundant plannersite event or cancel the active request.
+{
+  const h=harness('street');h.select(34.05,-118.25);
+  const before=h.map.events.filter(e=>e.name==='plannersite').length;
+  const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  h.workspace('street');
+  assert.equal(h.map.events.filter(e=>e.name==='plannersite').length,before);
+  assert.equal(h.requests[0].options.signal.aborted,false);
+  h.requests[0].resolve({report:null,facts:[]});await pending;
+  h.workspace('water');
+  assert.equal(h.map.events.filter(e=>e.name==='plannersite').length,before+1,'a real mode change still clears unrelated geometry');
+}
+
+// Keyboard equivalents select a site, author and revise a keep-clear marking,
+// and send the edited geometry only to the existing local analysis endpoint.
+{
+  const h=harness('street',{coverage:{},insideCoverage:p=>p.lng<=-118.249});
+  h.$('use-map-center').events.click();
+  assert.equal(h.map.events.at(-1).name,'plannersite');
+  assert.equal(h.map.events.at(-1).event.siteId,'34.050000,-118.250000');
+  h.$('mark-actions').children[1].events.click();
+  assert.equal(h.$('keyboard-marking-editor').hidden,false);
+  h.$('draw-add-center').events.click();
+  const field=(index,axis)=>h.$('draw-coordinates').children[index].children[axis==='lat'?1:2].children[0];
+  assert.equal(field(0,'lat').attributes['aria-label'],'Point 1 latitude');
+  for(const invalid of ['', 'not-a-number','Infinity','32','34.30']) {
+    const input=field(0,'lat');input.value=invalid;input.events.input();
+    assert.equal(h.$('draw-save').disabled,true,'invalid coordinate blocks save');
+    assert.equal(h.$('draw-add-center').disabled,true);
+    assert.equal(h.$('draw-coordinate-error').hidden,false);
+  }
+  field(0,'lat').value='34.05';field(0,'lat').events.input();
+  field(0,'lng').value='-118.248';field(0,'lng').events.input();
+  assert.match(h.$('draw-coordinate-error').textContent,/coverage/);
+  field(0,'lng').value='-118.25';field(0,'lng').events.input();
+  assert.equal(h.$('draw-coordinate-error').hidden,true);
+  h.map.center={lat:34.0501,lng:-118.25};h.$('draw-add-center').events.click();
+  h.map.center={lat:34.0501,lng:-118.2499};h.$('draw-add-center').events.click();
+  assert.equal(h.$('draw-save').disabled,false);
+  h.$('draw-save').events.click();
+  assert.equal(h.$('keyboard-marking-editor').hidden,true);
+  assert.equal(h.map.events.filter(e=>e.name==='plannerinputs').at(-1).event.inputRevision,1);
+  const first=h.$('site-analysis').events.submit({preventDefault(){}});
+  const firstBody=JSON.parse(h.requests[0].options.body);
+  assert.equal(firstBody.markings[0].kind,'access');
+  assert.deepEqual(firstBody.markings[0].geometry.coordinates[0],[
+    [-118.25,34.05],[-118.25,34.0501],[-118.2499,34.0501],[-118.25,34.05]]);
+  h.requests[0].resolve({report:null,facts:[]});await first;
+  h.$('shape-list').children[0].children[1].events.click();
+  field(0,'lat').value='34.04995';field(0,'lat').events.input();h.$('draw-save').events.click();
+  assert.equal(h.map.events.filter(e=>e.name==='plannerinputs').at(-1).event.inputRevision,2);
+  const second=h.$('site-analysis').events.submit({preventDefault(){}});
+  const secondBody=JSON.parse(h.requests[1].options.body);
+  assert.equal(secondBody.inputRevision,2);assert.equal(secondBody.proposalRevision,2);
+  assert.deepEqual(secondBody.markings[0].geometry.coordinates[0][0],[-118.25,34.04995]);
+  h.requests[1].resolve({report:null,facts:[]});await second;
+  const before=h.map.events.filter(e=>e.name==='plannersite').length;
+  h.map.center={lat:Infinity,lng:-118.25};h.$('use-map-center').events.click();
+  h.map.center={lat:34.05,lng:-118.248};h.$('use-map-center').events.click();
+  assert.equal(h.map.events.filter(e=>e.name==='plannersite').length,before,'invalid/uncovered centers cannot select a site');
+}
+console.log('PASS: active-workspace persistence and keyboard site/constraint revisions with coordinate validation');
+
+// A spherical distance just under 1 km may already be outside the server's
+// projected buffer. The UI keeps a margin rather than saving a doomed request.
+{
+  const h=harness('street');h.select(34.05,-118.25);
+  h.$('mark-actions').children[1].events.click();h.$('draw-add-center').events.click();
+  const longitude=h.$('draw-coordinates').children[0].children[2].children[0];
+  longitude.value='-118.23917';longitude.events.input();
+  assert.match(h.$('draw-coordinate-error').textContent,/990 m/);
+  assert.equal(h.$('draw-save').disabled,true);
+  longitude.value='-118.2394';longitude.events.input();
+  assert.equal(h.$('draw-coordinate-error').hidden,true);
+}

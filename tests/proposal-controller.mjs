@@ -81,3 +81,21 @@ assert.match(text($('comparison-alternatives')),/Keep-clear conflict/);
 select('b');map.fire('plannerresult',result(4,0));assert.equal($('traffic-comparison').hidden,true,'another site cannot receive this result');
 select('a','water');map.fire('plannerresult',result(4,0));assert.equal($('traffic-comparison').hidden,true,'another workflow cannot receive this result');
 console.log('PASS: real comparison, unknown metrics, strict verdicts, identity/hash matching, stale revisions and honest no-recommendation outcome');
+
+// Explicit UI fixture: compare every displayed cell and the exact overlay geometry
+// against one published revision, without requiring live providers or a favorable design.
+select();
+const parity=result(5,0);
+parity.proposal.geometry[0].type='Feature';
+parity.proposal.geometry[0].geometry={type:'Polygon',coordinates:[[[-118.25,34.03],[-118.2499,34.03],[-118.2499,34.0301],[-118.25,34.03]]]};
+parity.comparison.results.baseline={co2_kg_per_hour:467.1,co2_g_per_completed_vehicle:123.5,nox_g_per_hour:157.8,
+  mean_delay_s:1233.5,completion_share:.6719,unable_to_enter_share:.3195,max_queue_m:{nb:207,eb:191.4},max_noise_db:{nb:76.61,eb:75.2}};
+parity.comparison.checks.layout_a={detection_status:'unavailable',candidate_crosswalk_overlaps:null,candidate_driveway_overlaps:null};
+map.fire('plannerresult',parity);
+assert.deepEqual(JSON.parse(JSON.stringify(layers.at(-1).data.features)),parity.proposal.geometry,'overlay must use the published revision geometry unchanged');
+const displayed=$('comparison-table').children[0].children[1].children.map(row=>row.children[1].textContent);
+assert.deepEqual(displayed,['467.1','123.5','157.8','1,233.5','67.2','32','207','76.6']);
+assert.match(text($('comparison-alternatives')),/Crossing\/driveway detection: Unavailable\. Overlapping crosswalk candidates: Not assessed\. Driveway candidates: Not assessed/);
+assert.match($('comparison-revision').textContent,/Revision 5 · inputs 0 · hash5/);
+assert.match($('proposal-revision').textContent,/Revision 5 · inputs 0 · hash5/);
+console.log('PASS: published metric/geometry parity and unavailable detection display');

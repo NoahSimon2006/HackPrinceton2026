@@ -11,6 +11,8 @@ from traffic_analysis import TrafficAnalysis, comparison_facts, crossing_checks,
 from traffic_counts import parse_manual
 from test_traffic_counts import MANUAL
 from test_street_design import geo, X, Y
+from test_street_design import checked, metrics
+from street_design import rank
 
 
 IDENTITY = {"site_id": "street:test-site", "revision": 2, "input_revision": 1}
@@ -147,6 +149,33 @@ class TrafficAdapterTest(unittest.TestCase):
         self.assertEqual(checks["candidate_driveway_overlaps"], 0)
         self.assertTrue(checks["marked_crossing_conflict"])
         self.assertEqual(checks["candidate_evidence"], ["candidate-1"])
+
+    def test_failed_or_malformed_detections_block_an_otherwise_eligible_layout(self):
+        design = box(X, Y, X + 40, Y + 4)
+        results = {"baseline": metrics(), "candidate": metrics(co2=350)}
+        for detections in (None, [{"geometry": {"type": "Polygon", "coordinates": []},
+                                   "properties": {"label": "Crosswalk"}}], ["invalid feature"]):
+            with self.subTest(detections=detections):
+                checks = crossing_checks(design, detections, [])
+                self.assertEqual(checks["detection_status"], "unavailable")
+                self.assertIsNone(checks["candidate_crosswalk_overlaps"])
+                self.assertIsNone(checks["candidate_driveway_overlaps"])
+                ranked = rank(results, {"candidate": {**checked(), **checks}})
+                self.assertIsNone(ranked["recommended"])
+                self.assertIn("crossing and driveway candidate checks remain unassessed",
+                              ranked["verdicts"]["candidate"]["ineligible_reasons"])
+        empty = crossing_checks(design, [], [])
+        self.assertEqual(empty["detection_status"], "empty")
+        self.assertEqual(empty["candidate_crosswalk_overlaps"], 0)
+        self.assertEqual(rank(results, {"candidate": {**checked(), **empty}})["recommended"], "candidate")
+
+    def test_missing_candidate_facts_report_unassessed_not_zero(self):
+        result = comparison(None)
+        result["checks"]["north-curb"].update(crossing_checks(box(X, Y, X + 40, Y + 4), None, []))
+        facts = comparison_facts(result)
+        missing = next(item for item in facts if item["id"] == "traffic-north-curb-candidate_crosswalk_overlaps")
+        self.assertEqual(missing["basis"], "availability")
+        self.assertIn("Unassessed", missing["value"])
 
 
 if __name__ == "__main__":

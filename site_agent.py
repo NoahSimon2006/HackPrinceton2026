@@ -155,6 +155,11 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                 data = fetch()
                 measured, notes = measure(data)
                 status = "ready" if measured or (name == "search" and data) else "empty"
+                if name == "detections" and notes:
+                    # Invalid candidate geometry is a coverage gap, even if valid
+                    # candidates from the same response can still be shown.
+                    status = "unavailable"
+                    measured.append(availability(name, "Some returned candidates could not be checked. Crossing and driveway overlap remains unassessed."))
                 if not measured and name != "search":
                     measured = [availability(name, " ".join(notes) or "No usable facts returned.")]
                 activity.check()
@@ -365,7 +370,8 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
                 outlines=evidence["outlines"] if statuses.get("outlines") != "unavailable" else None,
                 frontages=evidence["frontages"] if statuses.get("property") != "unavailable" else None,
                 keep_clear=[marking["geometry"] for marking in markings if marking["kind"] == "access"],
-                detections=evidence["detections"], crossings=[marking["geometry"] for marking in markings if marking["kind"] == "crossing"])
+                detections=evidence["detections"] if statuses.get("detections") in ("ready", "empty") else None,
+                crossings=[marking["geometry"] for marking in markings if marking["kind"] == "crossing"])
             if traffic.evaluated or not traffic.ready:
                 attempted.add("comparison")
             with lock:

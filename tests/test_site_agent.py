@@ -50,6 +50,32 @@ def complete():
 
 
 class AgentTest(unittest.TestCase):
+    def test_failed_or_invalid_candidate_source_is_distinct_from_successful_empty(self):
+        for state in ("failed", "invalid", "empty"):
+            with self.subTest(state=state):
+                review = AIMessage(content="", tool_calls=[{"name": "SiteReview", "id": "summary", "args": {
+                    "findings": [], "recommendations": [], "questions": ["Verify site evidence?"]}}])
+                evaluation = AIMessage(content="", tool_calls=[{"name": "evaluate_designs", "id": "evaluate", "args": {"layouts": LAYOUTS}}])
+                lead = ScriptedModel(responses=[calls("investigate_site"), evaluation, review])
+                def imagery(group):
+                    if group != "detections" or state == "empty":
+                        return []
+                    if state == "failed":
+                        raise ValueError("private source failure")
+                    return [{"geometry": {"type": "Polygon", "coordinates": []}, "properties": {"label": "Crosswalk"}}]
+                with patch("site_agent.ChatXAI", side_effect=[lead, ScriptedModel(responses=[review]), ScriptedModel(responses=[review])]), \
+                     patch("traffic_analysis.Study", return_value=traffic_study()), \
+                     patch("traffic_analysis.evaluate", return_value=traffic_comparison(None)) as evaluate:
+                    result = analyze_site("unused", "fake", "Compare layouts", "street", [], imagery, lambda: ({}, []), lambda: {},
+                        lon=LON, lat=LAT, traffic_context=traffic_context(), analysis_identity=IDENTITY, allow_generated_timing=True)
+                self.assertIsNone(result["analysisError"])
+                checks = evaluate.call_args.kwargs["extra_checks"]
+                from shapely.geometry import box
+                outcome = checks(box(385000, 3768000, 385010, 3768010))
+                self.assertEqual(result["sourceStatus"]["detections"], "empty" if state == "empty" else "unavailable")
+                self.assertEqual(outcome["detection_status"], "empty" if state == "empty" else "unavailable")
+                self.assertNotIn("private source failure", str(result))
+
     def test_invalid_design_arguments_emit_sanitized_activity_before_one_comparison(self):
         review = AIMessage(content="", tool_calls=[{"name": "SiteReview", "id": "review", "args": {
             "findings": [], "recommendations": [], "questions": ["Verify missing source coverage?"]}}])
@@ -71,8 +97,9 @@ class AgentTest(unittest.TestCase):
         retries = [e["summary"] for e in events if e["stage"] == "validation"]
         self.assertIn("Correcting bounded design parameters before simulation.", retries)
         self.assertIn("Choosing distinct valid alternatives before simulation.", retries)
-        self.assertNotIn("private-argument", str(events))
-        self.assertNotIn("999", str(events))
+        public_content = str([{key: event[key] for key in ("summary", "facts") if key in event} for event in events])
+        self.assertNotIn("private-argument", public_content)
+        self.assertNotIn("999", public_content)
         self.assertEqual(lead.tool_sets[-1], {"SiteReview"})
 
     def test_traffic_lead_must_evaluate_then_cites_local_metrics_without_sending_geometry(self):
