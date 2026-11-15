@@ -135,11 +135,23 @@ class ProjectStore:
             run = db.execute("SELECT id FROM runs WHERE project_id=? ORDER BY started DESC LIMIT 1", (project_id,)).fetchone()
             events = [json.loads(r[0]) for r in db.execute("SELECT payload FROM events WHERE run_id=? ORDER BY sequence", (run[0],))] if run else []
             artifacts = [dict(r) for r in db.execute("SELECT path,updated FROM artifacts WHERE project_id=? ORDER BY path", (project_id,))]
-            designs = [json.loads(r[0]) for r in db.execute('SELECT payload FROM water_designs WHERE project_id=? ORDER BY revision,created', (project_id,))]
-            traffic_designs = [json.loads(r[0]) for r in db.execute('SELECT payload FROM traffic_designs WHERE project_id=? ORDER BY revision,created', (project_id,))]
+            designs = [{**json.loads(r['payload']), 'savedAt': r['created']} for r in db.execute('SELECT payload,created FROM water_designs WHERE project_id=? ORDER BY revision,created', (project_id,))]
+            traffic_designs = [{**json.loads(r['payload']), 'savedAt': r['created']} for r in db.execute('SELECT payload,created FROM traffic_designs WHERE project_id=? ORDER BY revision,created', (project_id,))]
+            result = json.loads(row['result']) if row['result'] else None
+            if result:
+                # Publication time belongs to the archived design, not the
+                # project's latest edit, failed attempt, or browser reload.
+                result.pop('savedAt', None)
+                published = result.get('comparison') or result.get('proposal') or {}
+                history = traffic_designs if published.get('workflow') == 'street' else designs
+                saved = next((item for item in history if
+                    (item.get('comparison') or item.get('proposal') or {}).get('input_hash') == published.get('input_hash')
+                    and published.get('input_hash')), None)
+                if saved:
+                    result['savedAt'] = saved['savedAt']
         return {"id": row["id"], "threadId": row["thread_id"], "version": row["version"],
                 "snapshot": json.loads(row["snapshot"]), "status": row["status"], "updated": row["updated"],
-                "activeRun": row["active_run"], "result": json.loads(row["result"]) if row["result"] else None,
+                "activeRun": row["active_run"], "result": result,
                 "resultVersion": row["result_version"], "events": events, "artifacts": artifacts,
                 "instructions": json.loads(row["instructions"]), 'designHistory': designs[-30:], 'trafficDesignHistory': traffic_designs[-30:]}
 
@@ -215,7 +227,7 @@ class ProjectStore:
                     from traffic_workspace import evaluation_record
                     record = evaluation_record(result, json.loads(row['snapshot']))
                     digest = record['comparison']['input_hash']
-                    previous = [json.loads(r[0]) for r in db.execute('SELECT payload FROM traffic_designs WHERE project_id=? AND input_hash!=? ORDER BY revision,created', (project_id, digest))]
+                    previous = [{**json.loads(r['payload']), 'savedAt': r['created']} for r in db.execute('SELECT payload,created FROM traffic_designs WHERE project_id=? AND input_hash!=? ORDER BY revision,created', (project_id, digest))]
                     result['trafficDesignHistory'] = previous[-30:]
                     db.execute('INSERT OR IGNORE INTO traffic_designs VALUES(?,?,?,?,?)',
                                (project_id, digest, record['revision'], json.dumps(record, allow_nan=False), now()))
@@ -226,7 +238,7 @@ class ProjectStore:
                 if (proposal['workflow'] != 'water' or proposal['site_id'] != snapshot['siteId']
                         or proposal['revision'] != snapshot['proposalRevision'] or proposal['input_revision'] != snapshot['inputRevision']):
                     raise ValueError('Stormwater publication does not match the saved project revision.')
-                previous = [json.loads(r[0]) for r in db.execute('SELECT payload FROM water_designs WHERE project_id=? AND input_hash!=? ORDER BY revision,created',
+                previous = [{**json.loads(r['payload']), 'savedAt': r['created']} for r in db.execute('SELECT payload,created FROM water_designs WHERE project_id=? AND input_hash!=? ORDER BY revision,created',
                             (project_id, proposal['input_hash']))]
                 result['designHistory'] = previous[-30:]
                 record = {'revision': proposal['revision'], 'inputRevision': proposal['input_revision'],

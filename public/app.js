@@ -55,7 +55,9 @@ let tileFailures = 0;
 function setStatus(title, detail, error = false) {
   $("status-title").textContent = title;
   $("status-detail").textContent = detail;
-  $("status-dot").classList.toggle("error", error);
+  // Healthy status stays in Map details; a failure is shown wherever the user is.
+  $("map-alert").hidden = !error;
+  $("map-alert").textContent = error ? `${title}. ${detail}` : "";
 }
 
 function setImageryStatus(detail) {
@@ -570,18 +572,14 @@ function selectPlanningWorkspace(mode, zoom = false) {
   planningMode = mode === "water" ? "water" : "street";
   const water = planningMode === "water";
   for (const name of ["street", "water"]) $(`workspace-${name}`).setAttribute("aria-pressed", String(name === planningMode));
-  for (const id of ["planner", "planner-title", "site-intro"]) $(id).hidden = false;
-  $("planner-title").textContent = water ? "Make room for water." : "Better streets start here.";
-  $("site-intro").textContent = water ? "Find promising places to manage stormwater, then develop a site concept." : "Find street improvements worth investigating, then develop and evaluate a concept.";
+  $("planner").hidden = false;
   $("planner-controls").hidden = true;
   $("emissions-layer-row").hidden = water;
   $("map-workspace").classList.toggle("water-mode", water);
-  $("brand-caption").textContent = "Planning workspace · Los Angeles";
-  $("footer-caption").textContent = "Vexcel × CoStar · sourced site evidence";
-  $("map-title").textContent = water ? "Watershed & stormwater" : "Traffic & emissions";
-  $("map-eyebrow").textContent = "LOS ANGELES · SITE PLANNING";
-  $("map-badge").textContent = water ? "TERRAIN · RAINFALL · DRAINAGE" : "CURRENT SPEED · SLOW APPROACHES";
-  $("reset").innerHTML = water ? "↗ &nbsp; Back to Los Angeles" : "↗ &nbsp; Back to pilot";
+  // The window caption is the one place that names the active focus.
+  $("brand-caption").textContent = `${water ? "Stormwater" : "Traffic & Emissions"} · Los Angeles`;
+  // Traffic's data area is reached from the discovery panel; the citywide view is a different extent.
+  $("reset").hidden = !water;
   if (!water && $("emissions-layer").checked) loadEmissions();
   syncEmissionsVisibility();
   document.querySelector(".sidebar-body").scrollTop = 0;

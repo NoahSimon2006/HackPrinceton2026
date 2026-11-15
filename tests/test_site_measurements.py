@@ -98,5 +98,29 @@ class MeasurementsTest(unittest.TestCase):
         self.assertEqual(facts[-1]["label"], "Nearby-property frontage")
 
 
+    def test_filtered_frontage_geometry_keeps_access_unassessed(self):
+        from street_design import sponsor_checks
+
+        design = projected(polygon())
+        valid = {"geometry": {"type": "LineString", "coordinates": ring(30, 0, 10, 10)[:2]},
+                 "curbCuts": 1}
+        # A valid source with no nearby reported cut can still assess zero.
+        self.assertEqual(sponsor_checks(design, None, [valid])["access_conflicts"], 0)
+        frontages = [valid, {"geometry": None, "curbCuts": 1}]
+        facts, warnings = property_facts(None, frontages)
+        self.assertEqual(len(frontages), 1, "Only valid geometry is sent to map consumers.")
+        self.assertEqual(len(facts), 1)
+        self.assertTrue(any("invalid frontage" in warning for warning in warnings))
+        self.assertIs(frontages[0]["coverageComplete"], False)
+        self.assertIsNone(sponsor_checks(design, None, frontages)["access_conflicts"])
+        # Measuring the already-filtered list again must not erase the gap.
+        property_facts(None, frontages)
+        self.assertIsNone(sponsor_checks(design, None, frontages)["access_conflicts"])
+        invalid_only = [{"geometry": None, "curbCuts": 1}]
+        property_facts(None, invalid_only)
+        self.assertEqual(invalid_only, [])
+        self.assertIsNone(sponsor_checks(design, None, invalid_only)["access_conflicts"])
+
+
 if __name__ == "__main__":
     unittest.main()

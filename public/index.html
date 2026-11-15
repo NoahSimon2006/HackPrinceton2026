@@ -5,219 +5,201 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=22">
+  <link rel="stylesheet" href="/styles.css?v=26">
   <script defer src="/vendor/leaflet.js"></script>
   <script defer src="/vector-zoom.js?v=1"></script>
-  <script defer src="/app.js?v=19"></script>
-  <script defer src="/proposal.js?v=7"></script>
+  <script defer src="/app.js?v=20"></script>
+  <script defer src="/proposal.js?v=9"></script>
+  <script defer src="/concept-scene.js?v=1"></script>
   <script defer src="/analysis-stream.js?v=2"></script>
-  <script defer src="/site-view.js?v=1"></script>
+  <script defer src="/site-view.js?v=4"></script>
   <script defer src="/projects.js?v=1"></script>
-  <script defer src="/planner.js?v=19"></script>
-  <script defer src="/discovery.js?v=3"></script>
-  <script defer src="/scouting.js?v=1"></script>
+  <script defer src="/planner.js?v=21"></script>
+  <script defer src="/discovery.js?v=5"></script>
+  <script defer src="/scouting.js?v=2"></script>
+  <script defer src="/guide.js?v=2"></script>
 </head>
 <body>
   <div id="map-workspace" class="shell planner-mode">
-    <aside class="sidebar" aria-label="Map sidebar">
-      <div class="brand"><span class="brand-mark">◈</span><div><strong>Sustainability Map</strong><small id="brand-caption">Los Angeles · map workspace</small></div></div>
-      <div class="sidebar-body">
-        <nav id="planning-workspaces" class="planning-workspaces" aria-label="Planning workspace">
-          <button id="workspace-street" type="button" aria-pressed="true">Traffic &amp; Emissions</button>
-          <button id="workspace-water" type="button" aria-pressed="false">Stormwater</button>
+    <aside class="sidebar" aria-label="Planning assistant">
+      <!-- One step is shown at a time. guide.js sets data-view and friends; styles.css shows the matching pane. -->
+      <section id="guide" class="assistant" data-step="focus" data-view="focus" data-method="scout" data-tab="assessment" data-assessment="false" data-design="false">
+        <header class="assistant-bar">
+          <div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><div><strong>Sustainability Map</strong><small id="brand-caption">Los Angeles</small></div></div>
+          <button id="guide-map" type="button" class="bar-button" aria-pressed="false">Map layers</button>
+        </header>
+        <nav class="guide-rail" aria-label="Planning steps">
+          <ol>
+            <li><button id="guide-step-focus" type="button" aria-current="step"><span class="rail-dot">1</span><span class="rail-name">Focus</span></button></li>
+            <li><button id="guide-step-place" type="button"><span class="rail-dot">2</span><span class="rail-name">Place</span></button></li>
+            <li><button id="guide-step-site" type="button" disabled><span class="rail-dot">3</span><span class="rail-name">Site</span></button></li>
+            <li><button id="guide-step-brief" type="button" disabled><span class="rail-dot">4</span><span class="rail-name">Brief</span></button></li>
+            <li><button id="guide-step-results" type="button" disabled><span class="rail-dot">5</span><span class="rail-name">Results</span></button></li>
+          </ol>
         </nav>
-        <h1 id="planner-title" hidden>Plan a site</h1>
-        <p id="site-intro" class="site-intro" hidden></p>
-        <details id="scouting" class="scouting" open>
-          <summary id="scout-heading">Find improvement opportunities</summary>
-          <p class="scout-intro">Start with a goal and an area. Investigate up to three locations, then choose where to develop a concept.</p>
-          <form id="scout-form">
-            <label for="scout-goal">What should this area improve?</label>
-            <textarea id="scout-goal" rows="3" maxlength="1500" required></textarea>
-            <div class="scout-actions"><button id="scout-area" type="button">Use current map area</button><button id="scout-view-area" type="button" hidden>View search area</button></div>
-            <p id="scout-area-label">The visible map area will be used when you start.</p>
-            <button id="scout-start" type="submit">Find locations</button>
-            <button id="scout-cancel" type="button" hidden>Cancel search</button>
-          </form>
-          <p id="scout-status" role="status" aria-live="polite"></p>
-          <details id="scout-activity" hidden><summary>Investigation activity</summary><ol id="scout-events"></ol></details>
-          <div id="scout-results" aria-label="Researched locations"></div>
-          <button id="scout-more" type="button" hidden>Show more locations</button>
-          <p class="scout-privacy">The agent receives your goal and measured summaries. Location geometry stays local.</p>
-        </details>
-        <p class="direct-site-label">Or go directly to a site</p>
-        <div class="search-block">
-          <label for="search">Find a CoStar property</label>
-          <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" autocomplete="off" placeholder="Property name or address"></div>
-          <div id="results" class="results" role="listbox" aria-label="Property search results" hidden></div>
-        </div>
-        <section id="planner" class="planner" aria-labelledby="planner-title" hidden>
-          <p id="traffic-design-guide" class="traffic-design-guide">Select a road with current traffic evidence or choose a site. The agent investigates local conditions and checks whether supported design evaluation is available.</p>
-          <section class="project-workspace" aria-label="Saved planning projects">
-            <label for="saved-projects">Saved projects</label>
-            <div class="project-switcher"><select id="saved-projects"><option value="">Choose a saved project</option></select><button id="open-project" type="button">Open</button></div>
-            <p id="project-status" role="status">Site, brief and constraints save locally as you work.</p>
-            <details id="project-files"><summary>Project files <span id="project-file-count"></span></summary>
-              <ul id="project-file-list"></ul>
-              <pre id="project-file-preview" tabindex="0" hidden></pre>
-            </details>
-          </section>
-          <button id="pick-site" type="button" class="planner-action" aria-pressed="false">Pick a site on the map</button>
-          <button id="use-map-center" type="button" class="planner-action">Use map center as site</button>
-          <p class="keyboard-map-help">Keyboard: focus the map and use arrow keys to pan, then use its center as your site.</p>
-          <p id="planner-status" class="planner-status" role="status">Search for a property or pick any covered location.</p>
-          <div id="site-card" class="planner-card" hidden>
-            <strong id="site-name"></strong>
-            <p id="site-location"></p>
-            <p id="site-property"></p>
-            <p id="site-resolution-status" role="status"></p>
-            <div id="site-resolution-candidates" class="site-resolution-candidates"></div>
-            <button id="retry-site-resolution" type="button" hidden>Retry property match</button>
-          </div>
-          <section id="discovery-context" class="planner-card discovery-context" hidden>
-            <span class="section-label">SELECTED DISCOVERY EVIDENCE</span>
-            <h2 id="discovery-feature-title"></h2><strong id="discovery-feature-value"></strong>
-            <p id="discovery-feature-period"></p>
-            <details><summary>Source, method &amp; limits</summary><div id="discovery-feature-details"></div></details>
-          </section>
-            <form id="site-analysis" class="planner-card">
-              <h2><label for="planning-brief">Ask the planning agent</label></h2>
-              <textarea id="planning-brief" rows="3" maxlength="1500" required aria-describedby="analysis-provider"></textarea>
-              <details id="stormwater-settings" class="stormwater-settings" hidden>
-                <summary>Stormwater design &amp; what-if settings</summary>
-                <p>Leave dimensions blank to let the agent propose them. These controls override proposed choices and stay with this project.</p>
-                <div class="water-input-grid">
-                  <label for="water-target-area">Target treatment area (m²)<input id="water-target-area" type="number" min="2" max="500" step="any" placeholder="Agent choice"></label>
-                  <label for="water-storage-depth">Effective ponding depth (m)<input id="water-storage-depth" type="number" min="0.05" max="0.30" step="any" placeholder="Agent choice"></label>
-                  <label for="water-layout">Preferred form<select id="water-layout"><option value="auto">Agent choice</option><option value="compact">Compact planting area</option><option value="linear">Linear planting strip</option></select></label>
-                  <label for="water-placement">Placement preference<select id="water-placement"><option value="auto">Agent choice</option><option value="near_selection">Near selected location</option><option value="landscape_first">Prefer landscaping evidence</option><option value="away_from_previous">Away from previous footprint</option></select></label>
-                </div>
-                <label class="evidence-toggle"><input id="water-protect-access" type="checkbox"> Require mapped driveway or loading access to stay clear</label>
-                <label for="water-drainage-assumption">Contributing runoff<select id="water-drainage-assumption"><option value="unknown">Drainage connection unknown · do not calculate capture</option><option value="marked_connected">What-if: assume marked runoff areas drain to this treatment</option></select></label>
-                <label for="water-runoff-coefficient">What-if runoff coefficient (0–1)<input id="water-runoff-coefficient" type="number" min="0" max="1" step="any" placeholder="Enter an explicit assumption" disabled></label>
-                <p id="water-what-if-note" class="water-scenario-note" hidden>This is an assumed drainage connection, not a verified catchment. Outline potential runoff sources in map markings and name the rainfall event below. Overlapping source areas are counted once; rain onto the treatment reserves storage first.</p>
-                <p>To revise, change a control, add a keep-clear marking, or describe the change above, then continue the project.</p>
-              </details>
-              <p id="analysis-provider">Your question, measured summaries and selected property facts go to xAI. Coordinates and polygons stay local.</p>
-              <button id="run-site-analysis" type="submit" disabled>Analyze site</button>
-              <p id="analysis-site-hint">Select a property or pick a map location to enable analysis.</p>
-              <button id="cancel-site-analysis" type="button" hidden>Cancel analysis</button>
-              <details id="agent-activity" class="agent-activity"><summary>Agent activity <span id="activity-count"></span></summary>
-                <p>Investigation plan, specialist assignments, skill reads and saved reports. Select a source to inspect its measured facts.</p>
-                <ol id="activity-list"></ol>
-              </details>
-              <p id="analysis-message" role="status" hidden></p>
-              <p id="analysis-synthesis-warning" class="water-scenario-note" role="status" hidden></p>
-              <p id="analysis-stale" class="analysis-stale" hidden>Inputs changed or the review is incomplete. Analyze again to refresh the assessment.</p>
-              <div id="agent-assessment" class="site-review" aria-live="polite" hidden></div>
-            </form>
-          <p id="proposal-result-message" class="proposal-result-message" role="status" hidden></p>
-          <section id="proposal-review" class="planner-card proposal-review" hidden aria-live="polite">
-            <span id="proposal-kind" class="fixture-tag">DEVELOPMENT FIXTURE</span>
-            <h2 id="proposal-title"></h2><p id="proposal-summary"></p>
-            <dl class="proposal-metrics"><dt id="proposal-area-label">Footprint</dt><dd id="proposal-area"></dd><dt>Impact</dt><dd id="proposal-impact">Unassessed</dd></dl>
-            <dl id="proposal-water-metrics" class="proposal-metrics" hidden></dl>
-            <div id="proposal-checks"></div>
-            <ul id="proposal-assumptions" hidden></ul>
-            <button id="focus-proposal" type="button">Zoom to footprint</button>
-            <p id="proposal-revision"></p><p id="proposal-stale" hidden>Inputs changed. Analyze again to update this proposal.</p>
-          </section>
-          <section id="water-design-review" class="planner-card water-design-review" hidden>
-            <span class="section-label">STORMWATER CONCEPT STUDY</span>
-            <h2>Why this footprint</h2><p id="water-design-selection"></p>
-            <p id="water-design-scenario" class="water-scenario-note"></p>
-            <p id="water-design-stale" class="analysis-stale" hidden>Inputs changed. These alternatives and calculations belong to the earlier design revision.</p>
-            <details><summary>Sponsor evidence &amp; siting decisions</summary><ul id="water-design-decisions"></ul></details>
-            <details><summary>Inspect internal alternatives</summary><p>These alternatives belong to the same study. Inspecting one changes only the map preview, not the saved concept or project constraints.</p><div id="water-design-alternatives"></div></details>
-            <details><summary>Earlier design revisions</summary><div id="water-design-history"></div></details>
-            <button id="water-return-current" type="button" hidden>Return to current concept</button>
-          </section>
-          <section id="traffic-comparison" class="planner-card traffic-comparison" hidden aria-live="polite">
-            <span class="section-label">TRAFFIC DESIGN COMPARISON</span>
-            <h2 id="comparison-title"></h2><p id="comparison-outcome"></p>
-            <p id="comparison-period" class="comparison-period"></p>
-            <p id="comparison-policy" class="comparison-policy"></p>
-            <div class="comparison-readiness"><strong>Data readiness · separate from priority</strong><p id="comparison-readiness"></p><ul id="comparison-missing"></ul></div>
-            <p id="comparison-revision-summary" class="comparison-method" hidden></p>
-            <p class="comparison-method">Historical turning demand drives this simulation. The current traffic snapshot helps identify an opportunity; its speed and slowdown observations are not turning volumes, recurring congestion or measured emissions.</p>
-            <p class="comparison-method">Emissions cover one hour of offered traffic, including a 15-minute clearance period. Completion is measured after clearance.</p>
-            <p id="comparison-stale" class="analysis-stale" hidden>Site inputs changed. This comparison belongs to an earlier revision; analyze again.</p>
-            <div id="comparison-table" class="comparison-table" role="region" aria-label="Traffic metrics before and after each layout" tabindex="0"></div>
-            <div id="comparison-alternatives" class="comparison-alternatives"></div>
-            <details><summary>Sponsor evidence &amp; design decisions</summary><ul id="traffic-design-decisions"></ul></details>
-            <details><summary>Earlier traffic evaluations</summary><div id="traffic-design-history"></div></details>
-            <button id="traffic-return-current" type="button" hidden>Return to current evaluation</button>
-            <p class="comparison-method">To revise a design, describe a change to its approach, length or lane allocation in the planning brief, or add a keep-clear marking, then continue the project. The next run evaluates one bounded comparison under the same selection policy.</p>
-            <details><summary>Sources &amp; simulation assumptions</summary>
-              <p class="comparison-method">Delay includes waiting to enter; unfinished trips contribute a lower bound. Queue is the maximum simultaneous total along an approach. Noise is the highest hourly mean source level across approach edges and paired runs. Roadway noise is a modeled source level, not exposure at a building. A 10% noise-energy increase is about 0.414 dB; percentages are not applied directly to decibels.</p>
-              <div id="comparison-sources"></div><ul id="comparison-assumptions"></ul>
-            </details>
-            <p id="comparison-revision"></p>
-          </section>
-          <details class="planner-card" id="proposal-development"><summary>Development preview</summary>
-            <p>Synthetic geometry to test the map and revision contract only. Not a site design or recommendation; no benefits calculated.</p>
-            <button id="load-proposal-fixture" type="button" disabled>Load UI test fixture</button>
-            <button id="revise-proposal-fixture" type="button" disabled>Test next revision</button>
-            <p id="proposal-message" role="status">Select a site to test the proposal overlay.</p>
-          </details>
-          <details id="site-tools" class="site-details" hidden><summary>Site evidence &amp; adjustments</summary>
-        <details class="site-view-entry" aria-labelledby="site-view-entry-title">
-          <summary>Optional exterior view</summary>
-          <div class="site-view-entry-heading"><span aria-hidden="true">◈</span><span class="section-label">EXTERIOR SITE CONTEXT</span></div>
-          <h2 id="site-view-entry-title">Select a site</h2>
-          <p>Use a relevant exterior tour to inspect access or site conditions. The map remains usable without one.</p>
-          <button id="open-site-view" disabled type="button" aria-haspopup="dialog" aria-controls="site-view-dialog">Check exterior view <span aria-hidden="true">↗</span></button>
-          <p id="site-view-entry-status" class="site-view-entry-note" role="status">Select a property or resolve a map location to check its tour.</p>
-          <button id="site-view-entry-retry" type="button" hidden>Retry walkthrough</button>
-        </details>
 
-            <section id="water-tools" class="planner-card water-card" aria-labelledby="rain-title" hidden>
-              <div class="water-card-heading"><h2 id="rain-title">Watershed &amp; rainfall</h2><span>LA COUNTY</span></div>
+        <div id="planner" class="sidebar-body assistant-body">
+
+          <!-- Step 1 · Focus -->
+          <section class="pane pane-focus" data-pane="focus" aria-labelledby="planner-title">
+            <h1 id="planner-title" tabindex="-1">What do you want to work on?</h1>
+            <nav id="planning-workspaces" class="choice-cards" aria-labelledby="planner-title">
+              <button id="workspace-street" type="button" aria-pressed="true"><strong>Traffic &amp; Emissions</strong><small>Current street speeds and slow approaches. Test street layouts against counted traffic.</small></button>
+              <button id="workspace-water" type="button" aria-pressed="false"><strong>Stormwater</strong><small>Terrain, rainfall and drainage. Draft a rain garden where the site supports one.</small></button>
+            </nav>
+            <div id="guide-resume" class="resume" hidden>
+              <p><strong>Pick up where you left off</strong><span id="guide-resume-name"></span></p>
+              <button id="guide-resume-open" type="button">Resume</button>
+            </div>
+            <p class="featured-demo"><a href="/demo">Explore a detailed green-street demo ↗</a><br><small>Hancock Terrace · curated design study</small></p>
+          </section>
+
+          <!-- Step 2 · Place -->
+          <section class="pane" data-pane="place" aria-labelledby="guide-title-place">
+            <h2 id="guide-title-place" class="pane-title" tabindex="-1">Find a place</h2>
+            <p class="pane-lede">Have the agent scout an area for opportunities, or go straight to a spot you already know.</p>
+            <div class="switch" role="group" aria-label="How to find a place">
+              <button id="guide-method-scout" type="button" aria-pressed="true">Scout an area</button>
+              <button id="guide-method-direct" type="button" aria-pressed="false">Pick a spot</button>
+              <button id="guide-method-saved" type="button" aria-pressed="false">Saved project</button>
+            </div>
+
+            <div id="scouting" class="scouting method" data-method="scout">
+              <h3 id="scout-heading" class="visually-hidden">Find improvement opportunities</h3>
+              <form id="scout-form">
+                <label for="scout-goal">What are you looking for?</label>
+                <textarea id="scout-goal" rows="3" maxlength="1500" required aria-describedby="scout-goal-help"></textarea>
+                <p id="scout-goal-help" class="fine-print">Optional to change. This also becomes the starting brief for the place you choose.</p>
+                <div class="scout-actions"><button id="scout-area" type="button">Use current map area</button><button id="scout-view-area" type="button" hidden>View search area</button></div>
+                <p id="scout-area-label">The visible map area will be used when you start.</p>
+              </form>
+              <p id="scout-status" role="status" aria-live="polite"></p>
+              <details id="scout-activity" hidden><summary>Investigation activity</summary><ol id="scout-events"></ol></details>
+              <div id="scout-results" aria-label="Researched locations"></div>
+              <button id="scout-more" type="button" hidden>Find more locations</button>
+              <p class="scout-privacy fine-print">The agent receives your goal and measured summaries. Location geometry stays local.</p>
+            </div>
+
+            <div class="method" data-method="direct">
+              <div class="search-block">
+                <label for="search">Find a property</label>
+                <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" autocomplete="off" placeholder="Property name or address"></div>
+                <div id="results" class="results" role="listbox" aria-label="Property search results" hidden></div>
+              </div>
+              <p class="or-rule">or set the site on the map</p>
+              <button id="pick-site" type="button" class="planner-action" aria-pressed="false">Pick a site on the map</button>
+              <button id="use-map-center" type="button" class="planner-action">Use map center as site</button>
+              <p class="keyboard-map-help fine-print">Keyboard: focus the map, pan with the arrow keys, then use its center.</p>
+            </div>
+
+            <section class="method project-workspace" data-method="saved" aria-label="Saved planning projects">
+              <label for="saved-projects">Saved projects</label>
+              <div class="project-switcher"><select id="saved-projects"><option value="">Choose a saved project</option></select><button id="open-project" type="button">Open</button></div>
+              <p class="tip">Opening a project restores its site, brief, constraints and earlier results.</p>
+            </section>
+          </section>
+
+          <!-- Step 3 · Site -->
+          <section class="pane" data-pane="site" aria-labelledby="guide-title-site">
+            <h2 id="guide-title-site" class="pane-title" tabindex="-1">Check the site</h2>
+            <p class="pane-lede">Make sure this is the place you mean before you brief the agent.</p>
+            <div id="site-card" class="card site-card" hidden>
+              <strong id="site-name"></strong>
+              <p id="site-location"></p>
+              <p id="site-property"></p>
+              <p id="site-resolution-status" role="status"></p>
+              <div id="site-resolution-candidates" class="site-resolution-candidates"></div>
+              <button id="retry-site-resolution" type="button" hidden>Retry property match</button>
+            </div>
+            <section id="discovery-context" class="card discovery-context" hidden>
+              <span class="card-kicker">Evidence you selected on the map</span>
+              <h3 id="discovery-feature-title"></h3><strong id="discovery-feature-value"></strong>
+              <p id="discovery-feature-period"></p>
+              <details><summary>Source, method &amp; limits</summary><div id="discovery-feature-details"></div></details>
+            </section>
+            <section id="water-tools" class="card water-card" aria-labelledby="rain-title" hidden>
+              <div class="card-head"><h3 id="rain-title">Watershed &amp; rainfall</h3><span class="source-tag">LA County</span></div>
               <div class="water-summary" aria-live="polite">
-                <span class="control-label">COUNTY WATERSHED</span>
+                <span class="stat-label">County watershed</span>
                 <strong id="watershed-name">—</strong>
                 <p id="watershed-result"></p>
                 <div class="rain-stat"><strong id="rain-value">—</strong><span>inches<br><small>85th-percentile · 24-hour</small></span></div>
                 <p id="rain-result"></p>
               </div>
-              <div class="planner-row water-actions">
+              <div class="button-row water-actions">
                 <button id="view-watershed" type="button" disabled>View subbasin</button>
                 <button id="return-to-site" type="button">Back to site</button>
                 <button id="retry-hydrology" type="button" hidden>Retry county data</button>
               </div>
-              <label class="evidence-toggle"><input id="show-watershed" type="checkbox" checked> Show county subbasin</label>
-              <p class="hydrology-note">The boundary identifies the county subbasin containing this site. It does not establish site drainage direction or flood risk.</p>
-              <details class="rain-scenario"><summary>Scenario rainfall &amp; sources</summary>
-                <label for="rain-depth">Scenario rainfall (inches)</label>
-                <input id="rain-depth" type="number" min="0" step="any" inputmode="decimal">
-                <label for="rain-source">Scenario source or assumption</label>
-                <input id="rain-source" type="text" maxlength="160" placeholder="e.g. LA County contour estimate">
-                <p>Name this event or assumption. It stays separate from the county estimate. Changing rainfall marks the existing concept stale; continue the project to recalculate.</p>
-                <div class="planner-sources">
-                  <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/hydrologygis/MapServer/3" target="_blank" rel="noopener">County rainfall contours ↗</a>
-                  <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/PW_Open_Data/MapServer/36" target="_blank" rel="noopener">County watershed subbasins ↗</a>
-                </div>
-              </details>
+              <label class="evidence-toggle"><input id="show-watershed" type="checkbox"> Show county subbasin</label>
+              <p class="hydrology-note fine-print">Regional context. The county subbasin does not establish site drainage or flood risk.</p>
             </section>
+            <section class="card site-view-entry" aria-labelledby="site-view-entry-title">
+              <span class="card-kicker">3D property tours</span>
+              <h3 id="site-view-entry-title">Select a site</h3>
+              <button id="open-site-view" disabled type="button" aria-haspopup="dialog" aria-controls="site-view-dialog">View tours <span aria-hidden="true">↗</span></button>
+              <p id="site-view-entry-status" class="site-view-entry-note fine-print" role="status"></p>
+              <button id="site-view-entry-retry" type="button" hidden>Retry walkthrough</button>
+            </section>
+          </section>
 
-            <section id="site-facts" class="planner-card" aria-labelledby="site-facts-title" hidden>
-              <div class="water-card-heading"><h2 id="site-facts-title">Measurements &amp; sources</h2><span>LOCAL MATH</span></div>
-              <p>Measured from source geometry or reported by the named provider. Each recommendation links to its supporting facts.</p>
-              <div id="site-source-status" class="source-status"></div>
-              <ol id="site-facts-list" class="site-facts-list"></ol>
-              <ul id="site-source-warnings" class="source-warnings"></ul>
-            </section>
-            <section class="planner-card" aria-labelledby="evidence-title">
-              <h2 id="evidence-title">Site evidence</h2>
-              <p id="site-evidence-status" role="status"></p>
-              <ul id="site-evidence-list" class="shape-list" aria-label="Evidence on the map"></ul>
-              <p id="site-evidence-note" hidden></p>
-              <label id="site-search-toggle" class="evidence-toggle" hidden>
-                <input id="show-search-matches" type="checkbox"> Show imagery search areas
-              </label>
-            </section>
-            <details class="planner-card" id="manual-markings">
-              <summary>Adjust or add map markings</summary>
+          <!-- Step 4 · Brief -->
+          <section class="pane" data-pane="brief" aria-labelledby="guide-title-brief">
+            <h2 id="guide-title-brief" class="pane-title" tabindex="-1">Brief the agent</h2>
+            <p class="pane-lede">Say what you want explored at this site. The agent gathers the evidence, then drafts a concept you can revise.</p>
+            <form id="site-analysis">
+              <label for="planning-brief">Ask the planning agent</label>
+              <textarea id="planning-brief" rows="5" maxlength="1500" required aria-describedby="analysis-provider"></textarea>
+            </form>
+            <p id="analysis-site-hint" class="tip">Select a property or pick a map location to enable analysis.</p>
+            <h3 class="field-title">Optional details</h3>
+            <div class="option-list">
+              <button id="guide-open-settings" type="button" class="option-row water-only"><strong>Design settings</strong><small>Size, depth, form, placement and runoff what-ifs</small></button>
+              <button id="guide-open-rain" type="button" class="option-row water-only"><strong>Rainfall scenario</strong><small>Name a storm event to use in place of the county estimate</small></button>
+              <button id="guide-open-markings" type="button" class="option-row"><strong>Map markings</strong><small id="guide-markings-count">Outline areas to keep clear or consider</small></button>
+            </div>
+            <p id="analysis-provider" class="fine-print">Your question, measured summaries and selected property facts go to xAI. Coordinates and polygons stay local.</p>
+          </section>
+
+          <!-- Step 4 detail · stormwater design settings -->
+          <section class="pane" data-pane="settings" aria-labelledby="guide-title-settings">
+            <h2 id="guide-title-settings" class="pane-title" tabindex="-1">Design settings</h2>
+            <div id="stormwater-settings" class="stormwater-settings" hidden>
+              <p class="pane-lede">Leave blank for an agent suggestion.</p>
+              <div class="water-input-grid">
+                <label for="water-target-area">Target treatment area (m²)<input id="water-target-area" type="number" min="2" max="500" step="any" placeholder="Agent choice"></label>
+                <label for="water-storage-depth">Effective ponding depth (m)<input id="water-storage-depth" type="number" min="0.05" max="0.30" step="any" placeholder="Agent choice"></label>
+                <label for="water-layout">Preferred form<select id="water-layout"><option value="auto">Agent choice</option><option value="compact">Compact planting area</option><option value="linear">Linear planting strip</option></select></label>
+                <label for="water-placement">Placement preference<select id="water-placement"><option value="auto">Agent choice</option><option value="near_selection">Near selected location</option><option value="landscape_first">Prefer landscaping evidence</option><option value="away_from_previous">Away from previous footprint</option></select></label>
+              </div>
+              <label class="evidence-toggle"><input id="water-protect-access" type="checkbox"> Require mapped driveway or loading access to stay clear</label>
+              <label for="water-drainage-assumption">Contributing runoff<select id="water-drainage-assumption"><option value="unknown">Drainage connection unknown · do not calculate capture</option><option value="marked_connected">What-if: assume marked runoff areas drain to this treatment</option></select></label>
+              <label for="water-runoff-coefficient">What-if runoff coefficient (0–1)<input id="water-runoff-coefficient" type="number" min="0" max="1" step="any" placeholder="Enter an explicit assumption" disabled></label>
+              <p id="water-what-if-note" class="water-scenario-note" hidden>This is an assumed drainage connection, not a verified catchment. Outline potential runoff sources in map markings and name the rainfall event below. Overlapping source areas are counted once; rain onto the treatment reserves storage first.</p>
+            </div>
+          </section>
+
+          <!-- Step 4 detail · rainfall scenario -->
+          <section class="pane" data-pane="rain" aria-labelledby="guide-title-rain">
+            <h2 id="guide-title-rain" class="pane-title" tabindex="-1">Rainfall scenario</h2>
+            <div class="rain-scenario">
+              <label for="rain-depth">Scenario rainfall (inches)</label>
+              <input id="rain-depth" type="number" min="0" step="any" inputmode="decimal">
+              <label for="rain-source">Scenario source or assumption</label>
+              <input id="rain-source" type="text" maxlength="160" placeholder="e.g. LA County contour estimate">
+              <p>Name the event or assumption. Changing rainfall requires an updated analysis.</p>
+              <div class="planner-sources">
+                <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/hydrologygis/MapServer/3" target="_blank" rel="noopener">County rainfall contours ↗</a>
+                <a href="https://dpw.gis.lacounty.gov/dpw/rest/services/PW_Open_Data/MapServer/36" target="_blank" rel="noopener">County watershed subbasins ↗</a>
+              </div>
+            </div>
+          </section>
+
+          <!-- Step 4 detail · map markings -->
+          <section class="pane" data-pane="markings" aria-labelledby="guide-title-markings">
+            <h2 id="guide-title-markings" class="pane-title" tabindex="-1">Map markings</h2>
+            <p class="pane-lede">Outline areas on the map for the agent to respect or consider. Markings stay with this project.</p>
+            <div id="manual-markings">
               <div id="mark-actions" class="mark-actions"></div>
               <ul id="shape-list" class="shape-list" aria-label="Saved map markings"></ul>
               <div id="keyboard-marking-editor" class="keyboard-marking-editor" hidden>
@@ -227,58 +209,192 @@
                 <div id="draw-coordinates" aria-label="Marking point coordinates"></div>
                 <p>Use Save marking on the map when the outline is ready.</p>
               </div>
+            </div>
+          </section>
+
+          <!-- Step 5 · Results -->
+          <section class="pane" data-pane="results" aria-labelledby="guide-title-results">
+            <h2 id="guide-title-results" class="pane-title" tabindex="-1">Review the results</h2>
+            <div class="switch" role="group" aria-label="Result sections">
+              <button id="guide-tab-assessment" type="button" aria-pressed="true">Assessment</button>
+              <button id="guide-tab-design" type="button" aria-pressed="false">Design</button>
+              <button id="guide-tab-evidence" type="button" aria-pressed="false">Evidence</button>
+              <button id="guide-tab-project" type="button" aria-pressed="false">Project</button>
+            </div>
+
+            <div class="tab" data-tab="assessment">
+              <details id="agent-activity" class="agent-activity"><summary>Agent activity <span id="activity-count"></span></summary>
+                <ol id="activity-list"></ol>
+              </details>
+              <div id="agent-assessment" class="site-review" aria-live="polite" hidden></div>
+              <p class="empty-note empty-assessment">No assessment yet. Refine the brief and analyze the site to see what the agent finds.</p>
+            </div>
+
+            <div class="tab" data-tab="design">
+              <p id="proposal-result-message" class="proposal-result-message" role="status" hidden></p>
+              <section id="proposal-review" class="card proposal-review" hidden aria-live="polite">
+                <span id="proposal-kind" class="fixture-tag">Development fixture</span>
+                <h3 id="proposal-title"></h3><p id="proposal-summary"></p>
+                <dl class="proposal-metrics"><dt id="proposal-area-label">Footprint</dt><dd id="proposal-area"></dd><dt>Impact</dt><dd id="proposal-impact">Unassessed</dd></dl>
+                <dl id="proposal-water-metrics" class="proposal-metrics" hidden></dl>
+                <div id="proposal-checks"></div>
+                <ul id="proposal-assumptions" hidden></ul>
+                <div class="proposal-view-actions"><button id="focus-proposal" type="button">Zoom to footprint</button>
+              <button id="open-concept-scene" type="button" disabled aria-haspopup="dialog" aria-controls="concept-scene-dialog">Explore in 3D <span aria-hidden="true">↗</span></button></div>
+            <p id="concept-scene-entry" class="concept-scene-entry" role="status">A published footprint enables its conceptual 3D view.</p>
+                <p id="proposal-revision" class="fine-print"></p><p id="proposal-stale" class="analysis-stale" hidden>Inputs changed. Analyze again to update this proposal.</p>
+              </section>
+              <section id="water-design-review" class="card water-design-review" hidden>
+                <span class="card-kicker">Stormwater concept study</span>
+                <h3>Why this footprint</h3><p id="water-design-selection"></p>
+                <p id="water-design-scenario" class="water-scenario-note"></p>
+                <p id="water-design-stale" class="analysis-stale" hidden>Inputs changed. These alternatives and calculations belong to the earlier design revision.</p>
+                <details><summary>Evidence &amp; siting decisions</summary><ul id="water-design-decisions"></ul></details>
+                <details id="water-design-alternatives-box"><summary>Other design options</summary><p>Preview only; your saved design stays unchanged.</p><div id="water-design-alternatives"></div></details>
+                <details id="water-design-history-box"><summary>Earlier design revisions</summary><div id="water-design-history"></div></details>
+                <button id="water-return-current" type="button" hidden>Return to current concept</button>
+              </section>
+              <section id="traffic-comparison" class="card traffic-comparison" hidden aria-live="polite">
+                <span class="card-kicker">Historical count simulation</span>
+                <h3 id="comparison-title"></h3><p id="comparison-outcome"></p>
+                <p id="comparison-period" class="comparison-period"></p>
+                <p id="comparison-policy" class="comparison-policy"></p>
+                <div class="comparison-readiness"><strong>Evidence available</strong><p id="comparison-readiness"></p><ul id="comparison-missing"></ul></div>
+                <p id="comparison-revision-summary" class="comparison-method" hidden></p>
+                <p id="comparison-stale" class="analysis-stale" hidden>Site inputs changed. This comparison belongs to an earlier revision; analyze again.</p>
+                <div id="comparison-table" class="comparison-table" role="region" aria-label="Traffic metrics before and after each layout" tabindex="0"></div>
+                <div id="comparison-alternatives" class="comparison-alternatives"></div>
+                <details><summary>Evidence &amp; design decisions</summary><ul id="traffic-design-decisions"></ul></details>
+                <details id="traffic-design-history-box"><summary>Earlier traffic evaluations</summary><div id="traffic-design-history"></div></details>
+                <button id="traffic-return-current" type="button" hidden>Return to current evaluation</button>
+                <details><summary>Sources, methods &amp; limitations</summary>
+                  <p class="comparison-method">Historical turning demand drives this simulation. The current traffic snapshot helps identify an opportunity; its speed and slowdown observations are not turning volumes, recurring congestion or measured emissions.</p>
+                  <p class="comparison-method">Emissions cover one hour of offered traffic, including a 15-minute clearance period. Completion is measured after clearance. A lower total cannot justify stranded traffic or a failed hard gate.</p>
+                  <p class="comparison-method">Detection candidates require field verification; an empty response does not confirm that a crossing or driveway is absent. Mapped checks do not establish ownership, access approval or construction feasibility.</p>
+                  <p class="comparison-method">To revise a design, describe a change to its approach, length or lane allocation in the brief, or add a keep-clear marking, then continue the project. The next run evaluates one bounded comparison under the same selection policy.</p>
+                  <p class="comparison-method">Delay includes waiting to enter; unfinished trips contribute a lower bound. Queue is the maximum simultaneous total along an approach. Noise is the highest hourly mean source level across approach edges and paired runs. Roadway noise is a modeled source level, not exposure at a building. A 10% noise-energy increase is about 0.414 dB; percentages are not applied directly to decibels.</p>
+                  <div id="comparison-sources"></div><ul id="comparison-assumptions"></ul>
+                </details>
+                <p id="comparison-revision" class="fine-print"></p>
+              </section>
+              <p class="empty-note empty-design">No design yet. A footprint or comparison appears here once the agent can support one.</p>
+            </div>
+
+            <div class="tab" data-tab="evidence">
+              <div id="site-tools" class="site-details" hidden>
+                <section id="site-facts" class="card" aria-labelledby="site-facts-title" hidden>
+                  <h3 id="site-facts-title">Measurements &amp; sources</h3>
+                  <div id="site-source-status" class="source-status"></div>
+                  <ol id="site-facts-list" class="site-facts-list"></ol>
+                  <ul id="site-source-warnings" class="source-warnings"></ul>
+                </section>
+                <section class="card" aria-labelledby="evidence-title">
+                  <h3 id="evidence-title">Site evidence on the map</h3>
+                  <p id="site-evidence-status" role="status"></p>
+                  <ul id="site-evidence-list" class="shape-list" aria-label="Evidence on the map"></ul>
+                  <p id="site-evidence-note" hidden></p>
+                  <label id="site-search-toggle" class="evidence-toggle" hidden>
+                    <input id="show-search-matches" type="checkbox"> Show imagery search areas
+                  </label>
+                </section>
+              </div>
+            </div>
+
+            <div class="tab" data-tab="project">
+              <section class="card" aria-labelledby="project-details-title">
+                <h3 id="project-details-title">Project details</h3>
+                <p id="project-detail"></p>
+                <p id="proposal-identity" class="fine-print"></p>
+                <p id="comparison-identity" class="fine-print"></p>
+              </section>
+              <details id="project-files" class="card" open hidden><summary>Project files <span id="project-file-count"></span></summary>
+                <ul id="project-file-list"></ul>
+                <pre id="project-file-preview" tabindex="0" hidden></pre>
+              </details>
+              <!-- Synthetic fixtures are a developer tool: shown only when the page is opened with ?dev. -->
+              <details class="card" id="proposal-development" hidden><summary>Development preview</summary>
+                <p>Synthetic geometry to test the map and revision contract only. Not a site design or recommendation; no benefits calculated.</p>
+                <button id="load-proposal-fixture" type="button" disabled>Load UI test fixture</button>
+                <button id="revise-proposal-fixture" type="button" disabled>Test next revision</button>
+                <p id="proposal-message" role="status">Select a site to test the proposal overlay.</p>
+              </details>
+            </div>
+          </section>
+
+          <!-- Utility · map layers and status, opened from the title bar -->
+          <section class="pane" data-pane="map" aria-labelledby="guide-title-map">
+            <h2 id="guide-title-map" class="pane-title" tabindex="-1">Map layers</h2>
+            <div class="layer base"><span class="layer-icon">▧</span><div><strong>Vexcel aerial</strong></div><span class="active-dot" aria-label="On"></span></div>
+            <label class="layer toggle-row" for="labels"><span class="layer-icon">⌖</span><span class="layer-copy"><strong>Place labels</strong></span><input id="labels" type="checkbox" role="switch"><span class="switch-track"></span></label>
+            <label class="layer toggle-row" for="properties"><span class="layer-icon">●</span><span class="layer-copy"><strong>CoStar properties</strong></span><input id="properties" type="checkbox" role="switch"><span class="switch-track"></span></label>
+            <label id="emissions-layer-row" class="layer toggle-row" for="emissions-layer" hidden><span class="layer-icon">≋</span><span class="layer-copy"><strong>Road emissions</strong><small>Downtown pilot · mostly assumed volumes</small></span><input id="emissions-layer" type="checkbox" role="switch"><span class="switch-track"></span></label>
+            <div id="layer-note" class="layer-note" hidden>Zoom in to show properties.</div>
+            <details class="map-details"><summary>Map details</summary>
+              <p><strong id="status-title">Checking coverage</strong> <span id="status-detail">Connecting to Vexcel…</span></p>
+              <div class="map-meta"><div><span>Center</span><strong id="coordinates">—</strong></div><div><span>Zoom</span><strong id="zoom">—</strong></div></div>
             </details>
-          </details>
-        </section>
-        <section id="planner-controls" class="planner-controls" hidden aria-label="Emissions analysis controls">
-          <div class="planner-kicker"><span class="live-pip"></span> DOWNTOWN LA PILOT <span>COUNTED / 2026 RATES</span></div>
-          <h2>Traffic discovery</h2>
-          <p class="planner-intro">Tailpipe CO₂ and NOₓ by road, from LADOT traffic counts and CARB 2026 Los Angeles fleet rates. Select a road to see where its traffic volume comes from.</p>
-          <fieldset><div class="control-label">TIME WINDOW</div>
-          <div class="segmented" role="group" aria-label="Simulation period"><button id="period-midday" class="selected" type="button" aria-pressed="true">Midday <small>11 AM – 2 PM</small></button><button id="period-pm_peak" type="button" aria-pressed="false">PM peak <small>4 – 7 PM</small></button></div>
-          <div class="control-label metric-label">MAP METRIC</div>
-          <div class="metric-select" role="group" aria-label="Emissions metric"><button id="metric-co2" class="selected" type="button" aria-pressed="true"><span>CO₂</span><small>kg / hour</small></button><button id="metric-nox" type="button" aria-pressed="false"><span>NOₓ</span><small>g / hour</small></button></div>
-          <div class="metric-card"><div class="metric-card-top"><span>ESTIMATED PILOT TOTAL</span><span class="model-tag">ESTIMATE</span></div><div class="metric-main"><strong id="pilot-total">—</strong><span id="pilot-unit">kg CO₂ / hour</span></div><div class="metric-sub"><span id="pilot-secondary">—</span><span id="pilot-count">—</span></div></div>
-          <div class="planner-disclosure"><details><summary>How this estimate works <span>↗</span></summary><p id="method-text">Loading methodology…</p><div id="source-links" class="source-links"></div></details></div>
-</fieldset>        </section>
-        <details class="map-settings"><summary>Map layers &amp; status</summary>
-        <div class="divider"></div>
-        <div class="section-label">MAP LAYERS</div>
-        <div class="layer base"><span class="layer-icon">▧</span><div><strong>Vexcel aerial</strong><small>Base imagery</small></div><span class="active-dot" aria-label="On"></span></div>
-        <label class="layer toggle-row" for="labels"><span class="layer-icon">⌖</span><span class="layer-copy"><strong>Place labels</strong><small>Esri reference layer</small></span><input id="labels" type="checkbox" role="switch"><span class="switch"></span></label>
-        <label class="layer toggle-row" for="properties"><span class="layer-icon">●</span><span class="layer-copy"><strong>CoStar properties</strong><small>Visible from neighborhood zoom</small></span><input id="properties" type="checkbox" role="switch"><span class="switch"></span></label>
-        <label id="emissions-layer-row" class="layer toggle-row" for="emissions-layer" hidden><span class="layer-icon">≋</span><span class="layer-copy"><strong>Road emissions</strong><small>Downtown pilot · mostly assumed volumes</small></span><input id="emissions-layer" type="checkbox" role="switch"><span class="switch"></span></label>
-        <div id="layer-note" class="layer-note" hidden>Zoom in to level 15 to see property points.</div>
-        <div class="divider"></div>
-        <div class="section-label">MAP STATUS</div>
-        <div class="status-card"><span id="status-dot" class="status-dot"></span><div><strong id="status-title">Checking coverage</strong><p id="status-detail">Connecting to Vexcel…</p></div></div>
-        <div class="map-meta"><div><span>Center</span><strong id="coordinates">—</strong></div><div><span>Zoom</span><strong id="zoom">—</strong></div></div>
-        </details>
-      </div>
-      <div class="sidebar-footer"><span id="footer-caption">V2 map foundation</span><span>Local workspace</span></div>
+            <section id="planner-controls" class="planner-controls" hidden aria-label="Emissions analysis controls">
+              <div class="planner-kicker"><span class="live-pip"></span> DOWNTOWN LA PILOT <span>COUNTED / 2026 RATES</span></div>
+              <h2>Traffic discovery</h2>
+              <p class="planner-intro">Tailpipe CO₂ and NOₓ by road, from LADOT traffic counts and CARB 2026 Los Angeles fleet rates. Select a road to see where its traffic volume comes from.</p>
+              <fieldset><div class="control-label">TIME WINDOW</div>
+              <div class="segmented" role="group" aria-label="Simulation period"><button id="period-midday" class="selected" type="button" aria-pressed="true">Midday <small>11 AM – 2 PM</small></button><button id="period-pm_peak" type="button" aria-pressed="false">PM peak <small>4 – 7 PM</small></button></div>
+              <div class="control-label metric-label">MAP METRIC</div>
+              <div class="metric-select" role="group" aria-label="Emissions metric"><button id="metric-co2" class="selected" type="button" aria-pressed="true"><span>CO₂</span><small>kg / hour</small></button><button id="metric-nox" type="button" aria-pressed="false"><span>NOₓ</span><small>g / hour</small></button></div>
+              <div class="metric-card"><div class="metric-card-top"><span>ESTIMATED PILOT TOTAL</span><span class="model-tag">ESTIMATE</span></div><div class="metric-main"><strong id="pilot-total">—</strong><span id="pilot-unit">kg CO₂ / hour</span></div><div class="metric-sub"><span id="pilot-secondary">—</span><span id="pilot-count">—</span></div></div>
+              <div class="planner-disclosure"><details><summary>How this estimate works <span>↗</span></summary><p id="method-text">Loading methodology…</p><div id="source-links" class="source-links"></div></details></div>
+              </fieldset>
+            </section>
+          </section>
+        </div>
+
+        <!-- Status from the controllers that applies to the visible step. -->
+        <div class="guide-dock">
+          <p id="map-alert" role="alert" hidden></p>
+          <p id="planner-status" class="planner-status" role="status">Search for a property or select a location on the map.</p>
+          <p id="analysis-message" role="status" hidden></p>
+          <p id="analysis-synthesis-warning" class="water-scenario-note" role="status" hidden></p>
+          <p id="analysis-stale" class="analysis-stale" hidden>Inputs changed or the review is incomplete. Analyze again to refresh the assessment.</p>
+        </div>
+
+        <footer class="guide-footer">
+          <p id="guide-hint" class="guide-hint" role="status" aria-live="polite">Next: find a place to work on.</p>
+          <div class="guide-actions">
+            <button id="guide-back" type="button" hidden>Back</button>
+            <span class="guide-spacer"></span>
+            <button id="guide-skip" type="button" hidden></button>
+            <button id="scout-cancel" type="button" hidden>Cancel search</button>
+            <button id="scout-start" type="submit" form="scout-form" class="primary">Find locations</button>
+            <button id="cancel-site-analysis" type="button" hidden>Cancel analysis</button>
+            <button id="run-site-analysis" type="submit" form="site-analysis" class="primary" disabled>Analyze site</button>
+            <button id="guide-next" type="button" class="primary">Continue</button>
+          </div>
+        </footer>
+        <p id="project-status" class="assistant-status" role="status"></p>
+      </section>
     </aside>
     <main class="map-area" aria-label="Interactive Los Angeles aerial map">
-      <div class="map-heading"><div><span class="eyebrow" id="map-eyebrow">LOS ANGELES, CALIFORNIA</span><h2 id="map-title">Aerial explorer</h2></div><span class="map-badge" id="map-badge">VEXCEL IMAGERY</span></div>
       <div class="proposal-map-control"><label><input id="show-proposal" type="checkbox" disabled> Show proposal</label><span id="proposal-map-caption">No published proposal</span></div>
       <section id="discovery-panel" class="discovery-panel" aria-label="Discovery layers">
-        <div class="discovery-panel-heading"><span class="section-label">DISCOVER</span><button id="discovery-focus" type="button">View pilot ↗</button><button id="discovery-collapse" type="button" aria-controls="discovery-body" aria-expanded="true">Hide layers</button></div>
+        <div class="discovery-panel-heading"><span class="section-label">MAP LAYERS</span><button id="discovery-focus" type="button">View data area</button><button id="discovery-collapse" type="button" aria-controls="discovery-body" aria-expanded="true" aria-label="Collapse map layers">Collapse</button></div>
         <div id="discovery-body">
-        <label for="discovery-layer">Map evidence</label>
-        <select id="discovery-layer" disabled><option>Loading sources…</option></select>
+        <select id="discovery-layer" aria-label="Map overlay" disabled><option>Loading sources…</option></select>
         <p id="discovery-legend" class="discovery-legend"></p>
         <p id="discovery-status" role="status">Loading discovery data…</p>
-        <button id="discovery-retry" type="button" hidden>Retry data</button>
-        <button id="discovery-refresh" type="button" hidden>Refresh current traffic</button>
-        <p id="discovery-freshness" role="status" hidden></p>
+        <button id="discovery-refresh" type="button" hidden>Refresh traffic</button>
         <details><summary>Browse mapped features</summary><label for="discovery-feature">Choose a feature</label><select id="discovery-feature" disabled><option value="">Select on the map</option></select></details>
-        <p id="discovery-limit" class="discovery-limit"></p>
+        <details><summary>Layer details</summary>
+          <p id="discovery-count"></p>
+          <p id="discovery-freshness" hidden></p>
+          <p id="discovery-limit" class="discovery-limit"></p>
+        </details>
         </div>
       </section>
       <div id="map" role="application" aria-label="Pan and zoom aerial map"></div>
       <div id="emissions-notice" class="emissions-notice" role="status" hidden><span id="emissions-message">Loading road emissions…</span><button id="retry-emissions" type="button" hidden>Retry</button></div>
       <div id="emissions-legend" class="emissions-legend" hidden><div class="legend-top"><span>ROAD EMISSIONS</span><strong id="legend-unit">CO₂ · kg / h</strong></div><div class="legend-bar"></div><div class="legend-values"><span id="legend-low">Lower</span><span id="legend-high">Higher</span></div><small>Running exhaust · most volumes assumed · click a road for its source</small></div>
       <section id="watershed-legend" class="watershed-legend" aria-label="Watershed map key" hidden><div class="legend-top"><span>WATERSHED CONTEXT</span><span>LA COUNTY</span></div><strong id="watershed-map-name">Select a site</strong><p><span class="watershed-swatch"></span> County subbasin containing your site</p><small>Regional context · not a flood or flow simulation</small></section>
-      <section id="road-inspector" class="road-inspector" hidden aria-live="polite"><button id="close-inspector" class="close-inspector" type="button" aria-label="Close road detail">×</button><div class="section-label">SELECTED ROAD</div><h3 id="road-name">—</h3><p id="road-basis">—</p><div class="inspector-grid"><div><span>CO₂</span><strong id="road-co2">—</strong><small>kg / hour</small></div><div><span>NOₓ</span><strong id="road-nox">—</strong><small>g / hour</small></div><div><span>TRAFFIC</span><strong id="road-vehicles">—</strong><small>vehicles / hour</small></div><div><span>SPEED LIMIT</span><strong id="road-speed">—</strong><small>km / hour · OSM</small></div></div><p id="road-count-detail" class="road-count-detail"></p></section>
+      <section id="road-inspector" class="road-inspector" hidden aria-live="polite"><button id="close-inspector" class="close-inspector" type="button" aria-label="Close road detail">×</button><div class="section-label">SELECTED ROAD</div><h3 id="road-name">—</h3><p id="road-basis">—</p><div class="inspector-grid"><div><span>CO₂</span><strong id="road-co2">—</strong><small>kg / hour</small></div><div><span>NOₓ</span><strong id="road-nox">—</strong><small>g / hour</small></div><div><span>TRAFFIC</span><strong id="road-vehicles">—</strong><small>vehicles / hour</small></div><div><span>SPEED LIMIT</span><strong id="road-speed">—</strong><small>km / hour · OSM</small></div></div><details class="road-source"><summary>Volume source</summary><p id="road-count-detail" class="road-count-detail"></p></details></section>
       <div id="planner-map-panel" class="planner-map-panel" aria-label="Map marking controls" hidden>
         <p id="planner-map-hint" role="status"></p>
         <div id="draw-controls" class="planner-row" hidden>
@@ -287,26 +403,45 @@
           <button type="button" id="draw-cancel">Cancel</button>
         </div>
       </div>
-      <div class="map-bottom"><span>Drag to pan · scroll to zoom</span><button id="reset" type="button">↗ &nbsp; Back to Los Angeles</button></div>
+      <div class="map-bottom"><button id="reset" type="button" hidden>View Los Angeles</button></div>
     </main>
   </div>
+  <dialog id="concept-scene-dialog" class="concept-scene-dialog" aria-labelledby="concept-scene-title" aria-describedby="concept-scene-description">
+    <header class="concept-scene-header"><div><span class="section-label">DESIGN EXPLORER · CONCEPTUAL 3D</span><h2 id="concept-scene-title">Selected design</h2><p id="concept-scene-identity"></p></div>
+      <button id="concept-scene-close" type="button" aria-label="Close conceptual 3D view">Close <span aria-hidden="true">×</span></button></header>
+    <div class="concept-scene-toolbar">
+      <div class="concept-scene-modes" role="group" aria-label="Conceptual comparison"><button id="concept-scene-existing" type="button" aria-pressed="false">Existing</button><button id="concept-scene-proposed" type="button" aria-pressed="true">Proposed</button></div>
+      <p id="concept-scene-description">Compare mapped surroundings and the selected footprint from the same viewpoint.</p>
+      <label class="concept-scene-context-toggle"><input id="concept-scene-context" type="checkbox" checked> Show surroundings</label>
+    </div>
+    <p id="concept-scene-stale" class="concept-scene-warning" hidden>Saved reference · inputs or evidence have changed. This view has not been reevaluated.</p>
+    <div class="concept-scene-body">
+      <div class="concept-scene-visual"><div id="concept-scene-stage" class="concept-scene-stage" role="img" aria-label="Conceptual 3D view of the selected design"></div>
+        <div class="concept-scene-camera" role="group" aria-label="3D camera controls"><button id="concept-scene-reset" type="button">Reset view</button><button id="concept-scene-top" type="button">Top view</button><button id="concept-scene-left" type="button" aria-label="Rotate view left">↶</button><button id="concept-scene-right" type="button" aria-label="Rotate view right">↷</button><button id="concept-scene-zoom-in" type="button" aria-label="Zoom 3D view in">＋</button><button id="concept-scene-zoom-out" type="button" aria-label="Zoom 3D view out">−</button></div>
+        <p class="concept-scene-gesture">Drag to orbit · scroll to zoom · Shift + drag to pan</p>
+      </div>
+      <aside id="concept-scene-info" class="concept-scene-info"><span id="concept-scene-verdict" class="concept-scene-verdict"></span><h3 id="concept-scene-mode-label">Proposed concept</h3><p id="concept-scene-mode-note"></p>
+        <dl id="concept-scene-metrics" class="concept-scene-metrics"></dl><p id="concept-scene-saved" class="concept-scene-fineprint"></p>
+        <h3>Scene basis</h3><p id="concept-scene-context-note"></p><ul id="concept-scene-assumptions"></ul>
+        <details><summary>Source &amp; coordinate details</summary><p id="concept-scene-coordinates"></p><ul id="concept-scene-sources"></ul></details>
+      </aside>
+    </div>
+    <footer class="concept-scene-footer"><p id="concept-scene-status" role="status">The scene opens only when requested.</p><button id="concept-scene-retry" type="button" hidden>Retry 3D view</button><span>Illustrative materials and heights · no scan alignment</span></footer>
+  </dialog>
+
   <dialog id="site-view-dialog" class="site-view-dialog" aria-labelledby="site-view-title" aria-describedby="site-view-description">
     <header class="site-view-header">
-      <div><span class="section-label">EXISTING SITE VIEW · MATTERPORT</span><h2 id="site-view-title">Selected property</h2><p id="site-view-tour-title"></p></div>
+      <div><span class="section-label">EXISTING PROPERTY TOUR · MATTERPORT</span><h2 id="site-view-title">Selected property</h2><p id="site-view-tour-title"></p></div>
       <button id="site-view-close" type="button" class="site-view-close" aria-label="Close existing-site walkthrough" autofocus>Close <span aria-hidden="true">×</span></button>
     </header>
     <div class="site-view-toolbar">
-      <div><label for="site-view-tour-choice">Linked tour</label><select id="site-view-tour-choice" aria-label="Linked tour"></select></div>
-      <div class="site-view-modes" role="group" aria-label="Walkthrough view">
-        <button type="button" id="site-view-existing" aria-pressed="true">Existing</button>
-        <button type="button" id="site-view-proposed" aria-pressed="false" aria-describedby="site-view-description" disabled>Proposed · unavailable</button>
-      </div>
+      <div id="site-view-tour-picker"><label id="site-view-tour-label" for="site-view-tour-choice">Linked tours</label><select id="site-view-tour-choice" aria-label="Linked tour"></select></div>
       <a id="site-view-external" target="_blank" rel="noopener noreferrer">Open Matterport in a new tab ↗</a>
     </div>
-    <p id="site-view-description" class="site-view-description">Existing-site walkthrough only. A proposed view requires a supported 2D design and verified alignment to this scan. No proposed geometry is displayed.</p>
+    <p id="site-view-description" class="visually-hidden">A tour of the existing property. No proposed design is shown.</p>
     <div class="site-view-load-state"><p id="site-view-status" role="status">The viewer opens only when requested.</p><button id="site-view-retry" type="button" disabled>Retry viewer</button></div>
     <div id="site-view-stage" class="site-view-stage" aria-label="Existing-site Matterport walkthrough"></div>
-    <footer class="site-view-footer"><p id="site-view-source"></p><details><summary>Coverage &amp; source limits</summary><ul id="site-view-limitations"></ul><p>Property association does not verify intervention coverage, a usable comparison viewpoint, or alignment with the map.</p></details></footer>
+    <footer class="site-view-footer"><p id="site-view-source"></p><details><summary>Coverage &amp; source limits</summary><ul id="site-view-limitations"></ul><p>Existing property only. A proposed view would need a supported 2D design and verified alignment to this scan. Property association does not verify intervention coverage, a usable comparison viewpoint, or alignment with the map.</p></details></footer>
   </dialog>
 </body>
 </html>

@@ -10,7 +10,8 @@ const good=()=>{
     limitations:['Scan capture date is not established.','Intervention coverage and map registration are unverified.']};
 };
 function harness({selected=true}={}) {
-  const elements=new Map(),requests=[],frames=[],selections=[];
+  const elements=new Map(),requests=[],frames=[],selections=[],timers=new Map();
+  let timerId=0;
   const document={activeElement:null};
   const element=tag=>({tag,events:{},children:[],attributes:{},disabled:false,hidden:false,open:false,isConnected:true,textContent:'',
     addEventListener(name,handler){this.events[name]=handler;},
@@ -24,11 +25,11 @@ function harness({selected=true}={}) {
   const map={handlers:{},on(name,handler){(this.handlers[name]??=[]).push(handler);},fire(name,event){for(const handler of this.handlers[name]??[])handler(event);}};
   const json=(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject}));
   const selectProperty=property=>{selections.push(property);map.fire('plannersite',{siteId:'property:'+property.id,property,workflow:'street'});};
-  $('site-view-proposed').disabled=true;
   $('open-site-view').focus();
-  vm.runInNewContext(source,{$,map,json,selectProperty,planningMode:'street',document,URL,AbortController});
+  vm.runInNewContext(source,{$,map,json,selectProperty,planningMode:'street',document,URL,AbortController,
+    setTimeout(fn,delay){const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout(id){timers.delete(id);}});
   if(selected)map.fire('plannersite',{siteId:'property:6067080',property:good().property,workflow:'street'});
-  return{$,map,document,requests,frames,selections};
+  return{$,map,document,requests,frames,selections,timers};
 }
 const flush=()=>new Promise(setImmediate);
 async function open(h,descriptor=good()) {
@@ -44,9 +45,8 @@ async function open(h,descriptor=good()) {
   assert.equal(h.requests[0].url,'/api/site-view?propertyId=6067080');assert.equal(h.selections.length,0);
   assert.equal(h.$('site-view-dialog').open,true);assert.equal(h.document.activeElement,h.$('site-view-close'));
   assert.equal(frame.src,good().scan.url);assert.match(frame.title,/510 E Olympic/);
-  assert.equal(h.$('site-view-proposed').disabled,true);
   assert.match(h.$('site-view-source').textContent,/CoStar/);
-  frame.events.load();assert.match(h.$('site-view-status').textContent,/If it is blank or unavailable/);
+  frame.events.load();assert.match(h.$('site-view-status').textContent,/If the tour is blank or unavailable/);
   assert.equal(frame.attributes.allow,'fullscreen');
   assert.doesNotMatch(h.$('site-view-status').textContent,/verified loaded|coverage confirmed/i);
   let prevented=false;h.$('site-view-dialog').events.cancel({preventDefault(){prevented=true;}});
@@ -60,7 +60,7 @@ async function open(h,descriptor=good()) {
 // embedding external content; a backend error remains retryable.
 for(const change of [
   d=>{d.property.id='other';},d=>{d.status='invalid';},d=>{d.property.lat=Infinity;},
-  d=>{d.scan.exteriorHint=false;},d=>{d.scan.modelId='wrong';},d=>{d.scan.url='http://my.matterport.com/show/?m=35LT5s1GSfA';},
+  d=>{d.scan.modelId='wrong';},d=>{d.scan.url='http://my.matterport.com/show/?m=35LT5s1GSfA';},
   d=>{d.scan.url='https://my.matterport.com.evil.example/show/?m=35LT5s1GSfA';},
   d=>{d.scan.url='https://my.matterport.com@evil.example/show/?m=35LT5s1GSfA';},
   d=>{d.scan.url='https://user@my.matterport.com/show/?m=35LT5s1GSfA';},
@@ -114,7 +114,6 @@ for(const event of [
   assert.doesNotMatch(h.$('site-view-entry-status').textContent,/Checking/,'canceled metadata must not retain a loading message');
   const active=harness(),frame=await open(active);active.map.fire(...event);
   assert.equal(active.$('site-view-dialog').open,false);assert.equal(frame.src,undefined);
-  assert.equal(active.$('site-view-proposed').disabled,true);
 }
 {
   const h=harness({selected:false});await h.$('open-site-view').events.click();
@@ -138,3 +137,93 @@ console.log('PASS: site-view descriptor validation, user initiation, focus/close
   assert.equal(h.$('site-view-dialog').open,false);
   assert.match(h.$('site-view-entry-status').textContent,/No verified tour/);
 }
+
+// Coverage hints describe tours; they do not determine whether a verified
+// property tour can open. Missing optional metadata has a neutral fallback.
+for (const contextLabel of ['Interior','Amenity','Unspecified']) {
+  const h=harness(),d=good();
+  d.scan.exteriorHint=false;d.scan.contextLabel=contextLabel;d.scan.title=contextLabel==='Unspecified'?null:'Pool';
+  d.scan.attachmentDate='invalid date';
+  const frame=await open(h,d);
+  assert.equal(frame.src,d.scan.url);
+  assert.equal(h.$('site-view-dialog').open,true);
+  assert.match(h.$('site-view-tour-label').textContent,/\(1\)/);
+  assert.equal(h.$('site-view-tour-choice').disabled,true);
+  assert.doesNotMatch(h.$('site-view-source').textContent,/Invalid Date/);
+  assert.doesNotMatch(h.$('site-view-tour-title').textContent,/title hint|·/,'a single tour shows its plain title');assert.ok(h.$('site-view-tour-title').textContent);
+  assert.equal(h.$('site-view-tour-picker').hidden,true,'no selector for one tour');
+  assert.match(h.$('site-view-limitations').children[0].textContent,contextLabel==='Unspecified'?/Coverage unspecified/:new RegExp('tour title: '+contextLabel.toLowerCase()),'inferred coverage is a source limit');
+  h.$('site-view-close').events.click();
+  assert.equal(h.timers.size,0);
+}
+
+// One invalid record (even the proposed default) cannot hide the remaining
+// property-associated tours. No invalid model URL reaches an iframe.
+{
+  const h=harness(),d=good(),valid=d.scan;
+  d.scan={...valid,modelId:'invalid',url:'javascript:alert(1)'};
+  d.scans=[null,d.scan,valid,{...valid}];
+  const frame=await open(h,d);
+  assert.equal(frame.src,valid.url);
+  assert.equal(h.frames.length,1);
+  assert.match(h.$('site-view-entry-status').textContent,/1 linked tour.*Some tour records/);
+  assert.equal(h.$('site-view-tour-choice').children.length,1);
+}
+
+// A local property list has no arbitrary 100-tour eligibility cutoff.
+{
+  const h=harness(),d=good();
+  d.scans=Array.from({length:101},(_,i)=>{
+    const modelId=String(i).padStart(11,'0');
+    return {...d.scan,modelId,url:'https://my.matterport.com/show/?m='+modelId};
+  });
+  d.scan=d.scans[100];await open(h,d);
+  assert.equal(h.$('site-view-tour-choice').children.length,101);
+  const labels=h.$('site-view-tour-choice').children.map(option=>option.textContent);
+  assert.equal(new Set(labels).size,101,'tours sharing a title are numbered, never listed as identical entries');
+  assert.match(labels[0],/ 1$/);assert.match(labels[100],/ 101$/);
+  assert.equal(h.$('site-view-tour-choice').disabled,false);
+  assert.equal(h.$('site-view-tour-choice').value,d.scan.modelId);
+}
+
+// A slow iframe gets a helpful fallback without asserting cross-origin
+// playback success. Retry, switching, load and close cancel obsolete timers.
+{
+  const h=harness(),d=good();
+  d.scans.push({...d.scan,modelId:'abcdefghijk',title:'Fitness Center',contextLabel:'Amenity',exteriorHint:false,url:'https://my.matterport.com/show/?m=abcdefghijk'});
+  const first=await open(h,d),slow=[...h.timers.values()][0];
+  assert.equal(slow.delay,12000);slow.fn();
+  assert.match(h.$('site-view-status').textContent,/taking longer/);
+  assert.equal(h.$('site-view-retry').disabled,false);
+  assert.equal(h.$('site-view-external').href,d.scan.url);
+  h.$('site-view-retry').events.click();
+  assert.equal(h.timers.size,1);
+  const retried=h.frames.at(-1),loading=h.$('site-view-status').textContent;
+  slow.fn();assert.equal(h.$('site-view-status').textContent,loading);
+  assert.equal(first.src,undefined);
+  retried.events.load();assert.equal(h.timers.size,0);
+  assert.doesNotMatch(h.$('site-view-status').textContent,/playback verified|successfully loaded/i);
+  h.$('site-view-tour-choice').events.change({target:{value:'abcdefghijk'}});
+  assert.equal(h.timers.size,1);assert.equal(retried.src,undefined);
+  assert.equal(h.$('site-view-tour-title').textContent,'','the selector already names the chosen tour');assert.equal(h.$('site-view-tour-picker').hidden,false);
+  assert.match(h.$('site-view-limitations').children[0].textContent,/tour title: amenity/);
+  const stale=[...h.timers.values()][0];
+  h.map.fire('plannersite',{siteId:'property:other',property:{...d.property,id:'other'},workflow:'street'});
+  assert.equal(h.timers.size,0);assert.equal(h.$('site-view-dialog').open,false);
+  const current=h.$('site-view-status').textContent;stale.fn();assert.equal(h.$('site-view-status').textContent,current);
+}
+console.log('PASS: all associated tour contexts, individual-record isolation, optional metadata, tour counts and slow-viewer recovery');
+
+// Valid tours remain accessible alongside explicit source-association gaps.
+{
+  const h=harness(),d=good();
+  d.excludedTourCount=2;
+  d.exclusions=[{reason:'missing_attachment',count:2,message:'No matching property attachment confirms these links.'},null,{count:'bad',message:'Do not display'}];
+  await open(h,d);
+  assert.equal(h.$('site-view-dialog').open,true);
+  assert.match(h.$('site-view-entry-status').textContent,/1 linked tour.*2 additional tour links could not be verified/);
+  const notes=h.$('site-view-limitations').children.map(child=>child.textContent).join(' ');
+  assert.match(notes,/2 tour links omitted: No matching property attachment/);
+  assert.doesNotMatch(notes,/Do not display/);
+}
+console.log('PASS: partial association exclusions remain visible alongside playable tour choices');

@@ -128,6 +128,45 @@ class StormwaterWorkspaceTest(unittest.TestCase):
             store.finish(project['id'], 'a' * 32, {'proposal': design(), 'analysisError': 'failed'}, 'failed')
             self.assertEqual(store.get(project['id'])['designHistory'], [])
 
+    def test_saved_publication_time_survives_duplicate_runs_edits_and_failures(self):
+        from unittest.mock import patch
+        from test_traffic_workspace import snapshot as traffic_snapshot, publication
+        first_time, duplicate_time, second_time, failure_time = (
+            f'2026-11-15T10:0{minute}:00+00:00' for minute in range(4))
+        for make_snapshot, make_result, history_key in (
+            (snapshot, lambda revision: {'proposal': design(revision)}, 'designHistory'),
+            (traffic_snapshot, publication, 'trafficDesignHistory'),
+        ):
+            with self.subTest(workflow=make_snapshot()['workflow']), tempfile.TemporaryDirectory() as directory:
+                store = ProjectStore(directory)
+                first = make_result(1)
+                with patch('project_store.now', return_value=first_time):
+                    project = store.save(make_snapshot())
+                    store.begin(project['id'], project['version'], 'a' * 32)
+                    store.finish(project['id'], 'a' * 32, first, 'ready')
+                self.assertNotIn('savedAt', first, 'a newly published live result is not a replay')
+                self.assertEqual(store.get(project['id'])['result']['savedAt'], first_time)
+                with patch('project_store.now', return_value=duplicate_time):
+                    store.begin(project['id'], project['version'], 'b' * 32)
+                    store.finish(project['id'], 'b' * 32, make_result(1), 'ready')
+                self.assertEqual(store.get(project['id'])['result']['savedAt'], first_time)
+                with patch('project_store.now', return_value=second_time):
+                    project = store.save(make_snapshot(2), project['id'], project['version'])
+                    store.begin(project['id'], project['version'], 'c' * 32)
+                    store.finish(project['id'], 'c' * 32, make_result(2), 'ready')
+                restored = ProjectStore(directory).get(project['id'])
+                self.assertEqual(restored['result']['savedAt'], second_time)
+                self.assertEqual(restored['result'][history_key][0]['savedAt'], first_time)
+                with patch('project_store.now', return_value=failure_time):
+                    project = store.save(make_snapshot(3), project['id'], project['version'])
+                    self.assertEqual(project['result']['savedAt'], second_time)
+                    self.assertNotEqual(project['updated'], project['result']['savedAt'])
+                    store.begin(project['id'], project['version'], 'd' * 32)
+                    store.finish(project['id'], 'd' * 32, {'analysisError': 'Provider unavailable'}, 'failed')
+                restored = ProjectStore(directory).get(project['id'])
+                self.assertNotIn('savedAt', restored['result'])
+                self.assertEqual([entry['savedAt'] for entry in restored[history_key]], [first_time, second_time])
+
 
 if __name__ == '__main__':
     unittest.main()

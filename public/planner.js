@@ -91,9 +91,10 @@
 
   function showProject(record = site?.[workflow]) {
     const value = record?.project?.value;
-    $("project-status").textContent = record?.saveError || (value
-      ? `Saved locally · revision ${value.version} · ${value.status.replaceAll('_',' ')}${record.stale ? ' · inputs changed' : ''}`
-      : "Site, brief and constraints save locally as you work.");
+    $("project-status").textContent = record?.saveError || (value ? `Saved locally${record.stale ? ' · inputs changed' : ''}` : "");
+    // Internal revision and state are project details, not the everyday save status.
+    $("project-detail").textContent = value ? `Project revision ${value.version} · ${value.status.replaceAll('_',' ')}` : "";
+    $("project-files").hidden = !value?.artifacts?.length;
     $("run-site-analysis").textContent = value?.result ? "Continue project" : "Analyze site";
     const list = $("project-file-list"); list.replaceChildren();
     $("project-file-count").textContent = value?.artifacts?.length ? `· ${value.artifacts.length}` : "";
@@ -160,7 +161,29 @@
 
   function restoreResult(selected, mode, value) {
     const record=selected[mode], result=value.result;
+    const stopped=Boolean(result?.analysisError) || ['canceled','interrupted','failed'].includes(value.status);
+    const stoppedMessage='The previous run stopped. Saved constraints and retrieved evidence are available; continue when ready.';
     record.activity=value.events ?? [];
+    const restorePreviousWater=()=>{
+      if(mode!=='water')return;
+      const history=(value.designHistory ?? result?.designHistory ?? []).filter(entry=>{
+        const proposal=entry.proposal, inputRevision=entry.inputRevision ?? proposal?.input_revision;
+        return proposal?.site_id===selected.key && proposal.workflow==='water' && !proposal.development_fixture &&
+          Number.isInteger(entry.revision) && entry.revision>=1 && entry.revision===proposal.revision &&
+          entry.revision<=(record.proposalRevision ?? 0) && Number.isInteger(inputRevision) && inputRevision>=0 &&
+          inputRevision===proposal.input_revision && inputRevision<=(record.revision ?? 0);
+      });
+      const saved=[...history].sort((a,b)=>b.revision-a.revision)[0];
+      if(!saved)return;
+      record.stale=true;
+      record.evidenceError=[record.evidenceError,'The earlier stormwater concept remains available below as a saved reference; this attempt did not update it.'].filter(Boolean).join(' ');
+      // Keep historical source IDs readable without linking them to the failed
+      // attempt's newer evidence ledger.
+      map.fire('plannerrestore',{projectId:value.id,siteId:selected.key,workflow:mode,
+        inputRevision:saved.inputRevision ?? saved.proposal.input_revision,revision:saved.revision,
+        proposal:saved.proposal,alternatives:saved.alternatives ?? {},waterPlan:saved.waterPlan,
+        designHistory:history,savedAt:saved.savedAt,restored:true,historicalReference:true});
+    };
     const restorePreviousTraffic=()=>{
       if(mode!=='street')return;
       const history=value.trafficDesignHistory ?? result?.trafficDesignHistory ?? [];
@@ -178,40 +201,42 @@
       })}:null;
       record.stale=true;
       record.evidenceError=[record.evidenceError,'Earlier evaluated layouts remain available below as a saved reference; this attempt did not update them.'].filter(Boolean).join(' ');
-      map.fire('plannerrestore',{siteId:selected.key,workflow:mode,
+      map.fire('plannerrestore',{projectId:value.id,siteId:selected.key,workflow:mode,
         inputRevision:saved.inputRevision ?? saved.comparison.input_revision,revision:saved.revision,
         proposal:saved.proposal,comparison:saved.comparison,alternatives:saved.alternatives ?? {},trafficPlan:plan,
-        trafficDesignHistory:history});
+        trafficDesignHistory:history,savedAt:saved.savedAt,restored:true,historicalReference:true});
     };
+    const restorePrevious=()=>mode==='water'?restorePreviousWater():restorePreviousTraffic();
     if (result) {
       Object.assign(record,{evidence:result.evidence,report:result.report,facts:result.facts ?? [],
         synthesisWarning:result.synthesisWarning || '',
-        sourceWarnings:result.sourceWarnings ?? [],sourceStatus:result.sourceStatus,evidenceError:result.analysisError || result.resumeNotice || '',
-        stale:value.resultVersion !== value.version || Boolean(result.analysisError)});
+        sourceWarnings:result.sourceWarnings ?? [],sourceStatus:result.sourceStatus,evidenceError:result.analysisError || result.resumeNotice || (stopped?stoppedMessage:''),
+        stale:value.resultVersion !== value.version || stopped});
       if(result.hydrology) applyHydrology(selected.water,result.hydrology);
-      if(value.resultVersion === value.version && !result.analysisError && (result.proposal || result.comparison || result.draftQuestion))
-        map.fire('plannerresult',{siteId:selected.key,workflow:mode,inputRevision:record.revision ?? 0,
+      if(value.resultVersion === value.version && !stopped && (result.proposal || result.comparison || result.draftQuestion))
+        map.fire('plannerresult',{projectId:value.id,siteId:selected.key,workflow:mode,inputRevision:record.revision ?? 0,
           revision:record.proposalRevision,proposal:result.proposal,comparison:result.comparison,
-          alternatives:result.alternatives ?? {},draftQuestion:result.draftQuestion,waterPlan:result.waterPlan,designHistory:result.designHistory ?? value.designHistory ?? [],
-          trafficPlan:result.trafficPlan,trafficDesignHistory:result.trafficDesignHistory ?? value.trafficDesignHistory ?? []});
-      else if(mode==='water' && result.proposal) map.fire('plannerrestore',{
-        siteId:selected.key,workflow:mode,inputRevision:result.proposal.input_revision,revision:result.proposal.revision,
+          alternatives:result.alternatives ?? {},draftQuestion:result.draftQuestion,waterPlan:result.waterPlan,designHistory:value.designHistory ?? result.designHistory ?? [],
+          trafficPlan:result.trafficPlan,trafficDesignHistory:value.trafficDesignHistory ?? result.trafficDesignHistory ?? [],
+          savedAt:result.savedAt,restored:true});
+      else if(mode==='water' && !stopped && result.proposal) map.fire('plannerrestore',{
+        projectId:value.id,siteId:selected.key,workflow:mode,inputRevision:result.proposal.input_revision,revision:result.proposal.revision,
         proposal:result.proposal,alternatives:result.alternatives ?? {},waterPlan:result.waterPlan,
-        designHistory:result.designHistory ?? value.designHistory ?? []});
-      else if(mode==='street' && !result.analysisError && result.comparison) map.fire('plannerrestore',{
-        siteId:selected.key,workflow:mode,inputRevision:result.comparison.input_revision,revision:result.comparison.revision,
+        designHistory:value.designHistory ?? result.designHistory ?? [],savedAt:result.savedAt,restored:true});
+      else if(mode==='street' && !stopped && result.comparison) map.fire('plannerrestore',{
+        projectId:value.id,siteId:selected.key,workflow:mode,inputRevision:result.comparison.input_revision,revision:result.comparison.revision,
         proposal:result.proposal,comparison:result.comparison,alternatives:result.alternatives ?? {},trafficPlan:result.trafficPlan,
-        trafficDesignHistory:result.trafficDesignHistory ?? value.trafficDesignHistory ?? []});
-      else if(result.analysisError)restorePreviousTraffic();
+        trafficDesignHistory:value.trafficDesignHistory ?? result.trafficDesignHistory ?? [],savedAt:result.savedAt,restored:true});
+      else if(stopped)restorePrevious();
     } else {
       const facts = new Map();
       for (const event of record.activity) for (const fact of event.facts ?? []) facts.set(fact.id,fact);
       record.facts=[...facts.values()];
-      if (['canceled','interrupted','failed'].includes(value.status)) {
-        record.evidenceError='The previous run stopped. Saved constraints and retrieved evidence are available; continue when ready.';
+      if (stopped) {
+        record.evidenceError=stoppedMessage;
         record.stale=true;
       }
-      restorePreviousTraffic();
+      restorePrevious();
     }
     showEvidence(); showRainfall(); showProject(record);
   }
@@ -566,6 +591,7 @@
     const controller = new AbortController();
     const run = {record, controller}; activeAnalysis = run;
     try {
+      map.fire('plannerinvestigation',{siteId:selected.key,workflow:mode,inputRevision:revision,revision:proposalRevision});
       renderSafely(record, showEvidence);
       const saved = await saveProject(selected,mode);
       if(activeAnalysis !== run || controller.signal.aborted) return;
@@ -612,7 +638,7 @@
       // A changed site or marking must never publish geometry from an older run.
       if (site === selected && workflow === mode && (record.revision ?? 0) === revision &&
           !result.analysisError && (result.proposal || result.comparison || result.draftQuestion)) {
-        map.fire("plannerresult", {siteId:selected.key, workflow:mode, inputRevision:revision,
+        map.fire("plannerresult", {projectId:saved.id,siteId:selected.key, workflow:mode, inputRevision:revision,
           revision:proposalRevision, proposal:result.proposal ?? null, comparison:result.comparison ?? null,
           alternatives:result.alternatives ?? {}, draftQuestion:result.draftQuestion ?? null,
           waterPlan:result.waterPlan,designHistory:result.designHistory ?? [],trafficPlan:result.trafficPlan,
@@ -657,7 +683,7 @@
     picking = enabled;
     const button = $("pick-site");
     button.setAttribute("aria-pressed", String(enabled));
-    button.textContent = enabled ? "Cancel site selection" : site ? "Choose another site on the map" : "Pick a site on the map";
+    button.textContent = enabled ? "Cancel site selection" : site ? "Change site" : "Pick a site on the map";
     mapHint(enabled ? "Click the map to select a site" : "");
   }
 
@@ -912,7 +938,6 @@
     showProject();
     showWaterSettings();
     $("project-file-preview").hidden=true;
-    $("traffic-design-guide").hidden = workflow !== "street";
     $("water-tools").hidden = workflow !== "water";
     renderDiscoveryContext(site?.[workflow]?.discovery);
     $("run-site-analysis").disabled = !site || Boolean(site.identityPending || site[workflow].evidencePending);
@@ -958,10 +983,11 @@
     $("site-card").hidden = false;
     $("site-tools").hidden = false;
     $("site-name").textContent = property?.name ?? "Map location";
-    $("site-location").textContent = [property?.address, `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`].filter(Boolean).join(" · ");
+    $("site-location").textContent = property?.address || `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`;
     $("site-property").textContent = property?.type ?? "";
     $("site-resolution-candidates").replaceChildren();
-    $("site-resolution-status").textContent = site.identity?.message ?? (property ? "Selected CoStar property." : "Checking the mapped parcel and nearby properties…");
+    // The named card is the confirmation of a match; only unresolved states need a message.
+    $("site-resolution-status").textContent = property ? "" : site.identity?.message ?? "Checking the mapped parcel and nearby properties…";
     $("retry-site-resolution").hidden = Boolean(property);
     siteLayer.clearLayers();
     L.circleMarker(center, { radius: 8, weight: 2, color: "#fff", fillColor: "#a7e5a3",
@@ -1021,8 +1047,8 @@
       selected.property = property;
       selected.identity = value;
       $("site-name").textContent = property?.name ?? "Map location";
-      $("site-location").textContent = [property?.address, `${selected.center.lat.toFixed(5)}, ${selected.center.lng.toFixed(5)}`].filter(Boolean).join(" · ");
-      $("site-resolution-status").textContent = value.message;
+      $("site-location").textContent = property?.address || `${selected.center.lat.toFixed(5)}, ${selected.center.lng.toFixed(5)}`;
+      $("site-resolution-status").textContent = property ? "" : value.message;
       $("site-resolution-candidates").replaceChildren();
       for (const candidate of value.candidates ?? []) {
         const button = document.createElement("button"); button.type = "button";
@@ -1156,7 +1182,7 @@
       showWorkflow();
       refreshProjects();
       map.fire("plannersite", site ? { siteId: site.key, center: site.center, workflow, property:site.property, inputRevision: site[workflow].revision ?? 0 } : { workflow });
-      setStatus(site ? "" : "Search for a property or pick any covered location.");
+      setStatus(site ? "" : "Search for a property or select a location on the map.");
       if (site) $("site-card").scrollIntoView({ block: "start" });
     } else {
       overlays.remove();

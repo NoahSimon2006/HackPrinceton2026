@@ -62,7 +62,7 @@ class SiteApiTest(unittest.TestCase):
         self.assertEqual(analyze.call_args.kwargs["scenario"], scenario)
         self.assertEqual(analyze.call_args.kwargs["lon"], LON)
         self.assertEqual(analyze.call_args.kwargs["analysis_identity"],{"site_id":"api-test-site","revision":1,"input_revision":0})
-        self.assertEqual(analyze.call_args.kwargs["ranking_policy"],"strict-v1")
+        self.assertEqual(analyze.call_args.kwargs["ranking_policy"],"environmental-priority-v1")
 
     def test_invalid_inputs_do_not_reach_model(self):
         with patch("site_agent.analyze_site") as analyze:

@@ -8,8 +8,17 @@
   function expand(open) {
     $('discovery-body').hidden=!open;
     $('discovery-collapse').setAttribute('aria-expanded',String(open));
-    $('discovery-collapse').textContent=open?'Hide layers':'Show layers';
+    $('discovery-collapse').textContent=open?'Collapse':'Expand';
+    $('discovery-collapse').setAttribute('aria-label',open?'Collapse map layers':'Expand map layers');
   }
+  const flowLayer=layer=>['flow','approaches'].includes(layer?.id);
+  // The dropdown must not keep calling an expired or failed layer usable.
+  const optionText=layer=>layer.label+(usable(layer)?layer.status==='partial'?' · partial':'':layer.status==='expired'?' · expired':' · unavailable');
+  const options=[];
+  // Show source timestamps as a local clock time; the full value stays in Layer details.
+  const shortTime=text=>String(text ?? '').replace(/\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d)/g,stamp=>{
+    const date=new Date(stamp);return Number.isFinite(date.getTime())?date.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):stamp;
+  });
   function currentLayer() { return data?.layers.find(layer=>layer.id===picker.value); }
   const usable=layer=>['ready','partial'].includes(layer?.status);
   function valueText(feature,layer) {
@@ -24,9 +33,34 @@
     if(!flow || !data.flow_expires_epoch || Date.now()/1000<data.flow_expires_epoch)return;
     const version=flow.version;
     for(const layer of data.layers.filter(x=>['flow','approaches'].includes(x.id))) {layer.status='expired';layer.features=[];layer.error='This snapshot expired. Refresh current traffic.';}
-    $('discovery-freshness').textContent='Traffic snapshot expired; refresh to inspect current conditions.';
+    // One expiry message, in the status line; the freshness note no longer applies.
+    $('discovery-freshness').hidden=true;
+    for(const [option,layer] of options)option.textContent=optionText(layer);
     if(['flow','approaches'].includes(picker.value))render();
     map.fire('discoveryexpired',{version});
+  }
+  // The key is drawn, not written: swatches in the map's own colours. Exact
+  // thresholds and units live in Layer details.
+  function paintLegend(layer) {
+    const legend=$('discovery-legend');legend.replaceChildren();
+    const node=(tag,className,style,text)=>{const item=document.createElement(tag);if(className)item.className=className;
+      if(style)item.setAttribute('style',style);if(text)item.textContent=text;return item;};
+    const key=(style,label,shape='')=>{const item=node('span','legend-key');item.append(node('i',shape,style),node('span','','',label));return item;};
+    if(flowLayer(layer)) {
+      const scale=node('span','legend-scale');
+      for(const shade of ['#fa7869','#f7b357','#f2d77a','#74d5b0'])scale.append(node('i','',`background:${shade}`));
+      const ends=node('span','legend-ends');ends.append(node('span','','','Slow'),node('span','','','Free flow'));
+      legend.append(scale,ends,key('background:#d783eb','Closed','line'));
+      legend.setAttribute('aria-label','Road colour shows current speed, from red for slow to green for free flow. Purple roads are closed.');
+      return;
+    }
+    legend.setAttribute('aria-label','Map key');
+    if(layer.id==='terrain')legend.append(key('background:#65e3e9','Downhill path','line'),key('background:#f2c36b','Collection point','dot'));
+    else if(layer.id==='rainfall')legend.append(key('background:#72bcf5','Design rainfall depth (inches)'));
+    else if(layer.id==='properties')legend.append(key('background:#e9b6ef','Property','dot'));
+    else if(layer.id==='surfaces')legend.append(key('background:#c7beff','Parcel'),key('background:#b7df8c','Building'));
+    else if(layer.legend)legend.append(node('span','','',layer.legend));
+    else legend.append(key('border-color:#90c7f0','County catchment','dashed'));
   }
   function focusPilot() {
     if(!data)return;
@@ -72,13 +106,16 @@
     const layer=currentLayer();
     if(!layer) {
       choices.set(mode,'off');featurePicker.disabled=true;
-      $('discovery-status').textContent='Discovery layer hidden.';
-      $('discovery-legend').textContent='';$('discovery-limit').textContent='';return;
+      $('discovery-status').textContent='No overlay shown.';
+      $('discovery-legend').textContent='';$('discovery-limit').textContent='';$('discovery-count').textContent='';return;
     }
     choices.set(mode,layer.id);
-    $('discovery-legend').textContent=['flow','approaches'].includes(layer.id)?'Green ≥90% · yellow 70–90% · amber 40–70% · red <40% of free-flow speed':layer.id==='terrain'?'↘ Cyan · downhill paths   ● Gold · unresolved collection candidates':layer.id==='rainfall'?'▧ Blue · design rainfall depth, inches':layer.id==='properties'?'● CoStar reported property locations and uses':layer.id==='surfaces'?'▧ Purple · parcels   Green · mapped buildings':layer.legend || '▧ Dashed blue · county catchment context';
-    $('discovery-limit').textContent=['flow','approaches'].includes(layer.id)?'One snapshot of surface-street conditions. Gaps are unknown; traffic volume and emissions are not measured. Select a road for its speed and free-flow comparison.':layer.id==='terrain'?'Select a path or collection point to see the terrain area feeding it. Actual drains, flooding and runoff capture remain unverified.':layer.limitations;
-    $('discovery-status').textContent=usable(layer)?`${layer.features.length} ${layer.features.length===1?'feature':'features'} · ${layer.period}${layer.status==='partial'?' · Partial coverage; some records could not be validated.':''}`:layer.status==='empty'?'No source features returned for this pilot.':`${layer.label} unavailable. ${layer.error || 'Rebuild the source snapshot.'}`;
+    paintLegend(layer);
+    $('discovery-limit').textContent=['flow','approaches'].includes(layer.id)?'Colour is current speed as a share of free-flow speed: red under 40%, amber 40–70%, yellow 70–90%, green 90% or more; purple is a closed road. One snapshot of surface-street conditions. Gaps are unknown; traffic volume and emissions are not measured. Select a road for its speed and free-flow comparison.':layer.id==='terrain'?'Select a path or collection point to see the terrain area feeding it. Actual drains, flooding and runoff capture remain unverified.':layer.limitations;
+    $('discovery-status').textContent=usable(layer)?`${layer.id==='terrain'?'Terrain estimate · ':''}${shortTime(layer.period)}${layer.status==='partial'?' · Partial coverage':''}`
+      :layer.status==='expired'?'Traffic expired. Refresh to update.'
+      :layer.status==='empty'?'No source features returned for this pilot.':`${layer.label} unavailable. ${layer.error || 'Rebuild the source snapshot.'}`;
+    $('discovery-count').textContent=usable(layer)?`${layer.features.length} ${layer.features.length===1?'feature':'features'} · ${layer.period}${layer.status==='partial'?' · Partial coverage; some records could not be validated.':''}`:'';
     featurePicker.disabled=!usable(layer);
     if(!usable(layer))return;
     L.geoJSON({type:'FeatureCollection',features:layer.features},{pane:'discovery',
@@ -107,8 +144,9 @@
     overlay.remove();overlay.clearLayers();
     picker.disabled=true;featurePicker.disabled=true;
     $('discovery-status').textContent='Loading source-backed discovery…';
-    $('discovery-legend').textContent='';$('discovery-limit').textContent='';$('discovery-retry').hidden=true;
-    $('discovery-refresh').hidden=mode!=='street';$('discovery-refresh').disabled=true;
+    $('discovery-legend').textContent='';$('discovery-limit').textContent='';$('discovery-count').textContent='';
+    // One recovery action per state: refresh live traffic, or retry a failed load.
+    $('discovery-refresh').hidden=mode!=='street';$('discovery-refresh').disabled=true;$('discovery-refresh').textContent='Refresh traffic';
     $('discovery-freshness').hidden=true;
     try {
       const cached=cache.get(mode);
@@ -117,14 +155,15 @@
       if(request!==token)return;
       if(result.workflow!==mode || result.schema!==1 || !Array.isArray(result.layers))throw new Error('Discovery identity mismatch.');
       data=result;cache.set(mode,result);picker.replaceChildren();
-      const off=document.createElement('option');off.value='off';off.textContent='Hide discovery layer';picker.append(off);
-      for(const layer of data.layers) {const option=document.createElement('option');option.value=layer.id;option.textContent=layer.label+(usable(layer)?layer.status==='partial'?' · partial':'':' · unavailable');picker.append(option);}
+      const off=document.createElement('option');off.value='off';off.textContent='No overlay';picker.append(off);
+      options.length=0;
+      for(const layer of data.layers) {const option=document.createElement('option');option.value=layer.id;option.textContent=optionText(layer);picker.append(option);options.push([option,layer]);}
       picker.value=choices.get(mode) || data.layers.find(usable)?.id || data.layers[0]?.id;
       picker.disabled=false;overlay.addTo(map);render();
       $('discovery-refresh').disabled=false;
       if(mode==='street' && data.flow_expires_epoch) {
         $('discovery-freshness').hidden=false;
-        $('discovery-freshness').textContent=`Current estimate · refresh after ${new Date(data.flow_expires_at).toLocaleTimeString()}. Confidence and observation time unavailable.`;
+        $('discovery-freshness').textContent=`Current estimate, valid until ${new Date(data.flow_expires_at).toLocaleTimeString()}. The time shown is retrieval time; the provider supplies no confidence or observation time.`;
         expiryTimer=setTimeout(expireFlow,Math.max(1,data.flow_expires_epoch*1000-Date.now()+50));
       }
       if(changed && views.has(mode)) {
@@ -133,15 +172,13 @@
     } catch(error) {
       if(request!==token || error.name==='AbortError')return;
       $('discovery-status').textContent=`Discovery unavailable. ${error.message}`;
-      $('discovery-retry').hidden=false;
-      $('discovery-refresh').disabled=false;
+      $('discovery-refresh').hidden=false;$('discovery-refresh').disabled=false;$('discovery-refresh').textContent='Retry';
     }
   }
   picker.addEventListener('change',render);
   featurePicker.addEventListener('change',()=>{const feature=currentLayer()?.features.find(f=>f.id===featurePicker.value);if(feature)select(feature,true);});
   $('discovery-focus').addEventListener('click',focusPilot);
   $('discovery-collapse').addEventListener('click',()=>expand($('discovery-body').hidden));
-  $('discovery-retry').addEventListener('click',()=>load(mode,true));
   $('discovery-refresh').addEventListener('click',()=>load(mode,true));
   document.addEventListener?.('visibilitychange',expireFlow);
   // Back/forward restoration resumes this script instead of running startup again.

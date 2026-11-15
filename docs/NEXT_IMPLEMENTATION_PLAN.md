@@ -2,7 +2,7 @@
 
 Prepared November 14, 2026. Product decisions approved; implementation proceeds one authorized checkpoint at a time.
 
-**Current implementation:** Checkpoints 0–5 are pushed to `main` through `abf6ef3`, following `26e3639` and `3515bd1`. [Checkpoint 6 traffic design/evaluation/revision](CHECKPOINT_6_TRAFFIC_LOOP.md) is included in this release with the model reliability improvements. Environmental-first policy, named revisions and saved traffic history are implemented. A real native comparison produced three valid rejections; the formerly rate-limited native revision now completes with the same key after the model reliability fix. No eligible real traffic recommendation has been established. Desktop remains the priority; Checkpoint 7 has not started.
+**Current implementation (November 15, 2026):** Checkpoints 0–8, including the guided interface integration, are pushed to `main` through `4c29229`. [Checkpoint 8 conceptual 3D](CHECKPOINT_8_CONCEPTUAL_3D.md) is implemented and desktop-verified. The subsequently requested [detailed Hancock Terrace demonstration](DEMO_HANCOCK_FRONTAGE.md) is implemented locally and remains separate from saved agent evaluations. Current/historical stormwater and rejected-traffic scenes pass browser checks; focused harnesses cover input and publication invalidation. The viewer derives exact local-meter geometry from saved 2D designs and uses a shared comparison camera; heights and materials remain illustrative. It makes no new model or simulation calls and does not claim Matterport registration. The [desktop walkthrough](DEMO_WALKTHROUGH.md) includes the 3D inspection step. Traffic eligibility and material CoStar access evidence at Main/1st remain open gaps; desktop remains the priority.
 
 Sustainability Map will help Los Angeles urban planners and traffic engineers discover environmental improvement opportunities, choose a location, and develop an inspectable physical concept through conversation. The primary workflow begins with a goal and a map area. The agent investigates that area, presents up to three supported locations, and waits for the user to choose one before developing and evaluating designs.
 
@@ -390,7 +390,7 @@ Develop candidate-specific treatment geometry, internal alternatives, explicit e
 
 ### Checkpoint 6 Complete the traffic design loop
 
-**Implemented; live acceptance partial:** See [Checkpoint 6 verification](CHECKPOINT_6_TRAFFIC_LOOP.md). Native historical comparison, exact rejected geometry and a complete live conversational revision passed. Shared pacing/retries and compact context resolved the observed demo blockage. A live anchored scout journey and eligible recommendation remain acceptance gaps. Implementation is included in this release; those live acceptance gaps remain open.
+**Implemented; live acceptance partial:** See [Checkpoint 6 verification](CHECKPOINT_6_TRAFFIC_LOOP.md). Native historical comparison, exact rejected geometry and a complete live conversational revision passed. Shared pacing/retries and compact context resolved the observed demo blockage. The live anchored scout/evaluation/revision journey is now verified at Main/1st; an eligible recommendation remains an acceptance gap. See the [follow-up](CHECKPOINT_6_FOLLOWUP.md). The core implementation is released; the local follow-up closes the linked journey gap while the eligible-recommendation gap remains open.
 
 **Outcome:** A selected traffic opportunity yields inspectable alternatives and reproducible evaluations where supported.
 
@@ -399,6 +399,8 @@ Connect location findings to source-verified demand and valid network inputs. Ge
 **Acceptance:** Complete scout → select → design → evaluate → revise. Verify the hard gates and exact geometry/metric agreement. Demonstrate a valid failed alternative and pursue an eligible real alternative. If data or results prevent an eligible recommendation, record that release gap explicitly; a transparent rejection may still be shown in the demo.
 
 ### Checkpoint 7 Verify the core product and demonstration
+
+**Current status:** Committed and pushed as `ee07eb0`, with the documented acceptance gaps retained. The [report](CHECKPOINT_7_CORE_DEMO.md) separates fresh desktop/native checks, reused historical evidence and harness coverage. The final native scout check completed both specialists; an eligible traffic winner, material CoStar traffic-access evidence and a full narrow-screen journey remain gaps. No blanket release signoff is claimed.
 
 **Outcome:** Both workflows are usable and the sponsor/agent contributions are demonstrable.
 
@@ -409,6 +411,8 @@ Prepare a concise demo: request opportunities, choose a location, inspect the ag
 **Acceptance:** Review the walkthrough, automated results and remaining gaps. Core readiness requires useful actions and artifacts in both modes. A missing eligible traffic recommendation remains separately recorded even if the rejection demo is accepted for presentation.
 
 ### Checkpoint 8 Add conceptual 3D
+
+**Current status:** Implemented and pushed with the guided interface as `4c29229`. The subsequent Hancock Terrace demonstration is on the review branch `codex/detailed-demo-scene`. Read the [report](CHECKPOINT_8_CONCEPTUAL_3D.md) for actual browser evidence, focused geometry/lifecycle checks and explicit acceptance boundaries. Matterport remains separate until scan registration is verified.
 
 **Outcome:** The same published design can be inspected in a simple 3D scene.
 
@@ -430,7 +434,7 @@ The following are intended implementation areas, not changes made by this plan. 
 | Traffic design, evaluation and selection | [traffic_analysis.py](../traffic_analysis.py), [street_design.py](../street_design.py), [traffic_sim.py](../traffic_sim.py), [traffic_counts.py](../traffic_counts.py) |
 | Shared publication contract | [proposal.py](../proposal.py), [proposal.js](../public/proposal.js) |
 | Search area, shortlist and project UI | [index.html](../public/index.html), [planner.js](../public/planner.js), [discovery.js](../public/discovery.js), [analysis-stream.js](../public/analysis-stream.js), [app.js](../public/app.js), [styles.css](../public/styles.css) |
-| Existing tour and future scene lifecycle | [site_view.py](../site_view.py), [site-view.js](../public/site-view.js); a scene renderer at Checkpoint 8 |
+| Existing tour and conceptual scene lifecycle | [site_view.py](../site_view.py), [site-view.js](../public/site-view.js), [concept_scene.py](../concept_scene.py), [concept-scene.js](../public/concept-scene.js), [concept-scene-renderer.js](../public/concept-scene-renderer.js) |
 
 When implementation is approved, synchronize the repository's next plan, conversation handoff and README with these decisions. Keep older numbered checkpoint reports as history. Remove obsolete claims about a mandatory first site selection, no request-generated shortlist, the manual placement flow and a scan prerequisite for conceptual 3D.
 

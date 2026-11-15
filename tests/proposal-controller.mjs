@@ -110,8 +110,10 @@ assert.deepEqual(JSON.parse(JSON.stringify(activeLayer().data.features)),parity.
 const displayed=$('comparison-table').children[0].children[1].children.map(row=>row.children[1].textContent);
 assert.deepEqual(displayed,['467.1','123.5','157.8','1,233.5','67.2','32','207','76.6']);
 assert.match(text($('comparison-alternatives')),/Crossing\/driveway detection: Unavailable\. Overlapping crosswalk candidates: Not assessed\. Driveway candidates: Not assessed/);
-assert.match($('comparison-revision').textContent,/Revision 5 · inputs 0 · hash5/);
-assert.match($('proposal-revision').textContent,/Revision 5 · inputs 0 · hash5/);
+assert.match($('comparison-identity').textContent,/revision 5 · inputs 0 · hash5/);
+assert.match($('proposal-identity').textContent,/revision 5 · inputs 0 · hash5/);
+assert.equal($('comparison-revision').textContent,'Revision 5','default result copy carries no input hashes');
+assert.equal($('proposal-revision').textContent,'Revision 5');
 console.log('PASS: published metric/geometry parity and unavailable detection display');
 
 const beforeBadLayer=activeLayer(), beforeBadTable=text($('comparison-table'));
@@ -163,7 +165,7 @@ const study={siteId:'water',workflow:'water',inputRevision:1,revision:2,proposal
     scenario:{name:'County rainfall screen',drainageAssumption:'unknown'},results:[{id:'compact',label:'Compact garden',status:'selected',reason:'Fits mapped open space.'},{id:'linear',label:'Linear strip',status:'eligible',reason:'Preserves the entrance.',
       decisions:[{source:'CoStar loading',decision:'The linear footprint stays outside the loading corridor on its own host.',evidence_ids:['other-host-loading']}]}]},
     decisions:[{source:'CoStar frontage',decision:'Preserved the mapped curb-cut frontage buffer.',evidence_ids:['frontage-1']}]},
-  designHistory:[{revision:1,inputRevision:0,proposal:previous}]};
+  designHistory:[{revision:1,inputRevision:0,proposal:previous,savedAt:'2026-11-14T14:05:00+00:00'}]};
 map.fire('plannerresult',study);
 assert.equal($('water-design-review').hidden,false);
 assert.equal($('proposal-title').textContent,'Bioretention concept');
@@ -171,6 +173,7 @@ assert.match(text($('proposal-water-metrics')),/Capture Not assessed/);
 assert.match($('water-design-scenario').textContent,/Drainage connection is unknown/);
 assert.match(text($('water-design-decisions')),/CoStar frontage: Preserved/);
 assert.match(text($('water-design-decisions')),/frontage-1/);
+assert.doesNotMatch($('proposal-revision').textContent,/Saved result/,'new live results are not labeled as replay');
 $('water-design-alternatives').children[1].children.find(c=>c.textContent==='Inspect this footprint').events.click();
 assert.equal($('proposal-area').textContent,'20.0 m²');
 assert.match($('proposal-map-caption').textContent,/Alternative preview/);
@@ -188,7 +191,10 @@ $('water-design-history').children[0].events.click();
 assert.equal($('proposal-area').textContent,'12.0 m²');
 assert.match($('proposal-map-caption').textContent,/Earlier revision 1 · read-only/);
 assert.match($('water-design-scenario').textContent,/current concept is unchanged/);
+assert.match($('proposal-revision').textContent,/Saved result · published 2026-11-14 14:05:00 UTC/);
+assert.match($('water-design-scenario').textContent,/reopening does not rerun/);
 $('water-return-current').events.click();assert.equal($('proposal-area').textContent,'30.0 m²');
+assert.doesNotMatch($('proposal-revision').textContent,/Saved result/,'returning to the live result clears the history label');
 map.fire('plannerinputs',{inputRevision:2});assert.equal($('water-design-stale').hidden,false);
 map.fire('plannerresult',{...study,revision:3});assert.equal($('proposal-area').textContent,'30.0 m²','old inputs cannot publish a new study');
 const scenarioProposal=waterProposal(3,2,40);scenarioProposal.metrics[2]={...scenarioProposal.metrics[2],proposed:1.2,status:'calculated'};
@@ -199,10 +205,15 @@ select('other','water');assert.equal($('water-design-review').hidden,true);
 console.log('PASS: stormwater alternatives, separate unknown/assumed capture, source decisions, read-only history and revision isolation');
 
 select('water','water',3);
-map.fire('plannerrestore',study);
+map.fire('plannerrestore',{...study,savedAt:'2026-11-14T14:10:00+00:00',historicalReference:true});
 assert.equal($('proposal-area').textContent,'30.0 m²');
 assert.equal($('proposal-stale').hidden,false);
 assert.match($('proposal-map-caption').textContent,/saved previous result/);
+assert.match($('proposal-revision').textContent,/Saved result · published 2026-11-14 14:10:00 UTC/);
+assert.match(text($('water-design-decisions')),/frontage-1/,'historical source IDs remain readable');
+assert.doesNotMatch(text($('water-design-decisions')),/Inspect source evidence/,'a failed attempt ledger cannot inspect historical design evidence');
+map.fire('plannerrestore',{...study,savedAt:'invalid',historicalReference:true});
+assert.match($('proposal-revision').textContent,/Saved result · original publication time unavailable/);
 const next=waterProposal(3,3,60),rejected=waterProposal(3,3,15);
 const nextStudy={...study,revision:3,inputRevision:3,proposal:next,
   alternatives:{compact:waterProposal(3,3,22),linear:rejected},
@@ -214,11 +225,13 @@ assert.equal($('proposal-area').textContent,'30.0 m²','mismatched selected alte
 assert.match($('proposal-result-message').textContent,/selection and geometry mismatch/);
 nextStudy.alternatives.compact=next;map.fire('plannerresult',nextStudy);
 assert.equal($('proposal-area').textContent,'60.0 m²');
+assert.doesNotMatch($('proposal-revision').textContent,/Saved result/,'a successful live revision clears the replay notice');
+assert.doesNotMatch($('water-design-scenario').textContent,/Saved result/);
 $('water-design-alternatives').children[1].children.find(c=>c.textContent==='Inspect this footprint').events.click();
 assert.match($('proposal-kind').textContent,/rejected/);
 assert.match($('proposal-summary').textContent,/Rejected: Overlaps the protected loading entrance/);
 assert.equal(activeLayer().options.style.color,'#ffaf98');
-assert.match(text($('water-design-decisions')),/No separate sponsor decision ledger/);
+assert.match(text($('water-design-decisions')),/No separate decisions were recorded for this option/);
 assert.doesNotMatch(text($('water-design-decisions')),/Preserved the mapped curb-cut frontage buffer/,'missing alternative decisions cannot borrow the selected ledger');
 $('water-return-current').events.click();assert.equal($('proposal-area').textContent,'60.0 m²');
 map.fire('plannerrestore',{...study,siteId:'wrong'});assert.equal($('proposal-area').textContent,'60.0 m²');
@@ -233,7 +246,7 @@ latestTraffic.comparison.ranking.selection_order=['Total CO₂ reduction','Feasi
 latestTraffic.trafficPlan={revisionSummary:'Shortened the eastbound reallocation while preserving keep-clear areas.',
   readiness:{status:'partial',label:'The count cohort is reproducible; field access remains unresolved.',missing:['Confirm loading access.']},
   sourceDecisions:[{source:'Vexcel and CoStar',decision:'The eastbound footprint avoids the mapped operational frontage.',fact_id:'traffic-frontage'}]};
-latestTraffic.trafficDesignHistory=[{revision:7,inputRevision:1,proposal:null,comparison:olderTraffic.comparison,alternatives:olderTraffic.alternatives,
+latestTraffic.trafficDesignHistory=[{revision:7,inputRevision:1,savedAt:'2026-11-14T15:00:00Z',proposal:null,comparison:olderTraffic.comparison,alternatives:olderTraffic.alternatives,
   trafficPlan:{readiness:{label:'Earlier count-based evaluation.'}}}];
 map.fire('plannerresult',latestTraffic);
 assert.match($('comparison-policy').textContent,/Total CO₂ reduction → Feasibility and disruption/);
@@ -242,22 +255,33 @@ assert.match(text($('comparison-missing')),/Confirm loading access/);
 assert.match(text($('comparison-alternatives')),/Environmental result: 100 kg CO₂/);
 assert.match(text($('comparison-alternatives')),/Feasibility & disruption/);
 assert.match(text($('traffic-design-decisions')),/mapped operational frontage/);
+assert.doesNotMatch($('comparison-revision-summary').textContent,/Saved result/);
 $('traffic-design-history').children[0].events.click();
-assert.match($('comparison-revision').textContent,/Revision 7 · inputs 1 · hash7/);
+assert.match($('comparison-identity').textContent,/revision 7 · inputs 1 · hash7/);
 assert.equal($('proposal-review').hidden,true,'an earlier no-winner evaluation cannot retain the current winner overlay');
 assert.equal($('comparison-stale').hidden,true,'intentional history inspection is read-only, not a request to rerun');
 assert.match($('comparison-revision-summary').textContent,/Earlier evaluation · read-only inspection/);
+assert.match($('comparison-revision-summary').textContent,/Saved result · published 2026-11-14 15:00:00 UTC/);
+assert.match($('comparison-period').textContent,/2011-11-08/,'the observation date remains distinct from publication time');
 $('comparison-alternatives').children[1].children.find(c=>c.textContent==='Show footprint on map').events.click();
 assert.match($('proposal-map-caption').textContent,/Earlier evaluation 7 · Tested, rejected/);
+assert.match($('proposal-revision').textContent,/Saved result · published 2026-11-14 15:00:00 UTC/);
 assert.equal($('proposal-stale').hidden,true);
 $('traffic-return-current').events.click();
-assert.match($('comparison-revision').textContent,/Revision 8 · inputs 2 · hash8/);
+assert.match($('comparison-identity').textContent,/revision 8 · inputs 2 · hash8/);
 assert.equal($('proposal-kind').textContent,'Recommended');
+assert.doesNotMatch($('comparison-revision-summary').textContent,/Saved result/);
 map.fire('plannerinputs',{inputRevision:3});
-select('a','street',3);map.fire('plannerrestore',latestTraffic);
+select('a','street',3);map.fire('plannerrestore',{...latestTraffic,savedAt:'2026-11-14T15:10:00Z'});
 assert.match($('comparison-revision').textContent,/Revision 8/);
 assert.equal($('comparison-stale').hidden,false);
 assert.match($('proposal-map-caption').textContent,/saved previous result/);
+assert.match($('comparison-revision-summary').textContent,/Saved result · published 2026-11-14 15:10:00 UTC/);
+select('a','street',2);map.fire('plannerresult',{...latestTraffic,savedAt:'2026-11-14T15:10:00Z',restored:true});
+assert.match($('proposal-revision').textContent,/Saved result · published 2026-11-14 15:10:00 UTC/,'an unchanged saved result also displays the original publication time');
+map.fire('plannerinputs',{inputRevision:3});map.fire('plannerresult',result(9,3));
+assert.doesNotMatch($('proposal-revision').textContent,/Saved result/);
+assert.doesNotMatch($('comparison-revision-summary').textContent,/Saved result/);
 select('a','street',4);const firstUnavailable=result(9,4,null);
 firstUnavailable.comparison.status='unavailable';firstUnavailable.comparison.results={};firstUnavailable.comparison.ranking.reason='Verified turning demand is missing.';
 firstUnavailable.trafficPlan={readiness:{label:'Turning demand is required.',missing:['A source-verified count sheet.']}};
@@ -268,3 +292,95 @@ assert.equal($('comparison-table').hidden,true);
 assert.match($('comparison-readiness').textContent,/Turning demand is required/);
 assert.equal($('proposal-review').hidden,true);
 console.log('PASS: traffic environmental/readiness separation, whole-evaluation history, stale restoration and actionable unavailable state');
+
+// A live continuation can replace facts before publishing any geometry. Detach
+// the retained design's links immediately, including retries with unchanged inputs.
+{
+  const inspections=[];map.on('plannerinspectevidence',event=>inspections.push(event));
+  select('water','water',1);map.fire('plannerresult',study);
+  const waterButton=$('water-design-decisions').children[0].children.find(c=>c.textContent==='Inspect source evidence');
+  waterButton.events.click();assert.equal(inspections.length,1);
+  map.fire('plannerinvestigation',{siteId:'another-site',workflow:'water',inputRevision:1,revision:3});
+  map.fire('plannerinvestigation',{siteId:'water',workflow:'street',inputRevision:1,revision:3});
+  map.fire('plannerinvestigation',{siteId:'water',workflow:'water',inputRevision:0,revision:3});
+  map.fire('plannerinvestigation',{siteId:'water',workflow:'water',inputRevision:1,revision:2});
+  assert.equal(waterButton.hidden,false,'unrelated or old investigation events cannot invalidate this result');
+  const previousLayer=activeLayer();
+  map.fire('plannerinvestigation',{siteId:'water',workflow:'water',inputRevision:1,revision:3});
+  assert.equal(activeLayer(),previousLayer,'starting a revision preserves the displayed geometry');
+  assert.equal(waterButton.hidden,true);assert.equal(waterButton.disabled,true);
+  waterButton.events.click();assert.equal(inspections.length,1,'a retained handler cannot inspect the next run’s ledger');
+  assert.equal($('proposal-stale').hidden,false);assert.equal($('water-design-stale').hidden,false);
+  $('water-design-alternatives').children[1].children.find(c=>c.textContent==='Inspect this footprint').events.click();
+  assert.equal($('proposal-area').textContent,'20.0 m²');assert.equal($('proposal-stale').hidden,false);
+  assert.match($('proposal-map-caption').textContent,/stale inputs/);
+  $('water-return-current').events.click();
+  assert.equal($('proposal-area').textContent,'30.0 m²');
+  assert.equal($('proposal-stale').hidden,false);assert.equal($('water-design-stale').hidden,false);
+  assert.doesNotMatch(text($('water-design-decisions')),/Inspect source evidence/);
+  const freshWater={...study,revision:3,proposal:waterProposal(3,1,35),alternatives:{},waterPlan:{decisions:study.waterPlan.decisions}};
+  map.fire('plannerresult',freshWater);
+  assert.equal($('proposal-area').textContent,'35.0 m²','starting a run does not consume its publication revision');
+  assert.equal($('proposal-stale').hidden,true);assert.equal($('water-design-stale').hidden,true);
+  $('water-design-decisions').children[0].children.find(c=>c.textContent==='Inspect source evidence').events.click();
+  assert.equal(inspections.length,2,'newly validated results regain their own evidence inspection');
+
+  select('a','street',2);map.fire('plannerresult',latestTraffic);
+  const trafficButton=$('traffic-design-decisions').children[0].children.find(c=>c.textContent==='Inspect source evidence');
+  map.fire('plannerinvestigation',{siteId:'a',workflow:'street',inputRevision:2,revision:9});
+  assert.equal(trafficButton.hidden,true);assert.equal(trafficButton.disabled,true);
+  trafficButton.events.click();assert.equal(inspections.length,2);
+  assert.equal($('comparison-stale').hidden,false);
+  $('comparison-alternatives').children[1].children.find(c=>c.textContent==='Show footprint on map').events.click();
+  assert.equal($('proposal-stale').hidden,false,'same-input historical alternatives remain stale');
+  $('traffic-return-current').events.click();
+  assert.equal($('proposal-stale').hidden,false);assert.equal($('comparison-stale').hidden,false);
+  const unavailable=result(9,2,null);unavailable.comparison.status='unavailable';unavailable.comparison.results={};
+  map.fire('plannerresult',unavailable);
+  assert.match($('comparison-revision').textContent,/Revision 8/);
+  assert.doesNotMatch(text($('traffic-design-decisions')),/Inspect source evidence/,'an unavailable continuation keeps historical links detached');
+  map.fire('plannerresult',{...result(10,2),trafficPlan:latestTraffic.trafficPlan});
+  assert.equal($('proposal-stale').hidden,true);assert.equal($('comparison-stale').hidden,true);
+  $('traffic-design-decisions').children[0].children.find(c=>c.textContent==='Inspect source evidence').events.click();
+  assert.equal(inspections.length,3);
+}
+console.log('PASS: live same-input retries detach historical evidence links and preserve stale geometry through previews until valid publication');
+
+// 3D may consume only the exact footprint successfully published to the map,
+// including a deliberate alternative/history inspection and its original project.
+{
+  const displays=[];map.on('proposaldisplay',event=>displays.push(event));
+  const lastDisplay=()=>displays.at(-1);
+  select('water','water',1);
+  const sceneStudy={...study,projectId:'water-project'};
+  map.fire('plannerresult',sceneStudy);
+  assert.equal(lastDisplay().projectId,'water-project');
+  assert.equal(lastDisplay().siteId,'water');assert.equal(lastDisplay().workflow,'water');
+  assert.equal(lastDisplay().proposal.revision,2);
+  assert.deepEqual(JSON.parse(JSON.stringify(lastDisplay().proposal.geometry)),activeLayer().data.features);
+  $('water-design-alternatives').children[1].children.find(c=>c.textContent==='Inspect this footprint').events.click();
+  assert.equal(lastDisplay().proposal.metrics[0].proposed,20);
+  assert.equal(lastDisplay().projectId,'water-project');
+  $('water-design-history').children[0].events.click();
+  assert.equal(lastDisplay().proposal.revision,1);
+  assert.equal(lastDisplay().proposal.input_revision,0);
+  assert.equal(lastDisplay().projectId,'water-project','history retains its canonical project lookup');
+  assert.equal(lastDisplay().historical,true);
+  assert.equal(lastDisplay().savedAt,'2026-11-14T14:05:00+00:00');
+  $('water-return-current').events.click();
+  const priorDisplay=lastDisplay();
+  const invalid=structuredClone(sceneStudy);invalid.revision=3;invalid.proposal.metrics[0].input_hash='wrong';
+  map.fire('plannerresult',invalid);
+  assert.equal(lastDisplay(),priorDisplay,'an invalid map publication cannot replace the scene source');
+  select('a','street',0);
+  assert.equal(lastDisplay().proposal,null,'site switching clears the scene source');
+  const noWinner={...result(1,0,null),projectId:'traffic-project'};
+  map.fire('plannerresult',noWinner);
+  assert.equal(lastDisplay().proposal,null,'a no-winner comparison does not pick a 3D layout implicitly');
+  $('comparison-alternatives').children[1].children.find(c=>c.textContent==='Show footprint on map').events.click();
+  assert.equal(lastDisplay().projectId,'traffic-project');
+  assert.equal(lastDisplay().proposal.status,'rejected');
+  assert.equal(lastDisplay().proposal.geometry[0].properties.layout,'layout_b');
+  assert.deepEqual(JSON.parse(JSON.stringify(lastDisplay().proposal.geometry)),activeLayer().data.features);
+}
+console.log('PASS: scene publication follows validated map geometry, project identity, history and explicit rejected-layout inspection');

@@ -6,12 +6,15 @@ coverage, camera position, acquisition date or proposal registration.
 from __future__ import annotations
 
 import csv
+from collections import Counter, defaultdict
 from datetime import datetime
 from functools import lru_cache
 import json
 import math
 from pathlib import Path
 import re
+
+from property_address import display_text, format_property_address
 
 UNAVAILABLE = "The existing-site view is unavailable because its local source association could not be confirmed."
 
@@ -29,6 +32,7 @@ def _property(items, property_id):
     if len(matches) != 1:
         raise SiteViewUnavailable(UNAVAILABLE)
     result = {key: matches[0][key] for key in ("id", "lat", "lon", "name", "address", "type")}
+    result["name"] = display_text(result["name"], result["address"])
     for key in ("id", "name", "address", "type"):
         value = result[key]
         if not isinstance(value, str) or not value.strip() or len(value) > 240 or any(ord(char) < 32 for char in value):
@@ -50,7 +54,9 @@ def _associations(directory, signature):
         rows = list(reader)
     records, owners = {}, {}
     for row in rows:
-        owners.setdefault(row.get("MatterportModelId"), set()).add(row.get("PropertyId"))
+        model, property_id = row.get("MatterportModelId"), row.get("PropertyId")
+        if isinstance(model, str) and model and isinstance(property_id, str) and property_id:
+            owners.setdefault(model, set()).add(property_id)
     with (root / "data/commercial-property.jsonl").open(encoding="utf-8") as file:
         for line in file:
             record = json.loads(line)
@@ -58,10 +64,15 @@ def _associations(directory, signature):
             if identifier in records:
                 raise SiteViewUnavailable(UNAVAILABLE)
             attachments = record.get("attachments") or []
-            records[identifier] = {"address": record.get("primaryAddress") or {}, "attachments": attachments}
+            malformed_attachments = not isinstance(attachments, list)
+            if malformed_attachments:
+                attachments = []
+            records[identifier] = {"address": record.get("primaryAddress") or {}, "attachments": attachments,
+                                   "malformedAttachments": malformed_attachments}
             for item in attachments:
-                if isinstance(item, dict) and item.get("videoExternalReferenceType") in (36, 234):
-                    owners.setdefault(item.get("videoKey"), set()).add(identifier)
+                if (isinstance(item, dict) and item.get("videoExternalReferenceType") in (36, 234)
+                        and isinstance(item.get("videoKey"), str) and item["videoKey"]):
+                    owners.setdefault(item["videoKey"], set()).add(identifier)
     return rows, records, owners
 
 
@@ -77,8 +88,7 @@ def site_view_descriptor(directory, catalog_items, property_id):
         rows, records, owners = _associations(str(root), signature)
         record = records[property_id]
         address = record["address"]
-        raw_address = " ".join(str(address.get(key) or "") for key in
-                               ("streetNumber", "streetDirection", "streetName", "streetType"))
+        raw_address = format_property_address(address)
         if (_normalized(raw_address) != _normalized(prop["address"])
                 or not math.isclose(float(address["latitude"]), prop["lat"], rel_tol=0, abs_tol=1e-8)
                 or not math.isclose(float(address["longitude"]), prop["lon"], rel_tol=0, abs_tol=1e-8)):
@@ -86,51 +96,87 @@ def site_view_descriptor(directory, catalog_items, property_id):
         attachments = record["attachments"]
         if not isinstance(attachments, list):
             raise SiteViewUnavailable(UNAVAILABLE)
-        scans, ambiguous, excluded = {}, False, set()
+        scans, exclusions = {}, Counter()
+        candidates = defaultdict(list)
         for row in rows:
-            model = row.get("MatterportModelId", "")
-            if row.get("PropertyId") != property_id or not re.fullmatch(r"[A-Za-z0-9]{11}", model):
+            if row.get("PropertyId") == property_id:
+                candidates[row.get("MatterportModelId", "")].append(row)
+        messages = {
+            "invalid_model_id": "A listed tour has no valid Matterport model identifier.",
+            "address_mismatch": "A listed tour's address does not match this property.",
+            "missing_attachment": "A listed tour has no confirming property attachment.",
+            "invalid_attachment_collection": "The property's attachment list could not be read.",
+            "unsupported_attachment": "A listed tour has no supported Matterport attachment.",
+            "ambiguous_model": "A tour model is associated with multiple properties and was excluded.",
+        }
+        for model, model_rows in candidates.items():
+            if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9]{11}", model):
+                exclusions["invalid_model_id"] += 1
                 continue
-            if (_normalized(row.get("Address")) != _normalized(prop["address"])
-                    or _normalized(row.get("City")) != "los angeles" or _normalized(row.get("State")) != "ca"):
+            if not any(_normalized(row.get("Address")) == _normalized(prop["address"])
+                       and _normalized(row.get("City")) == "los angeles"
+                       and _normalized(row.get("State")) == "ca" for row in model_rows):
+                exclusions["address_mismatch"] += 1
                 continue
             matching = [item for item in attachments if isinstance(item, dict) and item.get("videoKey") == model]
-            if len(matching) != 1:
+            if not matching:
+                exclusions["invalid_attachment_collection" if record.get("malformedAttachments") else "missing_attachment"] += 1
                 continue
-            item = matching[0]
-            title = item.get("caption")
-            if (item.get("videoExternalReferenceType") not in (36, 234) or not isinstance(title, str)
-                    or not title.strip() or len(title) > 500 or any(ord(c) < 32 for c in title)):
+            supported = [item for item in matching if item.get("videoExternalReferenceType") in (36, 234)]
+            if not supported:
+                exclusions["unsupported_attachment"] += 1
                 continue
-            date = item.get("originationDate")
-            if date is not None:
-                try:
-                    datetime.fromisoformat(date)
-                except (TypeError, ValueError):
-                    continue
-            exterior_hint = bool(re.search(r"\b(?:exterior|courtyard|loading|outdoors?|roof(?:top)?)\b", title, re.I))
-            if not exterior_hint:
-                excluded.add(model)
-                continue
-            if owners.get(model) != {property_id}:
-                ambiguous = True
-                continue
-            scans[model] = {"modelId": model, "title": title, "url": f"https://my.matterport.com/show/?m={model}",
-                            "attachmentDate": date, "exteriorHint": exterior_hint}
+            # A model listed under another property as well (often one complex with
+            # two addresses) still opens here: this property's own address row and
+            # attachment were both required above. The overlap is disclosed.
+            shared = owners.get(model) != {property_id}
+            # The same verified property/model may have several listing records.
+            # Optional titles and dates describe the link, not its identity.
+            titles = sorted({display_text(item.get("caption"), limit=500) for item in supported} - {""})
+            dates = set()
+            for item in supported:
+                date = item.get("originationDate")
+                if isinstance(date, str):
+                    try:
+                        datetime.fromisoformat(date)
+                        dates.add(date)
+                    except ValueError:
+                        pass
+            dates = sorted(dates)
+            title = titles[0] if titles else "3D property tour"
+            title_context = " ".join(titles)
+            exterior_hint = bool(re.search(r"\b(?:exterior|courtyard|loading|outdoors?|roof(?:top)?)\b", title_context, re.I))
+            context = ("Exterior" if exterior_hint else
+                       "Interior" if re.search(r"\b(?:interior|suite|apartment|[1-9]\s*br|bedroom)\b", title_context, re.I) else
+                       "Amenity" if re.search(r"\b(?:pool|fitness|gym|lounge|theat(?:er|re)|clubhouse)\b", title_context, re.I) else "Unspecified")
+            scans[model] = {"modelId": model, "title": title, "titles": titles,
+                            "url": f"https://my.matterport.com/show/?m={model}",
+                            "attachmentDate": dates[-1] if dates else None, "attachmentDates": dates,
+                            "contextLabel": context, "exteriorHint": exterior_hint,
+                            "sharedWithOtherProperty": shared}
         choices = sorted(scans.values(), key=lambda scan: (not scan["exteriorHint"], scan["title"], scan["modelId"]))
+        ambiguous = bool(exclusions["ambiguous_model"])
         result = {"property": prop, "status": "linked" if choices else "ambiguous" if ambiguous else "unavailable",
-                  "scans": choices, "scan": choices[0] if choices else None,
-                  "excludedInteriorOrUnspecified": len(excluded),
+                  "scans": choices, "scan": choices[0] if choices else None, "tourCount": len(choices),
+                  "excludedTourCount": sum(exclusions.values()),
+                  "exclusions": [{"reason": reason, "count": count, "message": messages[reason]}
+                                 for reason, count in sorted(exclusions.items()) if count],
                   "source": {"provider": "CoStar local property kit",
-                             "association": "Matching property address, CSV model join and attachment metadata; cross-property model matches are excluded."},
+                             "association": "Matching property address, CSV model join and attachment metadata. A tour also listed under another property is included only when this property's own address and attachment confirm it."},
                   "limitations": [
-                      "The selected property's listing metadata links this tour and its title suggests exterior or site context. Actual coverage and a suitable viewpoint require visual inspection.",
+                      "Tours are linked to this property by listing metadata. Context labels are title hints only; actual coverage and playback require visual inspection.",
                       "Tour titles and attachment dates are listing metadata, not a verified scan date or current site survey.",
                       "No supported 2D proposal is registered to this scan. The proposed-design view is unavailable.",
                   ]}
-        if not choices:
+        shared_count = sum(scan["sharedWithOtherProperty"] for scan in choices)
+        if shared_count:
+            result["limitations"].insert(0, f"{shared_count} of these tours {'is' if shared_count == 1 else 'are'} also listed under another property, so {'it' if shared_count == 1 else 'they'} may show a neighbouring building.")
+        if choices:
+            result["availabilityMessage"] = f"{len(choices)} linked property tour(s). Playback availability has not been verified."
+        else:
             result["message"] = ("Tour links are ambiguous across properties; no scan was opened." if ambiguous else
-                                 "No relevant exterior tour is linked to this property. Interior-only and unspecified tours are excluded; continue with the map and site evidence.")
+                                 "No validated property tour is available. " + (" ".join(item["message"] for item in result["exclusions"]) if candidates else "No tour links are supplied for this property."))
+            result["availabilityMessage"] = result["message"]
         return result
     except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError, csv.Error):
         raise SiteViewUnavailable(UNAVAILABLE) from None

@@ -38,6 +38,30 @@ class ServerDataTest(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError,'identity'): property_catalog()
             finally: property_catalog.cache_clear()
 
+    def test_catalog_formats_ranges_suffixes_and_display_name_whitespace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root/'schemas').mkdir(); (root/'data').mkdir()
+            (root/'schemas/enums.json').write_text(json.dumps({'PropertyType': {'1': 'Office'}}))
+            records = [
+                {'id': 1, 'propertyType': 1, 'buildingName': 'Office\r\n Tower',
+                 'primaryAddress': {'latitude': 34.05, 'longitude': -118.25, 'streetNumber': '1925',
+                                    'streetName': 'Century Park', 'streetSuffix': 'E'}},
+                {'id': 2, 'propertyType': 1,
+                 'primaryAddress': {'latitude': 34.05, 'longitude': -118.25, 'streetNumber': '3324',
+                                    'streetNumberEndRange': '3330', 'streetName': 'Wilshire', 'streetType': 'Blvd'}},
+            ]
+            (root/'data/commercial-property.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in records))
+            property_catalog.cache_clear()
+            try:
+                with patch.dict('os.environ', {'COSTAR_KIT_DIR': directory}):
+                    items, _, _ = property_catalog()
+                self.assertEqual(items[0]['address'], '1925 Century Park E')
+                self.assertEqual(items[0]['name'], 'Office Tower')
+                self.assertEqual(items[1]['address'], '3324-3330 Wilshire Blvd')
+                self.assertEqual(items[1]['name'], items[1]['address'])
+            finally:
+                property_catalog.cache_clear()
+
     def test_nearby_frontages_do_not_drop_thirteenth_constraint(self):
         records=[{'id':'1','lat':34.05,'lon':-118.25}]
         lines=[{'geometry':{'type':'LineString','coordinates':[]},'curbCuts':n} for n in range(13)]

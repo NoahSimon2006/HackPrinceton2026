@@ -150,6 +150,40 @@ class OpportunityTests(unittest.TestCase):
             with patch.object(scout,'traffic_context_at_site',return_value=None):
                 self.assertEqual(scout.research_candidates('street',BOUNDS)['candidates'][1]['center'],linked['properties']['center'])
 
+    def test_nearby_other_road_or_direction_cannot_hide_a_counted_site_opportunity(self):
+        node = {'id':'verified-node','properties':{'center':[-118.301,34.06],'label':'Counted intersection'}}
+        inventory = {'version':'counts-v1','layers':[{'id':'turning','features':[node]}]}
+        linked = feature('linked',-118.301,30,workflow='street')
+        for detail in ({'road_name':'Different road'}, {'direction':'S'}):
+            with self.subTest(detail=detail):
+                strongest = feature('strongest',-118.302,20,workflow='street')
+                strongest['properties']['scalar_detail'].update(detail)
+                snapshot = data([linked,strongest],'street')
+                with patch.object(scout,'load_discovery',return_value=inventory), patch.object(scout,'traffic_context_at_site',return_value={'sheet':{'date':'2015-02-03'}}), patch.object(scout,'map_discovery',return_value=snapshot), patch.object(scout,'_research_site',return_value=sponsor()):
+                    candidates = scout.research_candidates('street',BOUNDS)['candidates']
+                self.assertEqual([c['environmental']['metrics'][0]['value'] for c in candidates],[20,30])
+                self.assertEqual(candidates[0]['geometry'],strongest['geometry'])
+                self.assertNotIn('evaluationLink',candidates[0]['provenance'])
+                self.assertEqual(candidates[1]['geometry'],linked['geometry'])
+                self.assertEqual(candidates[1]['center'],node['properties']['center'])
+                self.assertEqual(candidates[1]['provenance']['evaluationLink']['turningFeatureId'],'verified-node')
+
+    def test_nearby_same_road_and_direction_still_group_without_favoring_readiness(self):
+        node = {'id':'verified-node','properties':{'center':[-118.301,34.06],'label':'Counted intersection'}}
+        inventory = {'version':'counts-v1','layers':[{'id':'turning','features':[node]}]}
+        strongest = feature('strongest',-118.302,20,workflow='street')
+        linked = feature('linked',-118.301,30,workflow='street')
+        snapshot = data([linked,strongest],'street')
+        with patch.object(scout,'load_discovery',return_value=inventory), patch.object(scout,'traffic_context_at_site',return_value={'sheet':{'date':'2015-02-03'}}), patch.object(scout,'map_discovery',return_value=snapshot), patch.object(scout,'_research_site',return_value=sponsor()):
+            candidates = scout.research_candidates('street',BOUNDS)['candidates']
+            self.assertEqual(len(candidates),1)
+            candidate = candidates[0]
+            self.assertEqual(candidate['environmental']['metrics'][0]['value'],20)
+            self.assertEqual(candidate['geometry'],strongest['geometry'])
+            self.assertNotIn('evaluationLink',candidate['provenance'])
+            self.assertEqual(len(candidate['provenance']['groupedCandidateIds']),2)
+            self.assertEqual(scout.research_candidates('street',BOUNDS,candidate['provenance']['groupedCandidateIds'])['candidates'],[])
+
     def test_cancellation_propagates(self):
         with patch.object(scout,'map_discovery') as fetch:
             with self.assertRaises(RuntimeError):

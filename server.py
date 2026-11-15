@@ -23,6 +23,7 @@ from hydrology import RAINFALL, WATERSHEDS, rainfall_at, rainfall_contours, wate
 from site_evidence import imagery_evidence
 from site_measurements import validate_inputs
 from site_identity import resolve_site
+from property_address import display_text, format_property_address
 from stormwater_settings import validate_settings
 
 ROOT = Path(__file__).resolve().parent
@@ -34,9 +35,14 @@ ANALYSIS_SLOTS = BoundedSemaphore(2)
 ACTIVE_ANALYSES = {}
 ANALYSIS_LOCK = Lock()
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
+          "/demo": "demo.html", "/demo.html": "demo.html", "/demo.css": "demo.css", "/demo.js": "demo.js",
+          "/demo-scene-renderer.js": "demo-scene-renderer.js", "/demo-math.js": "demo-math.js",
           "/discovery.js": "discovery.js", "/analysis-stream.js": "analysis-stream.js", "/planner.js": "planner.js", "/proposal.js": "proposal.js",
           "/site-view.js": "site-view.js", "/projects.js": "projects.js", "/scouting.js": "scouting.js",
-          "/vector-zoom.js": "vector-zoom.js",
+          "/concept-scene.js": "concept-scene.js", "/concept-scene-renderer.js": "concept-scene-renderer.js",
+          "/vendor/three.module.js": "vendor/three.module.js", "/vendor/three.core.js": "vendor/three.core.js",
+          "/vendor/OrbitControls.js": "vendor/OrbitControls.js", "/vendor/three.LICENSE": "vendor/three.LICENSE",
+          "/vector-zoom.js": "vector-zoom.js", "/guide.js": "guide.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
           "/vendor/leaflet.css": "vendor/leaflet.css",
           # Landing page; the map app stays at "/".
@@ -182,11 +188,10 @@ def property_catalog():
             raw_id = record.get("id")
             if not ((type(raw_id) is int and raw_id > 0) or (isinstance(raw_id, str) and raw_id.strip())):
                 raise ValueError("CoStar property identity is missing or invalid.")
-            address_text = " ".join(" ".join(str(address.get(key) or "") for key in
-                                    ("streetNumber", "streetDirection", "streetName", "streetType")).split())
+            address_text = format_property_address(address)
             item = {
                 "id": str(raw_id).strip(), "lat": lat, "lon": lon,
-                "name": str(record.get("buildingName") or address_text or "Unnamed property").strip(),
+                "name": display_text(record.get("buildingName"), address_text or "Unnamed property"),
                 "address": address_text,
                 "type": types.get(str(record.get("propertyType")), "Unknown"),
             }
@@ -570,7 +575,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path.path in STATIC:
                 file = PUBLIC / STATIC[path.path]
-                mime = {".html": "text/html", ".css": "text/css", ".jpg": "image/jpeg"}.get(file.suffix, "text/javascript")
+                mime = {".html": "text/html", ".css": "text/css", ".js": "text/javascript",
+                        ".jpg": "image/jpeg"}.get(file.suffix, "text/plain")
                 # Local development reads assets from disk on every request.
                 # Revalidate the page so reloads don't keep an older app bundle.
                 cache = "public, max-age=3600" if file.parent.name == "vendor" else "no-cache"
@@ -578,6 +584,27 @@ class Handler(BaseHTTPRequestHandler):
             elif path.path == "/api/projects":
                 query = parse_qs(path.query)
                 self.send_json(200, project_store().get(query["id"][0]) if "id" in query else {"projects":project_store().list()})
+            elif path.path == "/api/demo-scene":
+                from demo_scene import build_demo_scene
+                try:
+                    self.send_json(200, build_demo_scene())
+                except ValueError as error:
+                    self.send_json(503, {"error": str(error)})
+            elif path.path == "/api/concept-scene":
+                from concept_scene import SceneUnavailable, build_scene, parse_scene_query
+                try:
+                    query = parse_scene_query(parse_qs(path.query, keep_blank_values=True))
+                except SceneUnavailable as error:
+                    self.send_json(400, {"error": str(error)})
+                    return
+                try:
+                    project = project_store().get(query.pop("project_id"))
+                    result = build_scene(project, **query)
+                except ValueError as error:
+                    self.send_json(404, {"error": str(error) if isinstance(error, SceneUnavailable)
+                        else "The saved project is unavailable. Reopen a planning project."})
+                    return
+                self.send_json(200, result)
             elif path.path == '/api/scouts':
                 query = parse_qs(path.query)
                 self.send_json(200, scout_store().get(query['id'][0]) if 'id' in query else {'searches': scout_store().list()})
