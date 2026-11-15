@@ -1,65 +1,82 @@
 # Sustainability Map
 
-A local Vexcel aerial map for Los Angeles with a precomputed downtown road-emissions pilot in **Urban Planners**. The pilot compares weekday midday and PM peak modeled tailpipe CO₂ and NOₓ. CoStar property points and Esri labels remain optional layers. Urban Planners also includes a site workspace with Intersection Redesign and Stormwater evidence workflows powered by one Deep Agent.
+A local planning workspace for Los Angeles, using a Python server, bundled Leaflet, Vexcel aerial imagery and CoStar site evidence. **Traffic & Emissions** opens with dated historical traffic counts. **Stormwater** opens with terrain screening around Kipling Apartments, with optional county rainfall and drainage-context layers.
+
+**Current review: [Checkpoint 7 — existing-site walkthrough](docs/CHECKPOINT_7.md).** The user approved an existing-site viewer first, using the linked exterior/loading-docks Matterport tour at 510 E Olympic Boulevard. Open it from the sidebar's **Exterior walkthrough** card. **Proposed** stays unavailable until a supported 2D design and verified alignment exist; full 3D comparison acceptance has not been met.
+
+**[Checkpoint 6 core release acceptance remains blocked](docs/CHECKPOINT_6.md).** Checkpoint 5's Stormwater design/capture comparison is absent; the user requested verification of the current build with that blocker recorded. Traffic comparisons use official historical turning counts, approved generated signal timing and strict total-CO₂/throughput/regression gates. Missing sponsor evidence prevents a recommendation. Final narrow-screen visual verification remains pending. The archived assumed-demand emissions layer remains disabled. See [Checkpoint 4](docs/CHECKPOINT_4.md) for the traffic method and source limits.
+
+Earlier review records: [Checkpoints 0–1](docs/CHECKPOINTS_0_1.md), [Checkpoint 2](docs/CHECKPOINT_2.md).
 
 ## Run locally
 
-Put `VEXCEL_API_KEY`, `GROK_API_KEY`, and the absolute `COSTAR_KIT_DIR` in the ignored local `.env`. The existing `.env` can be reused. The CoStar kit needs `data/commercial-property.jsonl` and `schemas/enums.json`.
+Keep `VEXCEL_API_KEY`, `GROK_API_KEY` and the absolute `COSTAR_KIT_DIR` in the ignored `.env`. The CoStar kit needs `data/commercial-property.jsonl` and `schemas/enums.json`; the exterior walkthrough also requires `commercial-properties.csv` to validate its property-to-model association. Credentials and raw sponsor data stay local.
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python server.py
+PORT=8001 .venv/bin/python server.py
 ```
 
-Open <http://127.0.0.1:8000>. Set `PORT=8023` if that port is taken. The server binds to localhost. Vexcel and Esri need network access; the emissions artifact and Leaflet are bundled locally. The Vexcel key stays on the server. The map and site card receive selected CoStar property fields. The agent defaults to `GROK_MODEL=grok-4.7`; its dependencies are separate from the optional simulation rebuild dependencies.
+Open <http://127.0.0.1:8001>. After backend changes, restart the Python server and reload the page. Local JavaScript/CSS revalidate on reload. Vexcel imagery and optional Esri labels require network access. Discovery reads local prebuilt source snapshots; missing snapshots produce an explicit unavailable state, never substitute data. A Grok key is needed only when **Analyze site** is selected. Traffic comparisons also require `requirements-sim.txt`, the local OSM network, verified turning-sheet discovery data, and the official CARB export described in the Checkpoint 4 report.
 
-Append `/#urban-planners` to open directly on the emissions overlay. After pulling changes to `server.py`, stop and restart the Python server on the same port, then reload the page. An older process can serve the updated HTML while still lacking `/api/emissions`, which produces a 404 and an empty overlay. The map now shows a restart message and Retry button in that case, and displays the legend only after data loads.
+## Build discovery data
 
-## Plan a site
-
-1. Open **Urban Planners**, then select **Intersections** or **Stormwater** using the workspace buttons at the top of the sidebar. Emissions remains the default workspace. Direct links `/#stormwater` and `/#intersections` open site planning immediately.
-2. Search for a CoStar property or select **Pick a site on the map**. In **Stormwater**, the selected site's county subbasin and rainfall estimate load automatically, without an AI request or `GROK_API_KEY`. The cyan overlay shows the county subbasin containing the site. **View subbasin** zooms out around the covered site; **Back to site** returns to site scale. Each county source loads independently, with a retry for failed requests. Boundaries may extend beyond available imagery.
-3. Review the 85th-percentile, 24-hour rainfall depth, estimated only between adjacent LA County contours that bracket the site. **Scenario rainfall & sources** contains editable depth and source inputs; automatic results never overwrite manual scenario edits. These inputs do not yet drive runoff or capture calculations. Watershed membership does not establish site drainage, flood risk, or treatment suitability.
-4. Select **Analyze site** or edit the suggested question. The Deep Agent reads parcel/building geometry, workflow-specific detections, CoStar context, and (in Stormwater) county hydrology. The local server computes measurements and returns a review with **findings**, **options to evaluate**, and **confirmation questions**. Select a numbered reference to open its supporting fact under **Measurements & sources**, including method, source, observation date when available, retrieval date, and limitations.
-5. **Site evidence** draws the actual tool-returned outlines, candidates, and frontage. Toggle **Show imagery search areas** to see ranked scenes when the agent ran a search. Use **Adjust or add map markings** to draw crossing endpoints, keep-clear areas, potential runoff sources, or treatment areas. The next analysis measures those drawings locally. Edited scenario rainfall is sent separately from the county estimate. Changing either drawings or rainfall marks existing/in-flight analysis as stale until rerun. All site work remains available for the current page session.
-
-Run `.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v` for measurement, validation, API, and agent-graph tests. Run `node tests/planner-hydrology.mjs` for automatic county loading, source failures/retries, manual scenario preservation, workspace visibility, rapid site switching, scenario submission, and stale analysis. These tests use synthetic fixtures and no paid provider calls.
-
-With the user's approval, xAI receives the question, workflow, measured scalar summaries, rainfall/watershed facts, planner scenario labels, and allowlisted CoStar fields: property type, apartment units, reported parking/loading counts, and gross floor area. The app does not automatically send property names, addresses, coordinates, raw geometry, vacancy, or complete CoStar records to the model. Source text is treated as data. LangSmith tracing stays disabled. Text typed into the question or scenario source is included in the analysis.
-
-## Measurement and recommendation boundaries
-
-`site_measurements.py` validates geometry with Shapely and projects WGS 84 coordinates into UTM zone 11N using pyproj. Polygon holes are excluded; multiple/overlapping footprints are unioned and clipped to the containing parcel before area and coverage totals are calculated. Lengths, areas, percentages, and unit conversions come from local code, not model arithmetic. Invalid or out-of-scope geometry is excluded with an explicit warning. This is screening precision, not a survey.
-
-Detection boxes supply only candidate distances, not crosswalk widths or impervious-surface areas. Missing buildings/detections are not zero buildings or proof of absence. CoStar gross floor area is distinct from mapped building footprint area. Nearby property frontage is labeled separately from selected-property frontage. Source observation dates remain unknown where providers omit them.
-
-The agent must attempt the required evidence tools before returning a structured review. Every finding and recommendation must reference returned fact IDs; numerical tokens in those statements are checked against the cited facts. This catches fabricated references and unmatched numeric values, but does not establish the correctness of every inference or physical feasibility. Tool/model failures retain already retrieved facts for inspection. Editable designs, runoff/capture/storage calculations, traffic benefits, and saved projects remain future work.
-
-## What the pilot means
-
-The displayed road values are an **illustrative scenario**, not a current measured inventory or calibrated traffic forecast. The 4 × 4 km pilot uses OpenStreetMap road geometry, SUMO 1.28 traffic and edge-emissions runs, the California Air Resources Board's EMFAC2025 v2.1.1 **2026 Los Angeles (SC)** regional on-road fleet rates, and historical LADOT traffic counts. The [EMFAC rates](https://emfac.arb.ca.gov/emissions-inventory/3b6469b056eb7e5a47b65c0c96415b33d5e20812) are VMT-weighted across vehicle/fuel rows and include electric vehicle miles as zero tailpipe running exhaust. SUMO supplies relative speed and route-pressure variation; its European default emissions factors are normalized to the CARB fleet rates. The layer covers running exhaust only, excluding upstream and non-tailpipe emissions.
-
-The [LADOT traffic count data](https://data.lacity.org/Transportation/LADOT-Traffic-Counts-Summary/94wu-3ps3) are from **2011–2016**. Where a street and cross-street match the road network, the latest weekday directional count anchors that segment's daily volume. Other segments use stated road-class daily-volume assumptions, adjusted by illustrative SUMO route pressure. Hourly shares of daily volume are assumed: 6% at midday and 8.5% at PM peak. Signal locations come from OSM; SUMO generated timing is assumed. The UI gives judgmental sensitivity ranges of approximately ±35% on count-anchored edges and ±60% elsewhere; these are **not statistical confidence intervals**. Neither the historical counts nor the random origin–destination routes should be read as 2026 observed traffic.
-
-The bundled `public/data/emissions.json` contains the two ready-to-use periods, source links, method description, and road-level basis labels. The layer starts automatically when Urban Planners opens, and the map centers on the pilot. Road click details show the historical anchor or volume assumption.
-
-## Rebuild the artifact
-
-The source downloads and SUMO outputs live in ignored `sim/`. The derived map artifact is tracked so the demo works without installing SUMO.
+The existing workspace has the source snapshots under ignored `private/discovery/` and the OSM network under ignored `sim/`. To rebuild from cached sources:
 
 ```sh
-python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-discovery.txt
+.venv/bin/python scripts/build_discovery.py
+```
+
+Use `--refresh` to download public sources again. The build is deterministic given its inputs, apart from build timestamp/version. It makes no agent calls and runs no traffic simulation. It records source hashes, source dates where supplied, retrieval timestamps and method limitations. Details, exclusions and spot checks are in [Checkpoint 3](docs/CHECKPOINT_3.md).
+
+For a fresh checkout without `sim/dtla.net.xml`, prepare the OSM topology first. This only converts sourced road geometry and names; it does not generate traffic demand or run SUMO:
+
+```sh
 .venv/bin/python -m pip install -r requirements-sim.txt
 .venv/bin/python scripts/fetch_osm.py
-mkdir -p sim/sources
-curl -L 'https://data.lacity.org/resource/94wu-3ps3.json?$limit=6000' -o sim/sources/ladot-traffic-counts.json
+.venv/bin/netconvert --osm-files sim/sources/dtla-roads.osm --output-file sim/dtla.net.xml --geometry.remove --ramps.guess --junctions.join --tls.guess-signals --tls.discard-simple --remove-edges.isolated --no-turnarounds --output.street-names true
+.venv/bin/python scripts/build_discovery.py
 ```
 
-In the [EMFAC emissions inventory](https://emfac.arb.ca.gov/emissions-inventory/), select **Onroad Emission Rates**, **EMFAC2025 v2.1.1**, **Sub-Area → Los Angeles (SC)**, **2026**, **Annual**, all EMFAC202Y classes and fuels, aggregate model year and speed. Download the output CSV as `sim/sources/emfac2025-la-2026.csv`. Then run:
+A different OSM extract may produce different matches; network hashes identify the exact inputs. Generated network signal settings are not treated as observed signal plans. Public raw downloads and generated discovery artifacts stay local rather than being redistributed in Git. Runtime rendering does not import Rasterio or execute the build.
+
+## Explore and investigate
+
+1. Use **Traffic & Emissions** or **Stormwater** at the top of the sidebar. Existing `/#urban-planners`, `/#intersections` and `/#stormwater` links remain useful.
+2. Choose a discovery layer on the map. Click a feature or use **Browse mapped features** to inspect its value, units and date/event. **Source, method & limits** in the sidebar includes provenance. **View pilot** returns to that mode's pilot. **Hide layers** collapses the controls; **Hide discovery layer** removes the overlay. On narrow screens, selecting a feature collapses controls to leave the map usable.
+3. Selection seeds a site brief without calling the agent. Property search and direct map selection remain available. Stormwater site selection also loads the existing county subbasin/rainfall lookups independently, with retry for source failure.
+4. Choose **Analyze site** to run one lead Deep Agent with concurrent site-evidence and domain specialists. Expand **Agent activity** to follow actual tool results and inspect cited facts. Changing sites/modes cancels the followed run; a changed discovery selection also cancels the old analysis, including when two features share coordinates.
+5. Under **Site evidence & adjustments**, inspect returned outlines, detections, frontages and locally measured facts. Drawings and manually edited rainfall remain distinct from source values. They do not constitute verified drainage, current traffic, a physical proposal or a benefit calculation. Editing inputs marks prior results stale.
+6. For keyboard site selection, focus the map, pan with arrow keys, then choose **Use map center as site**. Under **Adjust or add map markings**, add points at the map center or edit each point's labeled coordinates, then save the marking using the map controls. Invalid or uncovered points cannot be saved.
+7. For the approved exterior demo, choose **Open existing view** under **Exterior walkthrough · 510 E Olympic Blvd**, then press the tour's Play control. Opening selects that property on the map. The existing Matterport tour loads on demand and needs network access, but no Grok call or SDK key. Close returns to the map; **Retry viewer** and **Open Matterport in a new tab** are available if the embedded provider fails. **Proposed** is disabled because there is no supported design registered to this scan.
+
+All site work is held for the current page session. The labeled **Development preview** proposal remains a UI test, separate from source-backed discovery and agent findings. Traffic comparisons are available at verified turning-count sites. Editable designs beyond the bounded traffic templates and stormwater treatment sizing are later checkpoints.
+
+## Measurement and sharing boundaries
+
+Geometry is validated with Shapely and measured locally in UTM zone 11N. Invalid/out-of-scope shapes are excluded, polygon holes are preserved, and overlapping footprints are unioned before measurement. Detection boxes are candidates, not measured crossings or impervious surfaces. CoStar gross floor area is distinct from mapped building footprint area. Missing data is not zero.
+
+xAI receives the planner's text, approved scalar measurements, sourced rainfall/watershed facts and allowlisted CoStar fields: use, units, reported parking/loading counts and gross floor area. Discovery selections are resolved from a versioned local reference and become a sourced scalar fact. Exact site coordinates, raw geometry, names/addresses, vacancy, raw source records and credentials are not automatically included in model messages. Source text is treated as data. LangSmith tracing remains disabled.
+
+Reviews must cite returned facts; local validation rejects unknown references and unsupported numeric claims. This does not establish physical feasibility. A terrain path is an inference from a bare-earth raster, rainfall is a design depth, and county catchments are regional context. None is a flood-depth map or a verified inlet connection.
+
+## Validation
 
 ```sh
-.venv/bin/python scripts/run_pilot.py
+.venv/bin/python -m unittest discover -s tests -q
+node tests/discovery-controller.mjs
+node tests/planner-hydrology.mjs
+node tests/analysis-stream.mjs
+node tests/proposal-controller.mjs
+node tests/site-view-controller.mjs
 ```
 
-The pipeline creates a SUMO network, generates deterministic random routes (seed 26 for midday, 27 for PM peak), runs both periods, and rebuilds `public/data/emissions.json`. The scripts and method metadata make the assumptions reviewable. OSM data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright).
+Install `requirements-discovery.txt` for terrain/builder tests. Most tests use explicit test fixtures and make no provider calls. Two local spot checks use downloaded public source artifacts when available; they report skipped if those files are absent. See the checkpoint reports for live verification and remaining limits.
+
+## Archived simulation
+
+`public/data/emissions.json`, `scripts/run_pilot.py` and `scripts/build_emissions.py` preserve the earlier illustrative SUMO/EMFAC work for reference. It used random origin–destination demand, generated signals, road-class volume assumptions and assumed hourly shares. Its historical-count interpretation is not the source-only discovery method, and its predictions are excluded from the current UI and agent evidence.
+
+The exporter can now retain stopped/time-loss vehicle-seconds, normalized by sampled vehicle-seconds, plus interval and simulated volume context for both periods. This is export preparation only. Checkpoint 3 did not rerun the simulation or rebuild the archived artifact. The Checkpoint 4 comparison uses separately verified manual turning sheets and labels generated signal timing explicitly. Historical automated totals alone still cannot support a comparison.

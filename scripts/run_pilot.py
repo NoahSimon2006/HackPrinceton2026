@@ -40,7 +40,7 @@ def main():
             "--validate", "--seed", seed, "--trip-attributes",
             'departLane="best" departSpeed="max"', "--error-log", f"sim/{period}.route-errors.txt"])
         (SIM / f"{period}.add.xml").write_text(
-            f'<additional><edgeData id="traffic" file="{period}.traffic.xml" begin="600" end="3600" period="3000" excludeEmpty="true"/>'
+            f'<additional><edgeData id="traffic" file="{period}.traffic.xml" begin="600" end="3600" period="3000" excludeEmpty="true" speedThreshold="0.1"/>'
             f'<edgeData id="emissions" type="emissions" file="{period}.emissions.xml" begin="600" end="3600" period="3000" excludeEmpty="true"/></additional>')
         run(f"{period}-sim", [str(BIN / "sumo"), "-n", "sim/dtla.net.xml", "-r",
             f"sim/{period}.rou.xml", "-a", f"sim/{period}.add.xml", "--begin", "0",

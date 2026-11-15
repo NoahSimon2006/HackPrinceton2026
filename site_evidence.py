@@ -61,15 +61,27 @@ def parcel_features(payload, evidence):
 
 
 def detection_features(payload, evidence, labels):
-    for item in payload.get("features", []):
+    if not isinstance(payload, dict) or not isinstance(payload.get("features"), list):
+        raise ValueError("Detection response has no valid feature collection.")
+    for item in payload["features"]:
+        if not isinstance(item, dict) or not isinstance(item.get("properties"), dict):
+            raise ValueError("Detection response contains an invalid feature.")
         props = item["properties"]
-        label = props.get("label", "")
+        label = props.get("label")
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError("Detection response contains an invalid label.")
         if label not in labels:
             continue
-        for candidate in props.get("detections", []):
+        candidates = props.get("detections")
+        if not isinstance(candidates, list):
+            raise ValueError("Detection response contains an invalid candidate list.")
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise ValueError("Detection response contains an invalid candidate.")
             geometry = polygon_geometry(candidate.get("bbox"))
-            if geometry:
-                evidence["detections"].append(feature(geometry, label.capitalize(), score=candidate.get("confidence")))
+            if geometry is None:
+                raise ValueError("Detection response contains an unusable candidate box.")
+            evidence["detections"].append(feature(geometry, label.capitalize(), score=candidate.get("confidence")))
     evidence["detections"].sort(key=lambda item: item["properties"]["score"] or 0, reverse=True)
     del evidence["detections"][12:]
 

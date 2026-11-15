@@ -1,227 +1,237 @@
-"""Build the transparent, precomputed DTLA tailpipe-emissions pilot.
+"""Build the downtown road emissions layer from counted traffic and CARB fleet rates.
 
-Inputs under sim/sources are public data downloads. SUMO's passenger-car
-random-OD run supplies relative speed/delay and route pressure; CARB EMFAC
-supplies the regional fleet-average running-exhaust rate. Historical LADOT
-counts anchor a small number of road volumes. This is a scenario, not a
-current measured inventory or a statistically calibrated traffic forecast.
+Every road edge gets a weekday daily volume, chosen in this order and labeled with
+its basis:
+  1. counted      - a LADOT automated 24-hour count on this street and direction at
+                    an adjacent intersection (the sheets are titled "24 Hours
+                    Traffic Volume").
+  2. same_street  - inverse-distance average of counts on the same street and
+                    direction within 1.2 km.
+  3. class_median - median counted volume of roads in the same OpenStreetMap class
+                    (needs at least 10 counted roads of that class)
+                    within the pilot.
+  4. assumed      - the earlier class default, used only when no road of that class
+                    was counted.
+Hourly volume uses the share of daily traffic observed in each period on official
+LADOT 24-hour count sheets (median across the downloaded sheets). Emissions are
+vehicles x segment length x CARB EMFAC2025 2026 Los Angeles running-exhaust rates.
+No random-trip simulation is used.
+
+Usage: .venv/Scripts/python.exe scripts/build_emissions.py
 """
 from __future__ import annotations
 
-import csv
 import json
 import math
-import re
 import statistics
 import xml.etree.ElementTree as ET
+import sys
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
-import sumolib
-
 ROOT = Path(__file__).resolve().parents[1]
-SIM = ROOT / "sim"
-SOURCES = SIM / "sources"
+sys.path.insert(0, str(ROOT))
+from traffic_counts import SheetError, find_sheet  # noqa: E402
+from traffic_sim import street_key  # noqa: E402
+
+DATA = ROOT / "private" / "discovery"
 OUT = ROOT / "public" / "data" / "emissions.json"
 BBOX = [-118.268, 34.034, -118.219, 34.070]
-PERIODS = {"midday": {"label": "Weekday midday", "share": .060, "seed": 26},
-           "pm_peak": {"label": "Weekday PM peak", "share": .085, "seed": 27}}
-ROAD_TYPES = {"motorway", "motorway_link", "trunk", "trunk_link", "primary",
-              "primary_link", "secondary", "secondary_link", "tertiary",
-              "tertiary_link", "residential", "unclassified", "living_street"}
-BASE_DAILY = {"motorway": 70000, "motorway_link": 21000, "trunk": 32000,
-              "trunk_link": 12000, "primary": 22000, "primary_link": 9500,
-              "secondary": 14000, "secondary_link": 7000, "tertiary": 8500,
-              "tertiary_link": 4500, "residential": 2500,
-              "unclassified": 3000, "living_street": 1200}
+CARB = {"CO2": 387.1437, "NOx": 0.1308}  # g/mile, EMFAC2025 v2.1.1 LA (SC) 2026, VMT-weighted running exhaust
+PERIODS = {"midday": {"label": "Weekday midday", "hours": [11, 12, 13]},
+           "pm_peak": {"label": "Weekday PM peak", "hours": [16, 17, 18]}}
+ROAD_TYPES = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary",
+              "secondary_link", "tertiary", "tertiary_link", "residential", "unclassified", "living_street"}
+CLASS_DEFAULT = {"motorway": 70000, "motorway_link": 21000, "trunk": 32000, "trunk_link": 12000, "primary": 22000,
+                 "primary_link": 9500, "secondary": 14000, "secondary_link": 7000, "tertiary": 8500,
+                 "tertiary_link": 4500, "residential": 2500, "unclassified": 3000, "living_street": 1200}
+WEEKDAYS = {"MON", "TUE", "WED", "THU", "FRI"}
+SHEET_SAMPLE = 16
 
 
-def street_key(name):
-    text = name.upper().replace("’", "'")
-    text = re.sub(r"\b(NORTH|SOUTH|EAST|WEST|N|S|E|W)\b", "", text)
-    text = re.sub(r"\b(AVENUE|AVE|AV)\b", "AV", text)
-    text = re.sub(r"\b(STREET|STR|ST)\b", "ST", text)
-    text = re.sub(r"\b(BOULEVARD|BLVD|BL)\b", "BL", text)
-    text = re.sub(r"\b(PLACE|PL)\b", "PL", text)
-    text = re.sub(r"\b(DRIVE|DR)\b", "DR", text)
-    text = re.sub(r"\b(ROAD|RD)\b", "RD", text)
-    text = re.sub(r"\b(FREEWAY|FWY)\b", "FWY", text)
-    text = re.sub(r"\b(\d+)\s+(ST|ND|RD|TH)\b", r"\1", text)
-    return " ".join(re.findall(r"[A-Z0-9]+", text))
-
-
-def emfac_rates():
-    with (SOURCES / "emfac2025-la-2026.csv").open(newline="") as file:
-        while line := file.readline():
-            if line.startswith('Region,"Calendar Year"'):
-                file.seek(file.tell() - len(line))
-                break
-        rows = list(csv.DictReader(file))
-    vmt = sum(float(row["Total VMT"] or 0) for row in rows)
-    if not vmt:
-        raise ValueError("EMFAC VMT is empty")
-    return {pollutant: sum(float(row["Total VMT"] or 0) *
-                           float(row[f"{pollutant}_RUNEX"] or 0) for row in rows) / vmt
-            for pollutant in ("CO2", "NOx")}, len(rows)
-
-
+# SUMO edge-output helpers kept from the earlier simulation exporter (tested in test_discovery).
 def edge_data(path):
     tree = ET.parse(path)
+    if len(tree.findall(".//interval")) != 1:
+        raise ValueError("Expected one measurement interval; aggregate explicitly before exporting.")
     return {element.get("id"): {key: float(value) for key, value in element.attrib.items()
                                   if key != "id"}
             for element in tree.findall(".//interval/edge")}
 
 
-def direction(edge):
+def delay_metrics(traffic, begin, end):
+    """Vehicle-time shares, never an unsupported per-vehicle delay estimate.
+
+    Export preparation only: the archived assumed-demand run is not live data.
+    See SUMO's Lane-_or_Edge-based_Traffic_Measures output documentation.
+    """
+    if not all(math.isfinite(v) for v in (begin, end)) or end <= begin:
+        raise ValueError("Invalid SUMO measurement interval.")
+    def value(key):
+        v = traffic.get(key)
+        return v if isinstance(v, (int, float)) and math.isfinite(v) and v >= 0 else None
+    sampled, stopped, lost = (value(k) for k in ("sampledSeconds", "waitingTime", "timeLoss"))
+    def percent(numerator):
+        if not sampled or numerator is None or numerator > sampled + .02:return None
+        return round(100 * min(numerator, sampled) / sampled, 3)
+    return {"sampled_vehicle_seconds":sampled, "stopped_vehicle_seconds":stopped,
+            "time_loss_vehicle_seconds":lost, "stopped_time_percent":percent(stopped),
+            "time_loss_percent":percent(lost), "simulated_entered":value("entered"),
+            "simulated_left":value("left"), "simulated_departed":value("departed"),
+            "simulated_arrived":value("arrived"), "simulated_flow_vehicles_h":value("flow"),
+            "interval_begin_s":begin, "interval_end_s":end, "interval_seconds":end-begin,
+            "halting_speed_threshold_m_s":.1,
+            "basis":"Archived assumed-demand SUMO scenario; unavailable in live discovery."}
+
+
+def bearing_field(edge):
     shape = edge.getShape()
-    if len(shape) < 2:
-        return None
-    dx = shape[-1][0] - shape[0][0]
-    dy = shape[-1][1] - shape[0][1]
-    return ("e_b" if dx > 0 else "w_b") if abs(dx) > abs(dy) else (
-        "n_b" if dy > 0 else "s_b")
+    dx, dy = shape[-1][0] - shape[0][0], shape[-1][1] - shape[0][1]
+    return ("e_b" if dx > 0 else "w_b") if abs(dx) > abs(dy) else ("n_b" if dy > 0 else "s_b")
+
+
+def hourly_profile(records):
+    """Median share of daily traffic per period from official 24-hour sheets."""
+    automated = sorted((r for r in records if r.get("type", "").strip().upper() in ("AUTO", "AUT")
+                        and r.get("day") in WEEKDAYS and r.get("dir", "").strip().upper() == "AT" and r.get("count_date")),
+                       key=lambda r: r["count_date"], reverse=True)
+    shares = {p: [] for p in PERIODS}
+    used = []
+    for row in automated:
+        if len(used) >= SHEET_SAMPLE:
+            break
+        try:
+            sheet = find_sheet(row["primary_street"], row["cross_street"], row["count_date"], "AUTO", DATA / "sheets")
+        except SheetError:
+            continue
+        if sheet["url"] in {u["url"] for u in used}:
+            continue
+        for direction, values in sheet["hourly"].items():
+            day = sum(values)
+            if day < 500:
+                continue
+            for period, spec in PERIODS.items():
+                shares[period].append(statistics.fmean(values[h] for h in spec["hours"]) / day)
+        used.append({"url": sheet["url"], "date": sheet["date"], "location": sheet["location"]})
+    if not used:
+        raise SystemExit("No official 24-hour sheets could be read; refusing to assume hourly shares.")
+    return {p: round(statistics.median(v), 5) for p, v in shares.items()}, used
 
 
 def main():
-    net = sumolib.net.readNet(str(SIM / "dtla.net.xml"))
-    edges = []
-    by_street = defaultdict(list)
-    node_streets = defaultdict(set)
+    import sumolib
+    net = sumolib.net.readNet(str(ROOT / "sim" / "dtla.net.xml"))
+    records = json.loads((DATA / "ladot-records.json").read_text())
+    edges, by_street, node_streets = [], defaultdict(list), defaultdict(set)
     for edge in net.getEdges():
         if edge.isSpecial() or not edge.allows("passenger"):
             continue
         kind = edge.getType().split("|")[-1].replace("highway.", "")
         if kind not in ROAD_TYPES or edge.getLength() < 15:
             continue
-        shape = edge.getShape()
-        coords = [net.convertXY2LonLat(*point) for point in shape]
-        midpoint = coords[len(coords) // 2]
-        if not (BBOX[0] <= midpoint[0] <= BBOX[2] and BBOX[1] <= midpoint[1] <= BBOX[3]):
+        coords = [net.convertXY2LonLat(*p) for p in edge.getShape()]
+        mid = coords[len(coords) // 2]
+        if not (BBOX[0] <= mid[0] <= BBOX[2] and BBOX[1] <= mid[1] <= BBOX[3]):
             continue
-        item = {"edge": edge, "id": edge.getID(), "name": edge.getName() or kind.replace("_", " ").title(),
-                "kind": kind, "length_m": edge.getLength(),
-                "coordinates": [[round(lon, 6), round(lat, 6)] for lon, lat in coords],
-                "center": midpoint}
+        x, y = net.convertLonLat2XY(*mid)
+        item = {"edge": edge, "id": edge.getID(), "name": edge.getName() or kind.replace("_", " ").title(), "kind": kind,
+                "length_m": edge.getLength(), "xy": (x, y), "field": bearing_field(edge),
+                "coordinates": [[round(lon, 6), round(lat, 6)] for lon, lat in coords]}
         edges.append(item)
         if edge.getName():
             key = street_key(edge.getName())
+            item["street"] = key
             by_street[key].append(item)
             node_streets[edge.getFromNode().getID()].add(key)
             node_streets[edge.getToNode().getID()].add(key)
 
-    counts = json.loads((SOURCES / "ladot-traffic-counts.json").read_text())
     anchors = {}
-    for record in counts:
-        try:
-            day_total = float(record["total"])
-        except (ValueError, KeyError, TypeError):
+    for record in records:
+        if record.get("type", "").strip().upper() not in ("AUTO", "AUT") or record.get("day") not in WEEKDAYS or not record.get("count_date"):
             continue
-        if day_total <= 0 or record.get("day") not in {"MON", "TUE", "WED", "THU", "FRI"}:
+        if record.get("dir", "").strip().upper() != "AT":
             continue
         primary, cross = street_key(record.get("primary_street", "")), street_key(record.get("cross_street", ""))
-        if not primary or not cross or primary not in by_street:
-            continue
-        candidates = []
-        for item in by_street[primary]:
+        for item in by_street.get(primary, []):
             edge = item["edge"]
-            for node in (edge.getFromNode(), edge.getToNode()):
-                if cross in node_streets[node.getID()]:
-                    candidates.append(item)
-                    break
-        if not candidates:
-            continue
-        for item in candidates:
-            field = direction(item["edge"])
+            if not any(cross in node_streets[n.getID()] for n in (edge.getFromNode(), edge.getToNode())):
+                continue
             try:
-                directional = float(record.get(field) or 0)
-            except (ValueError, TypeError):
-                directional = 0
-            if directional <= 0:
-                directional = day_total / 2  # explicit direction-split assumption
+                daily = float(record.get(item["field"]) or 0)
+            except (TypeError, ValueError):
+                continue
+            if daily <= 0:
+                continue  # never split a total into an unreported direction
             previous = anchors.get(item["id"])
-            if previous is None or record.get("count_date", "") > previous["date"]:
-                anchors[item["id"]] = {"daily": directional, "date": record["count_date"][:10],
-                                        "street": record.get("primary_street", ""),
-                                        "cross": record.get("cross_street", ""),
-                                        "direction_assumed": not bool(record.get(field))}
+            if previous is None or record["count_date"] > previous["date"]:
+                anchors[item["id"]] = {"daily": daily, "date": record["count_date"][:10], "street": record["primary_street"],
+                                       "cross": record["cross_street"], "direction": item["field"]}
 
-    fleet, fleet_rows = emfac_rates()
-    simulations = {}
-    total_teleports = 0
-    for period in PERIODS:
-        traffic = edge_data(SIM / f"{period}.traffic.xml")
-        emissions = edge_data(SIM / f"{period}.emissions.xml")
-        stats = ET.parse(SIM / f"{period}.statistics.xml").getroot()
-        total_teleports += int(stats.find("teleports").get("total"))
-        # SUMO reports mg absolute and meters driven over the 3,000-second
-        # measurement window. Normalize its road variation to the EMFAC fleet.
-        distance = sum(traffic.get(item["id"], {}).get("distance", 0) for item in edges)
-        simulations[period] = {"traffic": traffic, "emissions": emissions,
-                               "sumo_g_per_mile": {
-                                   p: sum(emissions.get(item["id"], {}).get(f"{p}_abs", 0)
-                                          for item in edges) / 1000 / (distance / 1609.344)
-                                   for p in ("CO2", "NOx")}}
-
+    counted = [e for e in edges if e["id"] in anchors]
+    class_values = defaultdict(list)
+    for e in counted:
+        class_values[e["kind"]].append(anchors[e["id"]]["daily"])
+    shares, sheets = hourly_profile(records)
+    bases = defaultdict(int)
     output = []
     for item in edges:
-        edge_id, kind = item["id"], item["kind"]
-        anchor = anchors.get(edge_id)
-        daily = anchor["daily"] if anchor else BASE_DAILY[kind] / 2
-        values = {}
-        for period, params in PERIODS.items():
-            sim = simulations[period]
-            traffic = sim["traffic"].get(edge_id, {})
-            emissions = sim["emissions"].get(edge_id, {})
-            base_flow = daily * params["share"]
-            # Relative route pressure is illustrative. A historical count,
-            # where present, fixes the volume rather than being blended away.
-            simulated_flow = traffic.get("flow", 0)
-            assumed_flow = BASE_DAILY[kind] / 2 * params["share"]
-            pressure = min(1.9, max(.55, .7 + .3 * simulated_flow / max(assumed_flow, 1)))
-            volume = base_flow if anchor else base_flow * pressure
-            distance_m = traffic.get("distance", 0)
-            result = {"vehicles_h": round(volume),
-                      "speed_kmh": round(traffic.get("speed", item["edge"].getSpeed()) * 3.6, 1)}
-            for pollutant, output_key, divisor in (("CO2", "co2_kg_h", 1000), ("NOx", "nox_g_h", 1)):
-                sumo_rate = (emissions.get(f"{pollutant}_abs", 0) / 1000 /
-                             (distance_m / 1609.344)) if distance_m > 50 else sim["sumo_g_per_mile"][pollutant]
-                multiplier = min(2.2, max(.5, sumo_rate / max(sim["sumo_g_per_mile"][pollutant], .001)))
-                result[output_key] = round(volume * item["length_m"] / 1609.344 *
-                                           fleet[pollutant] * multiplier / divisor, 2)
-            values[period] = result
-        output.append({"id": edge_id, "name": item["name"], "class": kind,
-                       "length_m": round(item["length_m"]), "coordinates": item["coordinates"],
-                       "basis": "historical_count" if anchor else "class_assumption",
-                       "count": anchor, "periods": values})
+        anchor = anchors.get(item["id"])
+        detail = None
+        if anchor:
+            daily, basis, detail = anchor["daily"], "counted", anchor
+        else:
+            nearby = [(math.dist(item["xy"], c["xy"]), anchors[c["id"]]) for c in by_street.get(item.get("street"), [])
+                      if c["id"] in anchors and c["field"] == item["field"]]
+            nearby = [(d, a) for d, a in nearby if d <= 1200]
+            if nearby:
+                weights = [(1 / max(d, 25), a) for d, a in nearby]
+                daily = sum(w * a["daily"] for w, a in weights) / sum(w for w, _ in weights)
+                basis = "same_street"
+                detail = {"sources": len(nearby), "nearest_m": round(min(d for d, _ in nearby)),
+                          "dates": sorted({a["date"] for _, a in nearby})}
+            elif len(class_values.get(item["kind"], [])) >= 10:
+                daily, basis = statistics.median(class_values[item["kind"]]), "class_median"
+                detail = {"counted_roads": len(class_values[item["kind"]])}
+            else:
+                daily, basis = CLASS_DEFAULT[item["kind"]] / 2, "assumed"
+        bases[basis] += 1
+        miles = item["length_m"] / 1609.344
+        periods = {}
+        for period in PERIODS:
+            volume = daily * shares[period]
+            periods[period] = {"vehicles_h": round(volume), "speed_kmh": round(item["edge"].getSpeed() * 3.6, 1),
+                               "co2_kg_h": round(volume * miles * CARB["CO2"] / 1000, 2),
+                               "nox_g_h": round(volume * miles * CARB["NOx"], 2)}
+        output.append({"id": item["id"], "name": item["name"], "class": item["kind"], "length_m": round(item["length_m"]),
+                       "coordinates": item["coordinates"], "basis": basis, "count": anchor,
+                       "basis_detail": detail if basis != "counted" else None, "daily_vehicles": round(daily),
+                       "periods": periods})
 
-    summary = {period: {key: round(sum(road["periods"][period][key] for road in output), 1)
-                        for key in ("co2_kg_h", "nox_g_h")}
-               for period in PERIODS}
-    data = {"schema": 1, "title": "Downtown Los Angeles emissions pilot", "bbox": BBOX,
-            "periods": PERIODS, "fleet_rates_g_per_mile": {k: round(v, 4) for k, v in fleet.items()},
-            "summary": summary, "roads": output,
-            "quality": {"road_edges": len(output), "historical_anchor_edges": len(anchors),
-                        "emfac_fleet_rows": fleet_rows, "simulation_teleports": total_teleports,
-                        "window_minutes": 50},
+    summary = {p: {k: round(sum(r["periods"][p][k] for r in output), 1) for k in ("co2_kg_h", "nox_g_h")} for p in PERIODS}
+    data = {"schema": 2, "title": "Downtown Los Angeles road emissions from counted traffic", "bbox": BBOX,
+            "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "periods": {p: {"label": s["label"], "share_of_daily": shares[p]} for p, s in PERIODS.items()},
+            "fleet_rates_g_per_mile": CARB, "summary": summary, "roads": output,
+            "quality": {"road_edges": len(output), "historical_anchor_edges": bases["counted"], "basis_counts": dict(bases),
+                        "hourly_profile_sheets": len(sheets), "simulation_teleports": 0},
+            "hourly_profile_sheets": sheets,
             "method": {
-                "headline": "Illustrative tailpipe running-exhaust scenario, not a measured inventory.",
-                "traffic": "SUMO 1.28 random origin–destination runs shape road speed and relative pressure. Routes are assumed, not observed.",
-                "volume": "Latest matched weekday LADOT 2011–2016 directional count anchors; other streets use stated functional-class daily-volume assumptions. Midday 6% and PM peak 8.5% of daily traffic.",
-                "emissions": "SUMO edge-level running-emissions variation normalized to 2026 Los Angeles EMFAC2025 v2.1.1 fleet VMT-weighted running-exhaust CO₂ and NOₓ rates. Excludes non-tailpipe and upstream emissions.",
-                "uncertainty": "Illustrative sensitivity: approximately ±35% at historical anchors and ±60% on assumed-volume roads; these are judgmental ranges, not confidence intervals.",
-                "signal": "OSM signal locations and SUMO generated timing; actual signal plans were unavailable."},
+                "headline": "Tailpipe running-exhaust estimate built from counted LADOT traffic (2011–2016) and CARB 2026 Los Angeles fleet rates.",
+                "traffic": f"Counted roads: {bases['counted']}. Same street, inverse-distance from counts within 1.2 km: {bases['same_street']}. Median counted volume of the same road class: {bases['class_median']}. Assumed class default: {bases['assumed']}.",
+                "volume": f"Daily volumes are LADOT automated 24-hour counts by direction. Hourly shares come from {len(sheets)} official LADOT 24-hour count sheets: midday (11 AM–2 PM) {shares['midday']*100:.2f}% and PM peak (4–7 PM) {shares['pm_peak']*100:.2f}% of daily traffic per hour.",
+                "emissions": "Vehicles × segment length × CARB EMFAC2025 v2.1.1 2026 Los Angeles (SC) VMT-weighted running-exhaust rates. Excludes starts, idling surcharges, non-tailpipe and upstream emissions; congestion is not modeled on this layer.",
+                "uncertainty": "Counts are 2011–2016 weekday counts; current traffic may differ. Roads without their own count carry the basis shown when selected.",
+                "signal": "Signal timing does not enter this layer."},
             "sources": [
                 {"label": "CARB EMFAC2025 v2.1.1, Los Angeles (SC), 2026", "url": "https://emfac.arb.ca.gov/emissions-inventory/3b6469b056eb7e5a47b65c0c96415b33d5e20812"},
-                {"label": "LADOT traffic counts, 2011–2016", "url": "https://data.lacity.org/Transportation/LADOT-Traffic-Counts-Summary/94wu-3ps3"},
-                {"label": "OpenStreetMap contributors, road geometry", "url": "https://www.openstreetmap.org/copyright"},
-                {"label": "Eclipse SUMO simulation", "url": "https://sumo.dlr.de/docs/"}]}
+                {"label": "LADOT Traffic Counts Summary, 2011–2016", "url": "https://data.lacity.org/Transportation/LADOT-Traffic-Counts-Summary/94wu-3ps3"},
+                {"label": "LADOT 24-hour count sheets (NavigateLA)", "url": sheets[0]["url"]},
+                {"label": "OpenStreetMap contributors, road geometry", "url": "https://www.openstreetmap.org/copyright"}]}
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(data, separators=(",", ":")))
-    print("Roads:", len(output), "historical anchor edges:", len(anchors))
-    print("EMFAC rates g/mi:", fleet)
-    print("SUMO rates g/mi:", {p: sim["sumo_g_per_mile"] for p, sim in simulations.items()})
+    print("Roads:", len(output), "bases:", dict(bases), "shares:", shares, "sheets:", len(sheets))
     print("Summary:", summary)
-    print("Teleports:", total_teleports, "output bytes:", OUT.stat().st_size)
 
 
 if __name__ == "__main__":
