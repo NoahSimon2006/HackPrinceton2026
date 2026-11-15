@@ -1,6 +1,21 @@
 import unittest
 
-from site_evidence import detection_features
+from site_evidence import detection_features, imagery_evidence
+
+
+class ParcelQueryTest(unittest.TestCase):
+    def test_intersection_queries_neighboring_parcels_without_a_containing_parcel(self):
+        from json import dumps
+        from test_site_measurements import LAT, LON, polygon
+
+        def request(path, params, *args, **kwargs):
+            self.assertEqual(path, "/property/extract")
+            self.assertEqual(params["buffer-meter"], 200)
+            return dumps({"features":[{"geometry":polygon(10, 10, 30, 30),
+                                        "properties":{"structures":None}}]})
+        items = imagery_evidence(request, "urban", LON, LAT, "street", "outlines")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["properties"]["label"], "Parcel boundary")
 
 
 class DetectionParsingTest(unittest.TestCase):

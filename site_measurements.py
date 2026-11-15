@@ -68,7 +68,7 @@ def validate_inputs(markings, scenario, workflow, lon, lat):
     if not isinstance(markings, list) or len(markings) > 20:
         raise ValueError("Use at most 20 map markings.")
     point = Point(*PROJECT.transform(lon, lat))
-    allowed = {"crossing", "access"} if workflow == "street" else {"drainage", "treatment"}
+    allowed = {"crossing", "access"} if workflow == "street" else {"drainage", "treatment", "access"}
     clean = []
     for marking in markings:
         if not isinstance(marking, dict) or marking.get("kind") not in allowed:
@@ -106,7 +106,7 @@ def fact(identifier, label, value, unit, origin, *, basis="measured", method=MET
             "method": method, "note": note, "feature_ids": list(feature_ids)}
 
 
-def measure_outlines(features, lon, lat):
+def measure_outlines(features, lon, lat, *, nearby=False):
     facts, warnings, valid = [], [], []
     point = Point(*PROJECT.transform(lon, lat))
     for index, feature in enumerate(features):
@@ -120,9 +120,16 @@ def measure_outlines(features, lon, lat):
         except ValueError:
             warnings.append(f"{props['evidenceId']}: invalid or out-of-scope outline; not measured.")
     features[:] = [feature for feature, _ in valid]
+    if nearby and valid:
+        origin = source("Vexcel parcel extraction", f"{VEXCEL}/property/extract")
+        for label, identifier in (("Parcel boundary", "nearby-parcels"), ("Building footprint", "nearby-buildings")):
+            ids = [f["properties"]["evidenceId"] for f, _ in valid if f["properties"]["label"] == label]
+            if ids:
+                facts.append(fact(identifier, f"Returned nearby {label.lower()} outlines", len(ids), "outlines",
+                                  origin, note="Provider coverage is not a parcel survey or proof of ownership.", feature_ids=ids))
     parcels = [(f, g) for f, g in valid if f["properties"]["label"] == "Parcel boundary" and g.covers(point)]
     if not parcels:
-        return [], warnings + ["No valid parcel polygon containing the selected point. Parcel-relative areas unavailable."]
+        return facts, warnings + (["No valid parcel polygon containing the selected point. Parcel-relative areas unavailable."] if not nearby else [])
     selected, parcel = parcels[0]
     props = selected["properties"]
     origin = source("Vexcel parcel extraction", f"{VEXCEL}/property/extract", date=props.get("date"), collection=props.get("collection"))
@@ -136,7 +143,7 @@ def measure_outlines(features, lon, lat):
         if part.area > 0:
             clipped.append(part)
             ids.append(f["properties"]["evidenceId"])
-        else:
+        elif not nearby:
             warnings.append(f"{f['properties']['evidenceId']}: footprint is outside the selected parcel; excluded from totals.")
     if clipped:
         area = unary_union(clipped).area
@@ -196,7 +203,7 @@ def measure_markings(markings, scenario):
     return facts
 
 
-def property_facts(details, frontages):
+def property_facts(details, frontages, nearby=None):
     facts, warnings = [], []
     origin = source("CoStar local property kit")
     fields = {"propertyType": ("Property type", ""), "units": ("Reported apartment units", "units"),
@@ -216,8 +223,14 @@ def property_facts(details, frontages):
         facts.append(fact(f"costar-{field}", label, value, unit, origin, basis="reported",
                           method="Reported field from the selected CoStar property; observation date unavailable.",
                           note="Gross floor area may span multiple floors; do not substitute it for a roof footprint." if field == "buildingAreaSqFt" else "Reported snapshot; not a current field count."))
+    if nearby:
+        for use in sorted({item["type"] for item in nearby}):
+            count = sum(item["type"] == use for item in nearby)
+            facts.append(fact(f"costar-nearby-use-{len(facts) + 1}", f"Nearby CoStar records by property type: {use}", count,
+                              "records", origin, basis="reported", method="Geocoded property records within 200 m of the selected intersection.",
+                              note="Location and property use are a screening inventory. Coverage does not establish land ownership or parcel boundaries."))
     if not details:
-        warnings.append("No selected CoStar property record. Nearby frontage does not establish site ownership or access.")
+        warnings.append("No selected CoStar property record. Nearby records and frontage do not establish site ownership or access.")
     valid_frontages = []
     for index, frontage in enumerate(frontages, 1):
         identifier = frontage["evidenceId"] = f"frontage-{index}"

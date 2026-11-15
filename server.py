@@ -169,15 +169,10 @@ def property_catalog():
     return items, details, frontages
 
 
-def nearby_frontages(lon, lat, property_id=None):
-    items, _, frontages = property_catalog()
+def nearby_properties(items, lon, lat, radius):
     scale = math.cos(math.radians(lat))
-    matches = []
-    for prop in items:
-        if math.hypot((prop["lon"] - lon) * scale, prop["lat"] - lat) * 111_320 <= 110:
-            matches.extend({**line, "selectedProperty": prop["id"] == property_id}
-                           for line in frontages.get(prop["id"], ()))
-    return matches[:12]
+    matches = [(math.hypot((p["lon"] - lon) * scale, p["lat"] - lat) * 111_320, p) for p in items]
+    return [item for distance, item in sorted(matches, key=lambda match: match[0]) if distance <= radius]
 
 
 def site_coordinates(query):
@@ -258,10 +253,13 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         def property_context():
-            items, details, _ = property_catalog()
+            items, details, frontage_catalog = property_catalog()
             selected = next((item for item in items if item["id"] == property_id and
                              abs(item["lat"] - lat) < .00001 and abs(item["lon"] - lon) < .00001), None)
-            return (details[property_id] if selected else None), nearby_frontages(lon, lat, property_id if selected else None)
+            nearby = nearby_properties(items, lon, lat, 200 if workflow == "street" else 110)
+            frontages = [{**line, "selectedProperty": selected is not None and item["id"] == property_id}
+                         for item in nearby for line in frontage_catalog.get(item["id"], ())]
+            return (details[property_id] if selected else None), frontages, nearby if workflow == "street" else []
 
         def hydrology_context():
             result = {"unavailable": []}

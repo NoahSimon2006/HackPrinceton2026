@@ -1,6 +1,4 @@
-/* Backend proposal.Proposal is the canonical revision-bound geometry contract.
- * Development fixtures and evaluated designs deliberately use separate rendering paths.
- */
+/* Render revision-bound proposals and preserve earlier results on source failure. */
 (() => {
   map.createPane("proposal");
   map.getPane("proposal").style.zIndex = 610;
@@ -8,6 +6,8 @@
   let selected = null, published = null, comparison = null, layer = null, request = 0, controller;
   let realRevision = 0;
   const show = $("show-proposal");
+  const statuses = {fixture:"Development fixture", draft:"Draft concept", recommended:"Recommended",
+    tested:"Tested, eligible", rejected:"Tested, rejected"};
   const element = (tag, text) => { const el = document.createElement(tag); if (text != null) el.textContent = text; return el; };
   const label = name => String(name).replaceAll("_", " ");
   const finite = value => typeof value === "number" && Number.isFinite(value);
@@ -24,7 +24,7 @@
   }
   function caption(stale = false) {
     if (!published) return "No published proposal";
-    return `${published.development_fixture ? "DEVELOPMENT FIXTURE" : "PROPOSED LAYOUT"} · revision ${published.revision}${stale ? " · stale inputs" : ""}`;
+    return `${statuses[published.status]} · revision ${published.revision}${stale ? " · stale inputs" : ""}`;
   }
   function removeProposal() {
     published = null; layer?.remove(); layer = null;
@@ -51,6 +51,8 @@
   }
   function validate(p, site, revision, fixture) {
     if (p.schema_version !== 1 || p.development_fixture !== fixture || !identity(p, site, revision)) throw new Error("Proposal identity mismatch.");
+    const allowed = fixture ? ["fixture"] : site.workflow === "water" ? ["draft"] : ["recommended","tested","rejected"];
+    if (!allowed.includes(p.status)) throw new Error("Proposal status mismatch.");
     if (!Array.isArray(p.geometry) || !p.geometry.length || !Array.isArray(p.metrics) || !p.metrics.length ||
         p.geometry.some(g => g.properties?.revision !== revision) ||
         p.metrics.some(m => m.revision !== revision || m.input_hash !== p.input_hash)) throw new Error("Proposal revision mismatch.");
@@ -60,9 +62,12 @@
   }
   function publish(p, area, site) {
     const fixture = p.development_fixture;
+    const water = p.status === "draft";
     const replacement = L.geoJSON({type:"FeatureCollection",features:p.geometry}, {
       pane:"proposal", interactive:false,
       style:fixture ? {color:"#e0c4ff",weight:3,dashArray:"7 4",fillColor:"#b388ff",fillOpacity:.42}
+        : water ? {color:"#91ebbd",weight:3,dashArray:"5 3",fillColor:"#5bd58f",fillOpacity:.6}
+        : p.status === "rejected" ? {color:"#ffaf98",weight:3,dashArray:"6 4",fillColor:"#db7358",fillOpacity:.45}
         : {color:"#ffdc83",weight:3,fillColor:"#e4ad39",fillOpacity:.5},
     });
     // Publish geometry, measurements and identity together after validation.
@@ -70,20 +75,36 @@
     show.disabled = false; show.checked = true; visible();
     $("proposal-review").hidden = false;
     $("proposal-review").setAttribute("data-fixture", String(fixture));
-    $("proposal-kind").textContent = fixture ? "DEVELOPMENT FIXTURE" : "EVALUATED PROPOSAL · SIMULATED";
-    $("proposal-title").textContent = fixture ? (site.workflow === "street" ? "Test island footprint" : "Test treatment footprint") : label(p.geometry[0]?.properties?.layout ?? "Recommended lane reallocation");
+    $("proposal-review").setAttribute("data-status", p.status);
+    $("proposal-kind").textContent = statuses[p.status];
+    $("proposal-title").textContent = fixture ? (site.workflow === "street" ? "Test island footprint" : "Test treatment footprint")
+      : water ? "Rain garden" : label(p.geometry[0].properties.layout);
     $("proposal-summary").textContent = p.recommendation;
-    $("proposal-area-label").textContent = fixture ? "Test footprint" : "Measured footprint";
+    $("proposal-area-label").textContent = "Footprint";
     $("proposal-area").textContent = `${area.proposed.toFixed(1)} ${area.unit}`;
-    $("proposal-impact").textContent = fixture ? "Unassessed" : "See comparison below";
+    $("proposal-impact").textContent = fixture ? "Unassessed" : water ? "Screening estimate" : "Simulated · see comparison";
+    $("proposal-water-metrics").hidden = !water;
+    $("proposal-water-metrics").replaceChildren();
+    if (water) for (const [id, title] of [["storage_volume","Ponding storage"],["runoff_volume","Runoff"],
+      ["captured_volume","Capture"],["overflow_volume","Overflow"]]) {
+      const metric = p.metrics.find(m => m.id === id);
+      $("proposal-water-metrics").append(element("dt", title), element("dd", number(metric?.proposed, metric?.unit, 3)));
+    }
+    $("proposal-assumptions").hidden = !water;
+    $("proposal-assumptions").replaceChildren(...(water ? p.assumptions.map(text => element("li", text)) : []));
     $("proposal-checks").replaceChildren();
     if (!fixture) for (const [name, check] of [["Access",p.access],["Overlap",p.overlap]]) {
       $("proposal-checks").append(element("p", `${name}: ${check?.text ?? "Not assessed"}`));
     }
     $("proposal-revision").textContent = `Revision ${p.revision} · inputs ${p.input_revision} · ${p.input_hash.slice(0,8)}`;
-    $("proposal-map-caption").textContent = caption();
-    $("proposal-stale").hidden = true;
+    const stale = p.input_revision !== site.inputRevision;
+    $("proposal-map-caption").textContent = caption(stale);
+    $("proposal-stale").hidden = !stale;
     $("revise-proposal-fixture").disabled = !fixture;
+  }
+  function focus() {
+    const bounds = layer?.getBounds?.();
+    if (bounds?.isValid()) map.fitBounds(bounds, {maxZoom:20, padding:[60,60]});
   }
   const metrics = [
     ["Total CO₂", "kg / demand hour", r => r.co2_kg_per_hour],
@@ -95,7 +116,7 @@
     ["Maximum approach queue", "m", r => maximum(r.max_queue_m)],
     ["Maximum approach hourly noise", "dB(A)", r => maximum(r.max_noise_db)],
   ];
-  function renderComparison(c) {
+  function renderComparison(c, alternatives) {
     const names = Object.keys(c.results ?? {}).filter(name => name !== "baseline");
     const recommended = c.ranking?.recommended;
     $("traffic-comparison").hidden = false;
@@ -128,14 +149,24 @@
     for (const name of names) {
       const verdict = c.ranking?.verdicts?.[name] ?? {}, check = c.checks?.[name] ?? {};
       const card = element("details"), summary = element("summary", label(name));
-      const status = element("span", name === recommended ? "Recommended" : verdict.eligible === true ? "Eligible, not selected" : verdict.eligible === false ? "Not eligible" : "Not assessed");
+      const [proposal, area] = alternatives[name];
+      const status = element("span", statuses[proposal.status]);
       status.className = "comparison-verdict"; summary.append(status); card.append(summary);
       if (c.descriptions?.[name]) card.append(element("p", c.descriptions[name]));
+      const inspect = element("button", "Show footprint on map");
+      inspect.type = "button";
+      inspect.addEventListener("click", () => {
+        if (comparison !== c) return;
+        publish(proposal, area, selected);
+        focus();
+      });
+      card.append(inspect);
       const reasons = [...(verdict.ineligible_reasons ?? []), ...(verdict.tradeoffs ?? [])];
       if (reasons.length) {
         const list = element("ul"); for (const reason of reasons) list.append(element("li", reason)); card.append(list);
       }
       card.append(element("p", `Parcel overlap: ${number(check.parcel_overlap_m2, "m²")}. Building overlap: ${number(check.building_overlap_m2, "m²")}.`));
+      if (finite(check.overlapping_costar_records)) card.append(element("p", `CoStar records located within touched mapped parcels: ${check.overlapping_costar_records}.`));
       card.append(element("p", `Mapped access conflicts: ${number(check.access_conflicts, "", 0)}. Keep-clear conflict: ${check.keep_clear_conflict === true ? "Yes" : check.keep_clear_conflict === false ? "No" : "Not assessed"}.`));
       const detectionStatus = {ready:"Available", empty:"No candidates returned", unavailable:"Unavailable"}[check.detection_status] ?? "Not assessed";
       card.append(element("p", `Crossing/driveway detection: ${detectionStatus}. Overlapping crosswalk candidates: ${number(check.candidate_crosswalk_overlaps, "", 0)}. Driveway candidates: ${number(check.candidate_driveway_overlaps, "", 0)}.`));
@@ -157,6 +188,21 @@
         event.inputRevision !== selected.inputRevision || !Number.isInteger(event.revision) || event.revision <= realRevision) return;
     const p = event.proposal, c = event.comparison;
     try {
+      if (selected.workflow === "water") {
+        if (c || (p && event.draftQuestion)) throw new Error("Stormwater result mismatch.");
+        const area = p ? validate(p, selected, event.revision, false) : null;
+        controller?.abort(); ++request; realRevision = event.revision;
+        $("proposal-result-message").hidden = Boolean(p);
+        if (p) {
+          publish(p, area, selected);
+          focus();
+        } else {
+          removeProposal();
+          $("proposal-result-message").textContent = event.draftQuestion ?? "No draft is available for this revision.";
+        }
+        $("load-proposal-fixture").disabled = false;
+        return;
+      }
       if (!c || !identity(c, selected, event.revision) || !c.ranking) throw new Error("Comparison identity mismatch.");
       if (c.status === "unavailable") {
         if (p) throw new Error("An unavailable comparison cannot publish a proposal.");
@@ -169,15 +215,24 @@
         return;
       }
       if (!c.results?.baseline) throw new Error("Comparison metrics are missing.");
-      const area = p ? validate(p, selected, event.revision, false) : null;
-      if (p && (p.input_hash !== c.input_hash || !c.ranking.recommended ||
-          p.geometry.some(g => g.properties.layout !== c.ranking.recommended))) throw new Error("Proposal and comparison mismatch.");
-      if (!p && c.ranking.recommended) throw new Error("Recommended proposal is missing.");
+      const names = Object.keys(c.results).filter(name => name !== "baseline");
+      if (!names.length) throw new Error("Tested layouts are missing.");
+      const alternatives = Object.fromEntries(names.map(name => {
+        const layout = event.alternatives?.[name];
+        const expected = name === c.ranking.recommended ? "recommended" : c.ranking.verdicts[name]?.eligible ? "tested" : "rejected";
+        const area = layout && validate(layout, selected, event.revision, false);
+        if (!area || layout.status !== expected || layout.input_hash !== c.input_hash ||
+            layout.geometry.some(g => g.properties.layout !== name)) throw new Error("Tested layout and comparison mismatch.");
+        return [name, [layout, area]];
+      }));
+      const winner = alternatives[c.ranking.recommended];
+      if ((Boolean(winner) !== Boolean(p)) || (winner && JSON.stringify(winner[0]) !== JSON.stringify(p)))
+        throw new Error("Recommended proposal and comparison mismatch.");
       controller?.abort(); ++request;
       realRevision = event.revision; comparison = c;
       $("proposal-result-message").hidden = true;
-      renderComparison(c);
-      if (p) publish(p, area, selected); else removeProposal();
+      renderComparison(c, alternatives);
+      if (winner) publish(...winner, selected); else removeProposal();
       $("load-proposal-fixture").disabled = false;
       $("proposal-message").textContent = "Development preview replaces the map with a clearly labeled synthetic UI fixture.";
     } catch (error) {
@@ -208,6 +263,7 @@
     }
   }
   show.addEventListener("change", visible);
+  $("focus-proposal").addEventListener("click", () => { show.checked = true; visible(); focus(); });
   $("load-proposal-fixture").addEventListener("click", preview);
   $("revise-proposal-fixture").addEventListener("click", preview);
   map.on("plannersite", clear);

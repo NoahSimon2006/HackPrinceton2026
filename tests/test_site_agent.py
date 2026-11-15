@@ -141,7 +141,7 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(len([e for e in events if e["stage"] == "model-request" and e["status"] == "completed"]), 6)
 
     def test_real_agent_graph_collects_facts_validates_references_and_redacts_geometry(self):
-        model = ScriptedModel(responses=[complete(), calls("investigate_site"), complete()])
+        model = ScriptedModel(responses=[complete(), calls("investigate_site"), calls("draft_rain_garden"), complete()])
         site_model = ScriptedModel(responses=[complete()])
         domain_model = ScriptedModel(responses=[AIMessage(content="", tool_calls=[{"name":"SiteReview","id":"domain","args":{"findings":[],"recommendations":[],"questions":["Verify drainage connections?"]}}])])
         barrier = Barrier(2)
@@ -152,7 +152,8 @@ class AgentTest(unittest.TestCase):
         def hydrology():
             barrier.wait(timeout=3)
             return {"estimate":{"inches":1.01,"depth_range":[1,1.1],"method":"interpolated"}}
-        outlines = [feature(polygon(-10, -10, 100, 100), "Parcel boundary")]
+        outlines = [feature(polygon(-10, -10, 100, 100), "Parcel boundary"),
+                    feature(polygon(0, 0, 20, 20), "Building footprint")]
         details = {"propertyType": "Multifamily", "units": 194, "reportedParkingSpaces": 25,
                    "vacancyPercent":43, "privateKey":"PRIVATE KEY", "name": "PRIVATE PROPERTY", "address": "PRIVATE ADDRESS", "lat": LAT, "lon": LON}
         selected = {"value":2040,"unit":"m² of raster area","classification":"derived",
@@ -161,9 +162,11 @@ class AgentTest(unittest.TestCase):
                     "limitations":"Window-limited raster area; not a verified catchment or flood depth."}
         with patch("site_agent.ChatXAI", side_effect=[model,site_model,domain_model]):
             result = analyze_site("unused", "fake", "Review this site", "water", [],
-                imagery, lambda: (details, []), hydrology, lon=LON, lat=LAT, activity=Activity(events.append), discovery=selected)
+                imagery, lambda: (details, []), hydrology, lon=LON, lat=LAT, activity=Activity(events.append), discovery=selected,
+                analysis_identity=IDENTITY)
         self.assertIsNone(result["analysisError"])
         self.assertIsNotNone(result["report"])
+        self.assertEqual(result["proposal"]["status"], "draft")
         self.assertEqual(next(f["value"] for f in result["facts"] if f["id"] == "parcel-area"), 10000)
         self.assertTrue(result["evidence"]["outlines"][0]["geometry"])
         starts = [i for i,e in enumerate(events) if e["stage"] == "investigation" and e["status"] == "started"]
@@ -178,6 +181,7 @@ class AgentTest(unittest.TestCase):
         self.assertIn('"value": 1.01', sent)
         self.assertIn('"value": 2040', sent)
         self.assertIn('D8 unfilled terrain routing', sent)
+        self.assertIn("water-storage_volume", sent)
         self.assertIn("Read the required source tools first", sent)
         self.assertNotIn("execute", model.tool_names)
         self.assertNotIn("task", model.tool_names)

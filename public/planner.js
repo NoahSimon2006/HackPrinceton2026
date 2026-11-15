@@ -9,13 +9,13 @@
     drainage: { label: "Runoff source", action: "Outline where runoff starts", color: "#78dbee",
       description: "Mark a roof or paved area that drains toward the site.",
       instruction: "Click around the roof or pavement that contributes runoff." },
-    treatment: { label: "Treatment area", action: "Outline a spot for a rain garden or cistern", color: "#ade7a4",
+    treatment: { label: "Treatment area", action: "Outline a spot for a rain garden", color: "#ade7a4",
       description: "Mark the space you want to consider for a treatment.",
-      instruction: "Click around the space you want to use for the rain garden or cistern." },
+      instruction: "Click around the space you want to use for the rain garden." },
   };
   const workflows = {
     street: { kinds: ["crossing", "access"], brief: "Find the crossings and driveway entrances near this site. What could shorten a crossing while preserving access?" },
-    water: { kinds: ["drainage", "treatment"], brief: "Find possible sources of runoff and check the local rainfall. What could we evaluate for a rain garden or cistern?" },
+    water: { kinds: ["access", "drainage", "treatment"], brief: "Draft a rain garden for this site. Show where it could fit and what surfaces could feed it." },
   };
   const siteLayer = L.layerGroup();
   map.createPane("watershed");
@@ -324,9 +324,10 @@
       if (result.hydrology) applyHydrology(selected.water, result.hydrology);
       // A changed site or marking must never publish geometry from an older run.
       if (site === selected && workflow === mode && (record.revision ?? 0) === revision &&
-          (result.proposal || result.comparison)) {
+          (result.proposal || result.comparison || result.draftQuestion)) {
         map.fire("plannerresult", {siteId:selected.key, workflow:mode, inputRevision:revision,
-          revision:proposalRevision, proposal:result.proposal ?? null, comparison:result.comparison ?? null});
+          revision:proposalRevision, proposal:result.proposal ?? null, comparison:result.comparison ?? null,
+          alternatives:result.alternatives ?? {}, draftQuestion:result.draftQuestion ?? null});
       }
     } catch (error) {
       if (activeAnalysis !== run) return;
@@ -727,7 +728,7 @@
     selectSite(L.latLng(lat,lng));
     site[workflow].discovery = selected;
     site[workflow].brief = workflow === "water"
-      ? "Investigate the selected discovery evidence. Verify drainage connections, surface conditions and access before recommending a treatment site. Do not infer flood depth or capture benefits."
+      ? "Use the selected discovery evidence to screen a rain garden. Map a draft where the site evidence supports it and explain what still needs verification."
       : selected.reference?.layer === "turning"
         ? "Compare at least two physical lane-reallocation layouts using this sourced historical turning count and measured site evidence. Preserve access, disclose missing inputs and simulation assumptions, and recommend a layout only if the comparison supports it. Do not present historical demand as current traffic."
         : "Investigate the selected historical count with current site evidence. Identify the measurements needed before evaluating a physical redesign. Do not extrapolate current demand or claim emissions benefits.";

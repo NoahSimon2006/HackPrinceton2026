@@ -12,8 +12,10 @@ import logging
 import math
 from threading import RLock
 
+from shapely.geometry import Point
+
 from agent_activity import RunCancelled
-from site_measurements import fact, source
+from site_measurements import PROJECT, fact, projected, source
 from street_design import Layout, evaluate
 from traffic_counts import peak_hour
 from traffic_sim import Study
@@ -78,6 +80,7 @@ class TrafficAnalysis:
         self.evaluated = False
         self.comparison = None
         self.proposal = None
+        self.alternatives = {}
         self._prepared = False
 
     def _unavailable(self, message):
@@ -159,7 +162,8 @@ class TrafficAnalysis:
             self.activity.event("domain-analysis", "traffic-network", "failed", "Traffic comparison inputs are incomplete; retrieved counts are preserved.")
         return self.facts, self.warnings
 
-    def run(self, layouts, *, outlines=None, frontages=None, keep_clear=None, detections=None, crossings=None):
+    def run(self, layouts, *, outlines=None, frontages=None, keep_clear=None, detections=None, crossings=None,
+            nearby_properties=None):
         self.activity.check()
         if self.evaluated:
             return {"status": "already_evaluated", "facts": self.facts,
@@ -184,8 +188,14 @@ class TrafficAnalysis:
             comparison["status"] = "completed"
             if comparison.get("input_hash"):
                 comparison["simulation_input_hash"] = comparison["input_hash"]
+            if outlines and nearby_properties is not None:
+                parcel_matches = match_costar_parcels(outlines, nearby_properties)
+                for check in comparison["checks"].values():
+                    hits = (parcel_matches.get(i, set()) for i in check["parcel_evidence"])
+                    check["overlapping_costar_records"] = len(set().union(*hits)) if check["parcel_overlap_m2"] is not None else None
             comparison["source_input_hash"] = sha256(json.dumps({"context": self.context, "outlines": outlines,
-                "frontages": frontages, "keep_clear": keep_clear, "detections": detections, "crossings": crossings},
+                "frontages": frontages, "keep_clear": keep_clear, "detections": detections, "crossings": crossings,
+                "nearby_properties": nearby_properties},
                 sort_keys=True).encode()).hexdigest()
             self._identify(comparison)
             self.comparison = comparison
@@ -193,12 +203,14 @@ class TrafficAnalysis:
             recommended = comparison["ranking"].get("recommended")
             if recommended and not comparison["ranking"]["verdicts"].get(recommended, {}).get("eligible"):
                 raise ValueError("A recommended alternative must be eligible.")
-            if recommended and comparison["ranking"]["verdicts"].get(recommended, {}).get("eligible"):
+            if self.identity:
                 from proposal import from_traffic_comparison
-                self.proposal = from_traffic_comparison(comparison, recommended, **self.identity).model_dump()
+                self.alternatives = {name: from_traffic_comparison(comparison, name, **self.identity).model_dump()
+                                     for name in comparison["layouts"]}
+                self.proposal = self.alternatives.get(recommended)
             # The root attaches request identity to the local response, never the model.
             self._unavailable("Comparison completed. " + ("The recommended eligible alternative is published as a proposal." if self.proposal else
-                "No proposal was published. " + (comparison["ranking"].get("reason") or "No eligible recommended alternative was returned.")))
+                "Tested layouts are available for inspection. " + (comparison["ranking"].get("reason") or "No layout was recommended.")))
             self.activity.event("lead", "traffic-comparison", "completed", "Comparison complete; eligibility and tradeoffs are available.", facts=self.facts)
             return {"status": "completed", "facts": self.facts}
         except RunCancelled:
@@ -207,10 +219,23 @@ class TrafficAnalysis:
             logging.getLogger(__name__).warning("Traffic comparison failed (%s)", type(error).__name__)
             self.facts = input_facts
             self.proposal = None
+            self.alternatives = {}
             item = self._unavailable("The bounded comparison could not finish or publish a validated proposal. Retrieved source facts are preserved; no missing performance values are inferred.")
             self.comparison = self.unavailable_comparison(item["value"])
             self.activity.event("lead", "traffic-comparison", "failed", "Comparison unavailable; retrieved source facts are preserved.", facts=[item])
             return {"status": "unavailable", "facts": self.facts}
+
+
+def match_costar_parcels(outlines, properties):
+    """Associate local address points with mapped parcels, independent of ownership."""
+    points = [(item["id"], Point(*PROJECT.transform(item["lon"], item["lat"]))) for item in properties]
+    matches = {}
+    for item in outlines:
+        props = item["properties"]
+        if props["label"] == "Parcel boundary":
+            parcel = projected(item["geometry"])
+            matches[props["evidenceId"]] = {identifier for identifier, point in points if parcel.covers(point)}
+    return matches
 
 
 def crossing_checks(design, detections, crossings):
@@ -291,6 +316,11 @@ def comparison_facts(comparison):
                     method="Deterministic local overlay of the authored footprint and available mapped outlines or reported frontages.",
                     note="Missing sponsor coverage remains unassessed. These checks do not establish ownership or construction feasibility.",
                     feature_ids=check.get("access_evidence" if key == "access_conflicts" else "parcel_evidence", [])))
+        if check.get("overlapping_costar_records") is not None:
+            facts.append(fact(f"traffic-{name}-costar-parcel-matches", f"{name}: CoStar records in touched parcels",
+                check["overlapping_costar_records"], "records", source("CoStar points and Vexcel parcel outlines"),
+                method="Local point-in-parcel test for CoStar locations and mapped parcels that overlap the footprint.",
+                note="A spatial match indicates potential property impact. Ownership and permission require verification."))
         verdict = comparison["ranking"]["verdicts"][name]
         for kind in ("crosswalk", "driveway"):
             key = f"candidate_{kind}_overlaps"

@@ -95,6 +95,10 @@ class TrafficAdapterTest(unittest.TestCase):
                 adapter = TrafficAnalysis(context(), IDENTITY, Activity(), allow_generated_timing=True)
                 self.assertEqual(adapter.run(LAYOUTS, keep_clear=keep_clear)["status"], "completed")
                 self.assertIsNone(adapter.proposal)
+                self.assertEqual(set(adapter.alternatives), {"east-bike", "north-curb"})
+                for alternative in adapter.alternatives.values():
+                    self.assertEqual(alternative["status"], "rejected")
+                    self.assertEqual(alternative["input_hash"], adapter.comparison["input_hash"])
                 outputs.append(adapter.comparison)
         self.assertNotEqual(outputs[0]["input_hash"], outputs[1]["input_hash"])
 

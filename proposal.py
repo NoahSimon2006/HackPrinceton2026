@@ -1,4 +1,4 @@
-"""Local proposal contract, the synthetic CP1 rendering fixture, and real traffic proposals.
+"""Revision-bound map proposals and the synthetic development fixture.
 
 The fixture never recommends anything. Real proposals (from_traffic_comparison) are
 built only from a simulated comparison in street_design.evaluate: every metric comes
@@ -20,7 +20,7 @@ class StrictModel(BaseModel):
 
 
 class Design(StrictModel):
-    kind: Literal["test_island", "test_bioretention", "lane_reallocation"]
+    kind: Literal["test_island", "test_bioretention", "lane_reallocation", "rain_garden"]
     length_m: float = Field(gt=0, le=200)
     width_m: float = Field(gt=0, le=10)
     approach: Literal["nb", "sb", "eb", "wb"] | None = None
@@ -87,6 +87,7 @@ class Proposal(StrictModel):
     input_revision: int = Field(ge=0)
     input_hash: str
     development_fixture: bool
+    status: Literal["fixture", "draft", "recommended", "tested", "rejected"]
     evidence: list[EvidenceReference]
     design: Design
     projected_crs: Literal["EPSG:32611"] = "EPSG:32611"
@@ -102,6 +103,9 @@ class Proposal(StrictModel):
 
     @model_validator(mode="after")
     def same_revision(self):
+        allowed = {"draft"} if self.workflow == "water" else {"recommended", "tested", "rejected"}
+        if self.status not in ({"fixture"} if self.development_fixture else allowed):
+            raise ValueError("Proposal status does not match the workflow.")
         ids = [g.id for g in self.geometry]
         if len(set(ids)) != len(ids) or not self.proposed_geometry_ids:
             raise ValueError("Proposal geometry IDs must be unique and nonempty.")
@@ -139,7 +143,7 @@ def fixture(lon: float, lat: float, workflow: str, site_id: str, revision: int =
     polygon = Polygon([(x-w,y-h),(x+w,y-h),(x+w,y+h),(x-w,y+h),(x-w,y-h)])
     metric_args = dict(revision=revision, input_hash=fingerprint)
     return Proposal(site_id=site_id, workflow=workflow, revision=revision, input_revision=input_revision,
-        input_hash=fingerprint, development_fixture=True,
+        input_hash=fingerprint, development_fixture=True, status="fixture",
         evidence=[EvidenceReference(id="ui-fixture", source="Synthetic UI test; no site suitability evidence", classification="fixture")],
         design=design, geometry=[GeometryFeature(id="test-footprint", geometry=mapping(transform(polygon, inverse.transform, interleaved=False)), properties={"revision":revision,"role":"proposed","fixture":True})],
         existing_geometry_ids=[], proposed_geometry_ids=["test-footprint"],
@@ -213,7 +217,7 @@ def from_traffic_comparison(comparison: dict, layout_name: str, *, site_id: str,
     ids = source_ids or {}
     evidence = [EvidenceReference(id="ladot-sheet", source=comparison["sheet_url"], classification="reported"),
                 EvidenceReference(id="simulation", source="SUMO 1.28, counted demand, generated actuated signal timing", classification="modeled")]
-    if checks["parcel_overlap_m2"] is not None:
+    if checks["parcel_overlap_m2"] is not None and checks["building_overlap_m2"] is not None:
         evidence.append(EvidenceReference(id=ids.get("outlines", "vexcel-outlines"), source="Vexcel parcel and building outlines", classification="observed"))
     if checks["access_conflicts"] is not None:
         evidence.append(EvidenceReference(id=ids.get("property", "costar-frontage"), source="CoStar frontage and curb cuts", classification="reported"))
@@ -234,8 +238,9 @@ def from_traffic_comparison(comparison: dict, layout_name: str, *, site_id: str,
         " Recommended: best eligible layout on the CO₂-first ranking." if recommended else
         f" Not recommended: {comparison['ranking']['reason'] or 'another layout ranks higher.'}" if verdict["eligible"] else
         " Not recommended: " + "; ".join(verdict["ineligible_reasons"]) + ".")
+    status = "recommended" if recommended else "tested" if verdict["eligible"] else "rejected"
     return Proposal(site_id=site_id, workflow="street", revision=revision, input_revision=input_revision, input_hash=fingerprint,
-                    development_fixture=False, evidence=evidence,
+                    development_fixture=False, status=status, evidence=evidence,
                     design=Design(kind="lane_reallocation", length_m=params["length_m"], width_m=checks["footprint_m2"] / params["length_m"],
                                   approach=params["approach"], lanes_removed=params["lanes_removed"], new_use=params["new_use"]),
                     geometry=geometry, existing_geometry_ids=[], proposed_geometry_ids=[geometry[0].id], metrics=metrics,

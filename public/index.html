@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=18">
+  <link rel="stylesheet" href="/styles.css?v=19">
   <script defer src="/vendor/leaflet.js"></script>
   <script defer src="/app.js?v=17"></script>
-  <script defer src="/proposal.js?v=4"></script>
+  <script defer src="/proposal.js?v=5"></script>
   <script defer src="/analysis-stream.js?v=1"></script>
   <script defer src="/site-view.js?v=1"></script>
-  <script defer src="/planner.js?v=14"></script>
+  <script defer src="/planner.js?v=15"></script>
   <script defer src="/discovery.js?v=2"></script>
 </head>
 <body>
@@ -75,9 +75,12 @@
           <section id="proposal-review" class="planner-card proposal-review" hidden aria-live="polite">
             <span id="proposal-kind" class="fixture-tag">DEVELOPMENT FIXTURE</span>
             <h2 id="proposal-title"></h2><p id="proposal-summary"></p>
-            <dl class="proposal-metrics"><dt id="proposal-area-label">Test footprint</dt><dd id="proposal-area"></dd><dt>Impact comparison</dt><dd id="proposal-impact">Unassessed</dd></dl>
+            <dl class="proposal-metrics"><dt id="proposal-area-label">Footprint</dt><dd id="proposal-area"></dd><dt>Impact</dt><dd id="proposal-impact">Unassessed</dd></dl>
+            <dl id="proposal-water-metrics" class="proposal-metrics" hidden></dl>
             <div id="proposal-checks"></div>
-            <p id="proposal-revision"></p><p id="proposal-stale" hidden>Inputs changed. Analyze again to update this proposal. Development fixtures can be reloaded from the preview below.</p>
+            <ul id="proposal-assumptions" hidden></ul>
+            <button id="focus-proposal" type="button">Zoom to footprint</button>
+            <p id="proposal-revision"></p><p id="proposal-stale" hidden>Inputs changed. Analyze again to update this proposal.</p>
           </section>
           <section id="traffic-comparison" class="planner-card traffic-comparison" hidden aria-live="polite">
             <span class="section-label">TRAFFIC DESIGN COMPARISON</span>

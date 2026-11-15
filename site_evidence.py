@@ -6,11 +6,11 @@ import re
 
 SEARCH_TEXT = {
     "street": "marked pedestrian crosswalks and driveway entrances connecting to a street",
-    "water": "paved parking lots, building rooftops, and landscaped strips next to pavement",
+    "water": "driveway entrances, paved parking lots, and landscaped strips next to pavement",
 }
 DETECTION_LABELS = {
     "street": ("zebra crosswalk", "driveway entrance"),
-    "water": ("parking lot", "landscaped strip"),
+    "water": ("driveway entrance", "parking lot", "landscaped strip"),
 }
 
 
@@ -40,24 +40,32 @@ def feature(geometry, label, **properties):
     return {"type": "Feature", "geometry": geometry, "properties": {"label": label, **properties}}
 
 
-def parcel_features(payload, evidence):
+def parcel_features(payload, evidence, *, nearby=False):
     parcels = [
         item for item in payload.get("features", [])
-        if item["properties"].get("request-information.inside-parcel") and polygon_geometry(item.get("geometry"))
+        if (nearby or item["properties"].get("request-information.inside-parcel"))
+        and polygon_geometry(item.get("geometry"))
     ]
     if not parcels:
         return
-    parcel = max(parcels, key=lambda item: item["properties"].get("metadata.ortho-date-estimate") or "")
-    props = parcel["properties"]
-    metadata = {
-        "collection": props.get("metadata.collection"),
-        "date": (props.get("metadata.ortho-date-estimate") or "")[:10],
-    }
-    evidence["outlines"].append(feature(polygon_geometry(parcel["geometry"]), "Parcel boundary", **metadata))
-    for structure in props.get("structures", [])[:12]:
-        geometry = polygon_geometry(structure.get("footprint.wkt"))
-        if geometry:
-            evidence["outlines"].append(feature(geometry, "Building footprint", **metadata))
+    parcels.sort(key=lambda item: item["properties"].get("metadata.ortho-date-estimate") or "", reverse=True)
+    seen = set()
+    for parcel in parcels if nearby else parcels[:1]:
+        geometry = polygon_geometry(parcel["geometry"])
+        signature = json.dumps(geometry, sort_keys=True)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        props = parcel["properties"]
+        metadata = {
+            "collection": props.get("metadata.collection"),
+            "date": (props.get("metadata.ortho-date-estimate") or "")[:10],
+        }
+        evidence["outlines"].append(feature(geometry, "Parcel boundary", **metadata))
+        for structure in props.get("structures") or []:
+            footprint = polygon_geometry(structure.get("footprint.wkt"))
+            if footprint:
+                evidence["outlines"].append(feature(footprint, "Building footprint", **metadata))
 
 
 def detection_features(payload, evidence, labels):
@@ -83,7 +91,11 @@ def detection_features(payload, evidence, labels):
                 raise ValueError("Detection response contains an unusable candidate box.")
             evidence["detections"].append(feature(geometry, label.capitalize(), score=candidate.get("confidence")))
     evidence["detections"].sort(key=lambda item: item["properties"]["score"] or 0, reverse=True)
-    del evidence["detections"][12:]
+    # Preserve separate coverage for each class when one detector is much noisier.
+    evidence["detections"][:] = [
+        item for label in labels
+        for item in [f for f in evidence["detections"] if f["properties"]["label"] == label.capitalize()][:12]
+    ]
 
 
 def imagery_evidence(request, layers, lon, lat, workflow, group):
@@ -96,7 +108,8 @@ def imagery_evidence(request, layers, lon, lat, workflow, group):
     calls = {
         "outlines": ("/property/extract", {
             "wkt": f"POINT({lon} {lat})", "srid": 4326, "layer": layers,
-            "latest": "true", "include": "precomputed,footprint-wkt",
+            "latest": "true", "include": "footprint-wkt",
+            **({"buffer-meter": 200, "page-size": 250} if workflow == "street" else {}),
         }, False),
         "search": ("/embedding/extract", {
             "wkt": area, "srid": 4326, "search-text": SEARCH_TEXT[workflow],
@@ -115,7 +128,11 @@ def imagery_evidence(request, layers, lon, lat, workflow, group):
     payload = json.loads(request(path, params, "application/json", 5_000_000, post=post, timeout=25))
     evidence = {group: []}
     if group == "outlines":
-        parcel_features(payload, evidence)
+        if not isinstance(payload.get("features"), list):
+            raise ValueError("Vexcel returned no valid parcel collection.")
+        if workflow == "street" and len(payload["features"]) >= 250:
+            raise ValueError("The intersection parcel search exceeded its coverage limit.")
+        parcel_features(payload, evidence, nearby=workflow == "street")
     elif group == "detections":
         detection_features(payload, evidence, labels)
     else:

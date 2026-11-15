@@ -344,6 +344,9 @@ button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-vi
 .proposal-review[data-fixture="false"]{border-color:#b8944b!important;background:#29281d!important}
 .proposal-review[data-fixture="false"] .fixture-tag{color:#ffdc83}
 .proposal-review[data-fixture="false"] .proposal-metrics dt{color:#cfcaab}
+.proposal-review[data-status="draft"] .fixture-tag{color:#91ebbd}
+.proposal-review[data-status="rejected"] .fixture-tag{color:#ffaf98}
+.proposal-metrics[hidden]{display:none}
 #proposal-checks p{font-size:11px;line-height:1.55;color:#d3cfba}
 .traffic-comparison{border-color:#577769!important}
 .traffic-comparison h2{font-size:18px;line-height:1.35;margin-top:12px}
