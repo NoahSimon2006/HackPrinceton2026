@@ -5,14 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sustainability Map</title>
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/styles.css?v=20">
+  <link rel="stylesheet" href="/styles.css?v=21">
   <script defer src="/vendor/leaflet.js"></script>
-  <script defer src="/app.js?v=18"></script>
+  <script defer src="/app.js?v=19"></script>
   <script defer src="/proposal.js?v=7"></script>
   <script defer src="/analysis-stream.js?v=2"></script>
   <script defer src="/site-view.js?v=1"></script>
-  <script defer src="/planner.js?v=17"></script>
-  <script defer src="/discovery.js?v=2"></script>
+  <script defer src="/projects.js?v=1"></script>
+  <script defer src="/planner.js?v=18"></script>
+  <script defer src="/discovery.js?v=3"></script>
 </head>
 <body>
   <div id="map-workspace" class="shell planner-mode">
@@ -31,7 +32,16 @@
           <div id="results" class="results" role="listbox" aria-label="Property search results" hidden></div>
         </div>
         <section id="planner" class="planner" aria-labelledby="planner-title" hidden>
-          <p id="traffic-design-guide" class="traffic-design-guide">To compare street layouts, choose <strong>Turning-movement counts</strong> in Map evidence, select a counted intersection, then choose <strong>Analyze site</strong>.</p>
+          <p id="traffic-design-guide" class="traffic-design-guide">Select a road with current traffic evidence or choose a site. The agent investigates local conditions and checks whether supported design evaluation is available.</p>
+          <section class="project-workspace" aria-label="Saved planning projects">
+            <label for="saved-projects">Saved projects</label>
+            <div class="project-switcher"><select id="saved-projects"><option value="">Choose a saved project</option></select><button id="open-project" type="button">Open</button></div>
+            <p id="project-status" role="status">Site, brief and constraints save locally as you work.</p>
+            <details id="project-files"><summary>Project files <span id="project-file-count"></span></summary>
+              <ul id="project-file-list"></ul>
+              <pre id="project-file-preview" tabindex="0" hidden></pre>
+            </details>
+          </section>
           <button id="pick-site" type="button" class="planner-action" aria-pressed="false">Pick a site on the map</button>
           <button id="use-map-center" type="button" class="planner-action">Use map center as site</button>
           <p class="keyboard-map-help">Keyboard: focus the map and use arrow keys to pan, then use its center as your site.</p>
@@ -58,7 +68,7 @@
               <p id="analysis-site-hint">Select a property or pick a map location to enable analysis.</p>
               <button id="cancel-site-analysis" type="button" hidden>Cancel analysis</button>
               <details id="agent-activity" class="agent-activity"><summary>Agent activity <span id="activity-count"></span></summary>
-                <p>Live task and source results. Select a source to inspect its measured facts.</p>
+                <p>Investigation plan, specialist assignments, skill reads and saved reports. Select a source to inspect its measured facts.</p>
                 <ol id="activity-list"></ol>
               </details>
               <p id="analysis-message" role="status" hidden></p>
@@ -184,7 +194,7 @@
         <div class="layer base"><span class="layer-icon">▧</span><div><strong>Vexcel aerial</strong><small>Base imagery</small></div><span class="active-dot" aria-label="On"></span></div>
         <label class="layer toggle-row" for="labels"><span class="layer-icon">⌖</span><span class="layer-copy"><strong>Place labels</strong><small>Esri reference layer</small></span><input id="labels" type="checkbox" role="switch"><span class="switch"></span></label>
         <label class="layer toggle-row" for="properties"><span class="layer-icon">●</span><span class="layer-copy"><strong>CoStar properties</strong><small>Visible from neighborhood zoom</small></span><input id="properties" type="checkbox" role="switch"><span class="switch"></span></label>
-        <label id="emissions-layer-row" class="layer toggle-row" for="emissions-layer" hidden><span class="layer-icon">≋</span><span class="layer-copy"><strong>Road emissions unavailable</strong><small>Requires verified traffic inputs · use historical counts</small></span><input id="emissions-layer" type="checkbox" role="switch" disabled><span class="switch"></span></label>
+        <label id="emissions-layer-row" class="layer toggle-row" for="emissions-layer" hidden><span class="layer-icon">≋</span><span class="layer-copy"><strong>Road emissions unavailable</strong><small>Requires a supported traffic simulation</small></span><input id="emissions-layer" type="checkbox" role="switch" disabled><span class="switch"></span></label>
         <div id="layer-note" class="layer-note" hidden>Zoom in to level 15 to see property points.</div>
         <div class="divider"></div>
         <div class="section-label">MAP STATUS</div>

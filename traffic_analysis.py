@@ -123,6 +123,8 @@ class TrafficAnalysis:
             digest = sha256(json.dumps(sheet, sort_keys=True).encode()).hexdigest()
             origin = source("LADOT manual turning count", LADOT, date=sheet["date"], collection=f"verified-sheet-{digest[:12]}")
             note = f"Historical observation on {sheet['date']}, {hour} {period.upper()}; not current demand or a forecast. Printed row and column totals were checked when the sheet was parsed."
+            if "association_distance_m" in self.context:
+                note += " Linked internally to the unique verified counted intersection within 25 m of the selected site; the selected property was not changed."
             self.facts = [fact("traffic-count-total", "Selected counted peak-hour vehicle movements", sum(counts.values()),
                                "vehicles / counted hour", origin, basis="reported",
                                method="Sum of the reported left, through and right movements in the busiest counted hour of the selected period.", note=note)]

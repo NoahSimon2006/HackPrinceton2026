@@ -7,9 +7,11 @@ import os
 import re
 import time
 from copy import deepcopy
+from contextlib import nullcontext
+from project_store import ProjectStore, ProjectConflict, validate_snapshot
 from threading import BoundedSemaphore, Lock
-from agent_activity import Activity
-from discovery import load_discovery, map_discovery, query_area, area_facts, discovery_context, traffic_context
+from agent_activity import Activity, RunCancelled, TransientSourceError
+from discovery import load_discovery, map_discovery, query_area, area_facts, discovery_context, traffic_context, traffic_context_at_site
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -32,7 +34,7 @@ ACTIVE_ANALYSES = {}
 ANALYSIS_LOCK = Lock()
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
           "/discovery.js": "discovery.js", "/analysis-stream.js": "analysis-stream.js", "/planner.js": "planner.js", "/proposal.js": "proposal.js",
-          "/site-view.js": "site-view.js",
+          "/site-view.js": "site-view.js", "/projects.js": "projects.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
           "/vendor/leaflet.css": "vendor/leaflet.css"}
 
@@ -66,6 +68,8 @@ def vexcel_request(path, params, accept, limit, *, post=False, timeout=18):
                 raise ValueError("Vexcel response exceeded the size limit.")
             return data
     except HTTPError as error:
+        if error.code in (429, 502, 503, 504):
+            raise TransientSourceError("Vexcel temporarily unavailable.") from None
         if error.code in (401, 403):
             raise ValueError("Vexcel rejected the key or imagery access.") from None
         if error.code == 404:
@@ -73,7 +77,7 @@ def vexcel_request(path, params, accept, limit, *, post=False, timeout=18):
                              else "No Vexcel imagery is available here.") from None
         raise ValueError(f"Vexcel request failed ({error.code}).") from None
     except (URLError, TimeoutError):
-        raise ValueError("Vexcel could not be reached. Check the connection.") from None
+        raise TransientSourceError("Vexcel could not be reached. Check the connection.") from None
 
 
 _coverage = None
@@ -271,6 +275,13 @@ def analysis_identity(data):
     return {"site_id": site_id, "revision": revision, "input_revision": input_revision}
 
 
+@lru_cache(maxsize=1)
+def project_store():
+    store = ProjectStore(ROOT / "private" / "agent-workspace")
+    store.recover_interrupted()
+    return store
+
+
 class Handler(BaseHTTPRequestHandler):
     def send(self, status, content, mime, cache="no-store"):
         self.send_response(status)
@@ -285,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send(status, json.dumps(data, separators=(",", ":")).encode(), "application/json")
 
     def do_POST(self):
-        if urlsplit(self.path).path not in ("/api/site-analysis", "/api/site-analysis/cancel"):
+        if urlsplit(self.path).path not in ("/api/site-analysis", "/api/site-analysis/cancel", "/api/projects"):
             self.send_json(404, {"error": "Not found."})
             return
         if self.headers.get_content_type() != "application/json" or self.headers.get("Sec-Fetch-Site") == "cross-site":
@@ -296,6 +307,10 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= 32_000:
                 raise ValueError("The site request is too large or empty.")
             data = json.loads(self.rfile.read(length))
+            if urlsplit(self.path).path == "/api/projects":
+                saved = project_store().save(data.get("snapshot"), data.get("projectId"), data.get("expectedVersion"))
+                self.send_json(200, saved)
+                return
             if urlsplit(self.path).path == "/api/site-analysis/cancel":
                 run_id = data.get("runId")
                 if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
@@ -313,12 +328,29 @@ class Handler(BaseHTTPRequestHandler):
             markings, scenario = validate_inputs(data.get("markings", []), data.get("rainfallScenario"), workflow, lon, lat)
             if data.get("waterDesign") is not None:
                 raise ValueError("The separate placement comparison has been retired. Analyze the site and add optional map constraints instead.")
-            selected_discovery = discovery_context(workflow, data.get("discoveryReference"), lon, lat)
-            traffic = traffic_context(data.get("discoveryReference"), lon, lat) if workflow == "street" else None
+            try:
+                selected_discovery = discovery_context(workflow, data.get("discoveryReference"), lon, lat)
+            except ValueError as error:
+                if workflow != "street" or "Traffic snapshot expired" not in str(error):
+                    raise
+                # Keep the chosen site. The bounded neighborhood tool will read
+                # a fresh snapshot; expired measurements are never reused.
+                selected_discovery = None
+            reference = data.get("discoveryReference")
+            traffic = (traffic_context(reference, lon, lat) if reference and reference.get("layer") == "turning"
+                       else traffic_context_at_site(lon, lat)) if workflow == "street" else None
             identity = analysis_identity(data)
             property_id = data.get("propertyId")
             if property_id is not None and (not isinstance(property_id, str) or len(property_id) > 80):
                 raise ValueError("Invalid property reference.")
+            project = project_store().get(data["projectId"]) if data.get("projectId") else None
+            if project:
+                snapshot = validate_snapshot({key: data.get(key) for key in project["snapshot"]})
+                if data.get("projectVersion") != project["version"] or snapshot != project["snapshot"]:
+                    raise ProjectConflict("Project inputs changed. Save the latest inputs before continuing.")
+        except ProjectConflict as error:
+            self.send_json(409, {"error": str(error)})
+            return
         except OSError:
             self.send_json(503, {"error": "The local analysis source is unavailable. Check the source configuration and retry."})
             return
@@ -367,8 +399,24 @@ class Handler(BaseHTTPRequestHandler):
         def write_event(event):
             self.wfile.write(json.dumps(event, separators=(",", ":")).encode() + b"\n")
             self.wfile.flush()
-        activity = Activity(write_event if streaming else None, seconds=420 if traffic else 180)
+        def emit(event):
+            if project:
+                project_store().event(project["id"], event)
+            if streaming:
+                write_event(event)
+        activity = Activity(emit, seconds=420 if traffic else 240,
+                            current=(lambda: project_store().is_current(project["id"], activity.id)) if project else None)
+        activity.project_id = project["id"] if project else None
         with ANALYSIS_LOCK:
+            if project:
+                try:
+                    if any(getattr(run, "project_id", None) == project["id"] for run in ACTIVE_ANALYSES.values()):
+                        raise ProjectConflict("This project's previous run is still stopping. Try continuing again shortly.")
+                    project_store().begin(project["id"], project["version"], activity.id)
+                except ProjectConflict as error:
+                    ANALYSIS_SLOTS.release()
+                    self.send_json(409, {"error":str(error)})
+                    return
             ACTIVE_ANALYSES[activity.id] = activity
         try:
             if streaming:
@@ -379,15 +427,26 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Connection", "close")
                 self.end_headers()
                 self.close_connection = True
-            result = analyze_site(
-                key, os.getenv("GROK_MODEL", "grok-4.7"), question, workflow, markings,
-                lambda group: site_outlines(lon, lat, workflow) if group == "outlines" else imagery_evidence(vexcel_request, LAYERS, lon, lat, workflow, group),
-                property_context, hydrology_context,
-                lon=lon, lat=lat, scenario=scenario, activity=activity, discovery=selected_discovery,
-                traffic_context=traffic, analysis_identity=identity, allow_generated_timing=True,
-                ranking_policy="strict-v1",
-                fetch_discovery=lambda: area_facts(workflow, lon, lat),
-            )
+            with project_store().checkpointer() if project else nullcontext() as saver:
+                result = analyze_site(
+                    key, os.getenv("GROK_MODEL", "grok-4.7"), question, workflow, markings,
+                    lambda group: site_outlines(lon, lat, workflow) if group == "outlines" else imagery_evidence(vexcel_request, LAYERS, lon, lat, workflow, group),
+                    property_context, hydrology_context,
+                    lon=lon, lat=lat, scenario=scenario, activity=activity, discovery=selected_discovery,
+                    traffic_context=traffic, analysis_identity=identity, allow_generated_timing=True,
+                    ranking_policy="strict-v1",
+                    fetch_discovery=lambda: area_facts(workflow, lon, lat),
+                    project=project, checkpointer=saver,
+                    persist_artifact=(lambda path, content: project_store().artifact(project["id"], path, content, activity.id)) if project else None,
+                )
+            if activity.cancelled.is_set():
+                result.update(proposal=None, comparison=None, alternatives={}, report=None)
+            if project:
+                status = "canceled" if activity.cancelled.is_set() else "failed" if result.get("analysisError") else "needs_input" if result.get("draftQuestion") else "ready"
+                if not project_store().finish(project["id"], activity.id, result, status):
+                    result.update(proposal=None, comparison=None, alternatives={}, report=None,
+                                  analysisError="This run belongs to earlier inputs. Continue the latest saved project.")
+                result["projectVersion"] = project["version"]
             if streaming:
                 write_event({"type":"result", "run_id":activity.id, "result":result})
             else:
@@ -404,6 +463,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_json(503, {"error":"The planning agent could not finish this request."})
         finally:
+            if project and project_store().is_current(project["id"], activity.id):
+                project_store().finish(project["id"], activity.id, None,
+                                       "canceled" if activity.cancelled.is_set() else "failed")
             with ANALYSIS_LOCK:
                 ACTIVE_ANALYSES.pop(activity.id, None)
             ANALYSIS_SLOTS.release()
@@ -419,6 +481,13 @@ class Handler(BaseHTTPRequestHandler):
                 # Revalidate the page so reloads don't keep an older app bundle.
                 cache = "public, max-age=3600" if file.parent.name == "vendor" else "no-cache"
                 self.send(200, file.read_bytes(), mime, cache)
+            elif path.path == "/api/projects":
+                query = parse_qs(path.query)
+                self.send_json(200, project_store().get(query["id"][0]) if "id" in query else {"projects":project_store().list()})
+            elif path.path == "/api/project-artifact":
+                query = parse_qs(path.query)
+                self.send_json(200, {"path":query.get("path", [""])[0],
+                    "content":project_store().artifact(query.get("id", [""])[0], query.get("path", [""])[0])})
             elif path.path == "/api/discovery":
                 workflow = parse_qs(path.query).get("workflow", [""])[0]
                 self.send_json(200, map_discovery(workflow))

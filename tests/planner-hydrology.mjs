@@ -30,6 +30,8 @@ function harness(mode = 'water', options = {}) {
     fire(name, event) { this.events.push({name,event}); this.handlers[name]?.(event); }, setView(point) {this.center=Array.isArray(point)?{lat:point[0],lng:point[1]}:point;},getCenter(){return this.center;}, closePopup() {}, getZoom: () => 17 };
   const requests = [], identityRequests = [];
   const json = (url, requestOptions = {}) => {
+    if (url === '/api/projects') return Promise.resolve({projects:[]});
+    if (url.startsWith('/api/projects?id=')) return Promise.resolve({id:'a'.repeat(32),version:1,artifacts:[],status:'ready'});
     if (url.startsWith('/api/site-resolution')) {
       if (!options.captureIdentity) return Promise.resolve({status:'unmatched',property:null,candidates:[],message:'No unique property match.'});
       return new Promise((resolve,reject)=>identityRequests.push({url,options:requestOptions,resolve,reject}));
@@ -40,7 +42,8 @@ function harness(mode = 'water', options = {}) {
     insideCoverage: options.insideCoverage ?? (()=>true),
     cancelSiteAnalysis: () => {},
     streamSiteAnalysis: (payload, options) => json("/api/site-analysis", {body:JSON.stringify(payload), ...options}),
-    URLSearchParams, AbortController, document: { createElement: element },
+    URLSearchParams, AbortController, setTimeout:()=>1,clearTimeout(){},window:{addEventListener(){}},
+    localStorage:{getItem:()=>null,setItem(){}}, SavedProject:class{value=null;async save(snapshot){return this.value={id:'a'.repeat(32),version:1,snapshot,artifacts:[],status:'ready'};}}, document: { createElement: element },
     L: { latLng: (lat,lng) => {if(!Number.isFinite(lat)||!Number.isFinite(lng))throw Error('Invalid LatLng');return {lat,lng};}, layerGroup: layer, geoJSON: layer, circleMarker: layer,
       polyline:layer,polygon:layer,marker:layer,divIcon:()=>({}),Polyline:function(){} } });
   function select(lat, lng) {
@@ -130,6 +133,7 @@ const flush = () => new Promise(setImmediate);
   h.$('rain-depth').events.input({ target: { value: '1.5' } });
   h.$('rain-source').events.input({ target: { value: 'Sensitivity scenario' } });
   const pending = h.$('site-analysis').events.submit({ preventDefault() {} });
+  await flush();
   const body = JSON.parse(h.requests[2].options.body);
   assert.deepEqual(body.rainfallScenario, { inches: 1.5, source: 'Sensitivity scenario' });
   assert.deepEqual(body.markings, []);
@@ -151,6 +155,7 @@ console.log('PASS: hydrology, source failures/retry, manual inputs, workspace vi
   const h=harness('street');
   h.select(34.05,-118.25);await flush();
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  await flush();
   const first=h.requests[0];
   first.options.onEvent({specialist:'site-evidence',status:'started',summary:'Reading source.',fact_ids:[]});
   assert.equal(h.$('activity-count').textContent,'· 1');
@@ -162,6 +167,7 @@ console.log('PASS: hydrology, source failures/retry, manual inputs, workspace vi
   assert.notEqual(h.$('analysis-message').textContent,'OLD RESULT');
   assert.equal(h.$('activity-count').textContent,'');
   const second=h.$('site-analysis').events.submit({preventDefault(){}});
+  await flush();
   h.$('cancel-site-analysis').events.click();
   assert.equal(h.requests[1].options.signal.aborted,true);
   h.requests[1].resolve({report:null,facts:[]});await second;
@@ -174,7 +180,7 @@ console.log('PASS: canceled and superseded activity cannot repaint another site'
 // local reference; changing features at the same coordinate cancels stale work.
 {
   const h=harness('street');
-  const selection={workflow:'street',reference:{version:'v1',layer:'counts',feature:'count-one'},
+  const selection={workflow:'street',reference:{version:'v1',layer:'flow',feature:'flow-one'},
     source:{label:'LADOT',url:'https://example.org/source',retrieved_at:'2026-11-14'},
     layer:{unit:'vehicles reported',period:'Historical',method:'No scaling',limitations:'No current demand'},
     feature:{properties:{label:'Source intersection',center:[-118.25,34.05],value:18102,period:'2014-01-16'}}};
@@ -183,8 +189,9 @@ console.log('PASS: canceled and superseded activity cannot repaint another site'
   assert.equal(h.$('discovery-context').hidden,false);
   assert.match(h.$('discovery-feature-value').textContent,/18,102/);
   assert.equal(h.$('discovery-feature-period').textContent,'2014-01-16');
-  assert.match(h.$('planning-brief').value,/historical count/);
+  assert.match(h.$('planning-brief').value,/current surface-street slowdown/);
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  await flush();
   const body=JSON.parse(h.requests[0].options.body);
   assert.deepEqual(body.discoveryReference,selection.reference);
   assert.equal(body.source_record,undefined);
@@ -192,19 +199,20 @@ console.log('PASS: canceled and superseded activity cannot repaint another site'
   assert.equal(h.requests[0].options.signal.aborted,true);
   h.requests[0].resolve({report:null,facts:[]});await pending;
 }
-console.log('PASS: discovery seeds a dated site brief and submits a reference without an automatic agent call');
+console.log('PASS: discovery seeds a current-traffic site brief and submits a reference without an automatic agent call');
 
-// Real turning counts request physical alternatives; result identity follows the
+// Current-traffic selections seed an investigation; result identity follows the
 // exact selected site and input revision, including repeated analyses.
 {
   const h=harness('street');
-  const selection={workflow:'street',reference:{version:'v1',layer:'turning',feature:'turning-one'},
+  const selection={workflow:'street',reference:{version:'v1',layer:'approaches',feature:'approach-one'},
     source:{label:'LADOT',url:'https://example.org/source',retrieved_at:'2026-11-14'},
     layer:{unit:'vehicles reported',period:'Historical',method:'Verified count',limitations:'Not current demand'},
     feature:{properties:{label:'Counted intersection',center:[-118.25,34.05],value:4000,period:'2011-11-08'}}};
   h.map.fire('discoveryselect',selection);await flush();
-  assert.match(h.$('planning-brief').value,/at least two physical/);
+  assert.match(h.$('planning-brief').value,/nearby source evidence/);
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  await flush();
   const body=JSON.parse(h.requests[0].options.body);
   assert.equal(body.siteId,'34.050000,-118.250000');
   assert.equal(body.inputRevision,1);assert.equal(body.proposalRevision,1);
@@ -214,11 +222,12 @@ console.log('PASS: discovery seeds a dated site brief and submits a reference wi
   assert.equal(published[0].event.workflow,'street');assert.equal(published[0].event.inputRevision,1);
   assert.equal(published[0].event.revision,1);
   const repeated=h.$('site-analysis').events.submit({preventDefault(){}});
+  await flush();
   assert.equal(JSON.parse(h.requests[1].options.body).proposalRevision,2);
   h.select(34.06,-118.26);await flush();h.requests[1].resolve({report:null,facts:[],proposal:{revision:2},comparison:{revision:2}});await repeated;
   assert.equal(h.map.events.filter(e=>e.name==='plannerresult').length,1,'superseded site analysis must not emit a proposal');
 }
-console.log('PASS: turning-count brief, proposal identity, monotonic revisions and suppressed stale/superseded publication');
+console.log('PASS: traffic investigation brief, proposal identity, monotonic revisions and suppressed stale/superseded publication');
 
 // Re-selecting the active workspace is a no-op: it must not erase a published
 // proposal through a redundant plannersite event or cancel the active request.
@@ -226,6 +235,7 @@ console.log('PASS: turning-count brief, proposal identity, monotonic revisions a
   const h=harness('street');h.select(34.05,-118.25);await flush();
   const before=h.map.events.filter(e=>e.name==='plannersite').length;
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  await flush();
   h.workspace('street');
   assert.equal(h.map.events.filter(e=>e.name==='plannersite').length,before);
   assert.equal(h.requests[0].options.signal.aborted,false);
@@ -264,6 +274,7 @@ console.log('PASS: turning-count brief, proposal identity, monotonic revisions a
   assert.equal(h.$('keyboard-marking-editor').hidden,true);
   assert.equal(h.map.events.filter(e=>e.name==='plannerinputs').at(-1).event.inputRevision,1);
   const first=h.$('site-analysis').events.submit({preventDefault(){}});
+  await flush();
   const firstBody=JSON.parse(h.requests[0].options.body);
   assert.equal(firstBody.markings[0].kind,'access');
   assert.deepEqual(firstBody.markings[0].geometry.coordinates[0],[
@@ -273,6 +284,7 @@ console.log('PASS: turning-count brief, proposal identity, monotonic revisions a
   field(0,'lat').value='34.04995';field(0,'lat').events.input();h.$('draw-save').events.click();
   assert.equal(h.map.events.filter(e=>e.name==='plannerinputs').at(-1).event.inputRevision,2);
   const second=h.$('site-analysis').events.submit({preventDefault(){}});
+  await flush();
   const secondBody=JSON.parse(h.requests[1].options.body);
   assert.equal(secondBody.inputRevision,2);assert.equal(secondBody.proposalRevision,2);
   assert.deepEqual(secondBody.markings[0].geometry.coordinates[0][0],[-118.25,34.04995]);
@@ -302,6 +314,7 @@ console.log('PASS: active-workspace persistence and keyboard site/constraint rev
   const h=harness();h.select(34.051,-118.2521);await flush();
   h.requests[0].resolve(rainfall);h.requests[1].resolve(watershed('Ballona'));await flush();h.requests.length=0;
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  await flush();
   const body=JSON.parse(h.requests[0].options.body);
   assert.equal(Object.hasOwn(body,'waterDesign'),false);
   assert.deepEqual(body.markings,[]);
@@ -324,6 +337,7 @@ console.log('PASS: active-workspace persistence and keyboard site/constraint rev
   assert.equal(h.$('run-site-analysis').disabled,false);
   assert.match(h.$('site-resolution-status').textContent,/Choose/);
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  await flush();
   assert.equal(JSON.parse(h.requests.at(-1).options.body).propertyId,undefined);
   h.requests.at(-1).resolve({report:null,facts:[]});await pending;
 }
@@ -336,6 +350,7 @@ console.log('PASS: active-workspace persistence and keyboard site/constraint rev
   assert.match(h.$('site-location').textContent,/34.05000, -118.25000/);
   assert.equal(h.map.events.at(-1).name,'planneridentity');
   const pending=h.$('site-analysis').events.submit({preventDefault(){}});
+  await flush();
   const body=JSON.parse(h.requests.at(-1).options.body);
   assert.equal(body.propertyId,'matched');assert.equal(body.lat,34.05);assert.equal(body.lon,-118.25);
   h.requests.at(-1).resolve({report:null,facts:[]});await pending;

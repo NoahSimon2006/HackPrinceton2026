@@ -580,7 +580,7 @@ function selectPlanningWorkspace(mode, zoom = false) {
   $("footer-caption").textContent = "Vexcel × CoStar · sourced site evidence";
   $("map-title").textContent = water ? "Watershed & stormwater" : "Traffic & emissions";
   $("map-eyebrow").textContent = "LOS ANGELES · SITE PLANNING";
-  $("map-badge").textContent = water ? "TERRAIN · RAINFALL · DRAINAGE" : "CURRENT FLOW · DATED COUNTS";
+  $("map-badge").textContent = water ? "TERRAIN · RAINFALL · DRAINAGE" : "CURRENT SPEED · SLOW APPROACHES";
   $("reset").innerHTML = water ? "↗ &nbsp; Back to Los Angeles" : "↗ &nbsp; Back to pilot";
   if (!water && $("emissions-layer").checked) loadEmissions();
   syncEmissionsVisibility();

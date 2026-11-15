@@ -2,7 +2,7 @@
 
 Prepared November 14, 2026. Product decisions approved; implementation proceeds one authorized checkpoint at a time.
 
-**Current implementation:** Checkpoints 0/1 are committed as `07c57af`. [Checkpoint 2A/2B discovery](CHECKPOINT_2_DISCOVERY.md) is complete and uncommitted on `codex/checkpoint-2-discovery`: TomTom current street flow, grouped slow approaches, expanded native terrain with contribution outlines, rainfall/drainage and sponsor context, and bounded agent neighborhood queries. Checkpoint 3 has not started.
+**Current implementation:** Checkpoints 0/1 are committed as `07c57af`; Checkpoint 2 as `e8fed6a`. [Checkpoint 3 agent workspace](CHECKPOINT_3_AGENT_WORKSPACE.md) is complete and uncommitted on `codex/checkpoint-3-agent-workspace`: native delegation, trusted skills, local project/checkpoint storage, desktop resume/files controls and bounded recovery. Per the latest user direction, historical count layers are removed from the map and desktop is prioritized. Verified historical sheets remain internal simulation inputs. Checkpoint 4 has not started.
 
 Sustainability Map will help Los Angeles urban planners and traffic engineers discover environmental improvement opportunities, choose a location, and develop an inspectable physical concept through conversation. The primary workflow begins with a goal and a map area. The agent investigates that area, presents up to three supported locations, and waits for the user to choose one before developing and evaluating designs.
 
@@ -359,6 +359,8 @@ Build and version terrain over the agreed pilot, including adequate surrounding 
 **Acceptance:** Inspect a meaningful feature outside the old window and a gap case; trace a feature to its input and method; show the difference between terrain indication, event rainfall and any verified flooding; identify several independent sites that can be investigated without inventing connections.
 
 ### Checkpoint 3 Build the persistent agent workspace
+
+**Implemented:** see [Checkpoint 3 report](CHECKPOINT_3_AGENT_WORKSPACE.md) for verification and the live-traffic retention boundary.
 
 **Outcome:** The lead can plan, delegate, use skills and continue a project across turns.
 

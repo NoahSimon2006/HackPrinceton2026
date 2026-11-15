@@ -33,7 +33,8 @@ def map_discovery(workflow):
     if workflow == 'street':
         from traffic_flow import get_snapshot
         live = get_snapshot()
-        data['layers'] = live['layers'] + data['layers']
+        data['layers'] = live['layers']
+        data['sources'] = dict(live['sources'])
         data['sources'].update(live['sources'])
         data['flow_expires_at'] = live.get('expires_at')
         data['flow_expires_epoch'] = live.get('expires_epoch')
@@ -166,3 +167,31 @@ def traffic_context(reference, lon, lat):
         raise ValueError("Count sheet does not match discovery. Rebuild source data.")
     return {"sheet": parsed, "period": "pm", "node_id": p["network_node"],
             "lon": p["center"][0], "lat": p["center"][1]}
+
+
+def traffic_context_at_site(lon, lat):
+    """Internal simulation input association, independent of retired map layers.
+
+    Require exactly one verified counted intersection within 25 metres. Never
+    substitute a distant intersection or move the selected property. Source
+    hashes, sheet parsing and network checks remain in traffic_context.
+    """
+    from math import hypot, cos, radians
+    try:
+        data = load_discovery("street")
+    except (OSError, ValueError):
+        return None
+    layer = next((layer for layer in data["layers"] if layer["id"] == "turning"), None)
+    matches = []
+    for feature in (layer or {}).get("features", []):
+        x, y = feature["properties"]["center"]
+        distance = hypot((lon-x)*cos(radians(lat)), lat-y)*111320
+        if distance <= 25:
+            matches.append((feature, distance))
+    if len(matches) != 1:
+        return None
+    feature, distance = matches[0]
+    reference = {"version":data["version"], "layer":"turning", "feature":feature["id"]}
+    result = traffic_context(reference, *feature["properties"]["center"])
+    result["association_distance_m"] = round(distance, 2)
+    return result

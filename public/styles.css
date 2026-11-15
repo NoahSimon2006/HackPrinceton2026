@@ -405,3 +405,15 @@ button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-vi
 .site-resolution-candidates{display:grid;gap:7px;margin-top:10px}.site-resolution-candidates button{text-align:left;font-size:11px;overflow-wrap:anywhere}#site-resolution-status{font-size:11px;color:#b6cdbd}#site-view-tour-choice{max-width:100%;margin:8px 0 12px}
 
 .site-view-entry>summary{cursor:pointer;font-size:12px;font-weight:600;margin-bottom:12px}.site-details .site-view-entry{margin:12px 0}
+
+/* Desktop project continuity lives beside the planning brief. */
+.project-workspace { min-width: 0; padding: 13px 0 16px; border-bottom: 1px solid #39534d; margin-bottom: 14px; }
+.project-workspace label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 7px; }
+.project-switcher { display: flex; min-width: 0; gap: 7px; }
+.project-switcher select { width: 0; min-width: 0; flex: 1; background: #152b26; color: #e4f0e9; border: 1px solid #46645b; border-radius: 7px; padding: 8px; }
+.project-switcher button { flex: 0 0 auto; }
+#project-status { font-size: 12px; line-height: 1.5; color: #b8d2c5; margin: 8px 0; }
+#project-files summary { cursor: pointer; font-size: 12px; }
+#project-file-list { padding: 0; list-style: none; max-height: 190px; overflow: auto; }
+#project-file-list button { font-size: 11px; text-align: left; overflow-wrap: anywhere; padding: 5px 0; border: 0; background: transparent; color: #a7e5a3; }
+#project-file-preview { max-height: 340px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; font-size: 11px; line-height: 1.5; background: #0c1e19; border: 1px solid #39534d; border-radius: 7px; }

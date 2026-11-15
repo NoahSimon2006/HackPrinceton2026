@@ -21,7 +21,7 @@ function harness(mobile=false) {
       geoJSON:(data,options)=>{for(const feature of data.features){const leaf={bindTooltip(){},on(name,fn){this[name]=fn;}};options.onEachFeature(feature,leaf);rendered.push({feature,leaf});}return{addTo(){}};}}});
   return{$,map,requests,events,rendered,overlay,timers,clock};
 }
-function data(workflow='street',id='counts') {
+function data(workflow='street',id='flow') {
   return{schema:1,workflow,version:`${workflow}-hash`,bbox:[-118.26,34.04,-118.24,34.06],
     sources:{public:{label:'Official dataset',url:'https://example.org/source'}},
     layers:[{id,label:'Source layer',source:'public',status:'ready',unit:'vehicles reported',period:'2014-01-16',
@@ -33,10 +33,10 @@ function data(workflow='street',id='counts') {
   assert.equal(h.requests[0].url,'/api/discovery?workflow=street');
   h.requests[0].resolve(data());await flush();
   assert.equal(h.rendered.length,1);
-  assert.match(h.$('discovery-limit').textContent,/CO₂, NOₓ and delay remain unavailable/);
+  assert.match(h.$('discovery-limit').textContent,/traffic volume and emissions are not measured/);
   h.rendered[0].leaf.click();
   const selection=h.events.find(x=>x.name==='discoveryselect').event;
-  assert.deepEqual(JSON.parse(JSON.stringify(selection.reference)),{version:'street-hash',layer:'counts',feature:'one'});
+  assert.deepEqual(JSON.parse(JSON.stringify(selection.reference)),{version:'street-hash',layer:'flow',feature:'one'});
   assert.equal(selection.feature.properties.value,18102);
   assert.equal(h.requests.length,1,'browsing/selecting discovery never invokes an agent');
   h.$('discovery-layer').value='off';h.$('discovery-layer').events.change();
@@ -81,7 +81,7 @@ console.log('PASS: narrow-screen controls collapse after selection and reopen on
   const live={...current.layers[0],id:'flow',version:'flow-current',status:'partial',unit:'% of free-flow speed',
     features:[{...current.layers[0].features[0],id:'slow-road',properties:{...current.layers[0].features[0].properties,
       value:50,scalar_detail:{speed_kmh:20,relative_speed:.5,road_closure:false}}}]};
-  current.layers.unshift(live);current.flow_expires_epoch=h.clock.now/1000+60;
+  current.layers=[live,{...live,id:'approaches',features:[...live.features]}];current.flow_expires_epoch=h.clock.now/1000+60;
   current.flow_expires_at=new Date(current.flow_expires_epoch*1000).toISOString();
   h.requests[0].resolve(current);await flush();
   assert.equal(h.$('discovery-layer').value,'flow');
@@ -91,10 +91,8 @@ console.log('PASS: narrow-screen controls collapse after selection and reopen on
   assert.equal(h.rendered.length,0,'expired flow must disappear');
   assert.match(h.$('discovery-status').textContent,/expired/);
   assert.equal(h.requests.length,1,'expiry must not create automatic provider polling');
-  h.$('discovery-layer').value='counts';h.$('discovery-layer').events.change();
-  assert.equal(h.rendered.length,1,'historical data remains available after live expiry');
-  h.rendered[0].leaf.click();
-  assert.equal(h.events.filter(e=>e.name==='discoveryselect').at(-1).event.reference.version,'street-hash');
+  h.$('discovery-layer').value='approaches';h.$('discovery-layer').events.change();
+  assert.equal(h.rendered.length,0,'both current-traffic layers expire without historical fallback');
   h.$('discovery-refresh').events.click();
   assert.equal(h.requests.length,2,'refresh is explicitly initiated');
   h.map.fire('plannerworkspace',{mode:'water'});
@@ -102,4 +100,4 @@ console.log('PASS: narrow-screen controls collapse after selection and reopen on
   h.requests[1].resolve(data());await flush();
   assert.equal(h.$('discovery-layer').value,'rainfall','late flow refresh cannot replace stormwater');
 }
-console.log('PASS: separately versioned flow, partial coverage, expiry removal, explicit refresh and retained historical references');
+console.log('PASS: separately versioned flow, partial coverage, expiry removal, explicit refresh without retired historical layers');

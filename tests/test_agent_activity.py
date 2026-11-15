@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 from email.message import Message
 from agent_activity import Activity, RunCancelled
-from test_site_agent import ScriptedModel, calls
+from test_site_agent import ScriptedModel, calls, lead_model, specialist_model
 from test_site_measurements import LAT, LON
 from site_agent import analyze_site
 from server import Handler, ACTIVE_ANALYSES
@@ -16,13 +16,13 @@ class ActivityTest(unittest.TestCase):
             if event['stage']=='outlines' and event['status']=='started':
                 raise BrokenPipeError('client gone')
         activity.emit=emit
-        model=ScriptedModel(responses=[calls('investigate_site')])
-        fetch=Mock()
-        with patch('site_agent.ChatXAI',side_effect=[model,ScriptedModel(),ScriptedModel()]):
+        model=lead_model([calls('delegate')])
+        fetch=Mock(side_effect=lambda *args: self.assertFalse(activity.cancelled.is_set()) or [])
+        with patch('site_agent.ChatXAI',side_effect=[model,specialist_model("site","street",[]),specialist_model("domain","street",[])]):
             result=analyze_site('key','test','Review','street',[],fetch,fetch,fetch,lon=LON,lat=LAT,activity=activity)
         self.assertTrue(activity.cancelled.is_set())
         self.assertIsNone(result['report'])
-        fetch.assert_not_called()
+        self.assertTrue(all(call.args != ("outlines",) for call in fetch.call_args_list))
         self.assertNotIn('client gone',str(result))
 
     def test_transport_streams_sanitized_events_then_matching_result(self):

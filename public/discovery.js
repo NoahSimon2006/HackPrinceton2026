@@ -35,8 +35,6 @@
   }
   function color(feature,layer) {
     if(['flow','approaches'].includes(layer.id))return feature.properties.scalar_detail?.road_closure?'#d783eb':feature.properties.value<40?'#fa7869':feature.properties.value<70?'#f7b357':feature.properties.value<90?'#f2d77a':'#74d5b0';
-    if(layer.id==='counts')return feature.properties.value>=20000?'#ffcd80':feature.properties.value>=10000?'#8ed8a6':'#c4f5d4';
-    if(layer.id==='turning')return '#f08bd2';
     if(layer.id==='rainfall')return '#72bcf5';
     if(layer.id==='catchments')return '#90c7f0';
     if(layer.id==='properties')return '#e9b6ef';
@@ -62,7 +60,7 @@
     const title=document.createElement('strong');title.textContent=feature.properties.label;
     const value=document.createElement('p');value.textContent=valueText(feature,layer);
     const period=document.createElement('small');period.textContent=feature.properties.period || layer.period;
-    const note=document.createElement('p');note.textContent=feature.properties.summary || (['flow','approaches'].includes(layer.id)?'Current estimate. Inspect speed, free-flow comparison, direction and retrieval time in the sidebar.':layer.id==='terrain'?'Terrain-inferred collection area; inspect its outline. Drainage and ponding remain unverified.':layer.id==='counts'?'Automated count on the stated date; duration unknown, not an hourly rate.':layer.id==='turning'?'Official LADOT turning-movement sheet; totals checked. Ask the agent to compare redesigns here.':'Source context added to the site brief.');
+    const note=document.createElement('p');note.textContent=feature.properties.summary || (['flow','approaches'].includes(layer.id)?'Current estimate. Inspect speed, free-flow comparison, direction and retrieval time in the sidebar.':layer.id==='terrain'?'Terrain-inferred collection area; inspect its outline. Drainage and ponding remain unverified.':'Source context added to the site brief.');
     const source=document.createElement('small');source.textContent=data.sources[layer.source].label;
     popup.append(title,value,period,note,source);
     L.popup({maxWidth:290}).setLatLng([lat,lng]).setContent(popup).openOn(map);
@@ -78,15 +76,15 @@
       $('discovery-legend').textContent='';$('discovery-limit').textContent='';return;
     }
     choices.set(mode,layer.id);
-    $('discovery-legend').textContent=['flow','approaches'].includes(layer.id)?'Green ≥90% · yellow 70–90% · amber 40–70% · red <40% of free-flow speed':layer.id==='terrain'?'↘ Cyan · downhill paths   ● Gold · unresolved collection candidates':layer.id==='counts'?'● Green → amber · lower to higher dated count':layer.id==='turning'?'● Pink · intersections with a checked LADOT turning-movement sheet':layer.id==='rainfall'?'▧ Blue · design rainfall depth, inches':layer.id==='properties'?'● CoStar reported property locations and uses':layer.id==='surfaces'?'▧ Purple · parcels   Green · mapped buildings':layer.legend || '▧ Dashed blue · county catchment context';
-    $('discovery-limit').textContent=['flow','approaches'].includes(layer.id)?'One snapshot of surface-street conditions. Gaps are unknown; traffic volume and emissions are not measured. Select a road for its speed and free-flow comparison.':layer.id==='terrain'?'Select a path or collection point to see the terrain area feeding it. Actual drains, flooding and runoff capture remain unverified.':layer.id==='counts'?'Historical data only. CO₂, NOₓ and delay remain unavailable without verified inputs.':layer.id==='turning'?'Counted left/through/right movements by approach. Signal timing is not on the sheets; simulations use generated timing.':layer.limitations;
+    $('discovery-legend').textContent=['flow','approaches'].includes(layer.id)?'Green ≥90% · yellow 70–90% · amber 40–70% · red <40% of free-flow speed':layer.id==='terrain'?'↘ Cyan · downhill paths   ● Gold · unresolved collection candidates':layer.id==='rainfall'?'▧ Blue · design rainfall depth, inches':layer.id==='properties'?'● CoStar reported property locations and uses':layer.id==='surfaces'?'▧ Purple · parcels   Green · mapped buildings':layer.legend || '▧ Dashed blue · county catchment context';
+    $('discovery-limit').textContent=['flow','approaches'].includes(layer.id)?'One snapshot of surface-street conditions. Gaps are unknown; traffic volume and emissions are not measured. Select a road for its speed and free-flow comparison.':layer.id==='terrain'?'Select a path or collection point to see the terrain area feeding it. Actual drains, flooding and runoff capture remain unverified.':layer.limitations;
     $('discovery-status').textContent=usable(layer)?`${layer.features.length} ${layer.features.length===1?'feature':'features'} · ${layer.period}${layer.status==='partial'?' · Partial coverage; some records could not be validated.':''}`:layer.status==='empty'?'No source features returned for this pilot.':`${layer.label} unavailable. ${layer.error || 'Rebuild the source snapshot.'}`;
     featurePicker.disabled=!usable(layer);
     if(!usable(layer))return;
     L.geoJSON({type:'FeatureCollection',features:layer.features},{pane:'discovery',
       style:f=>({color:color(f,layer),weight:['flow','approaches'].includes(layer.id)?5:layer.id==='terrain'?3:layer.id==='catchments'?2:1,
         dashArray:layer.id==='catchments'?'7 5':null,fillOpacity:layer.id==='surfaces'?.08:layer.id==='rainfall'?.16:layer.id==='catchments'?.07:.8}),
-      pointToLayer:(f,latlng)=>L.circleMarker(latlng,{pane:'discovery',radius:layer.id==='turning'?10:layer.id==='counts'?6+Math.min(5,Math.log10(1+f.properties.value)):6,
+      pointToLayer:(f,latlng)=>L.circleMarker(latlng,{pane:'discovery',radius:6,
         color:'#142824',weight:2,fillColor:color(f,layer),fillOpacity:.9}),
       onEachFeature:(f,leaf)=>{
         const label=document.createElement('span');label.textContent=`${f.properties.label} · ${valueText(f,layer)}`;
@@ -147,6 +145,6 @@
   $('discovery-refresh').addEventListener('click',()=>load(mode,true));
   document.addEventListener?.('visibilitychange',expireFlow);
   map.on('plannerworkspace',({mode})=>load(mode));
-  map.attributionControl.addAttribution('Traffic © TomTom · Count locations © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Terrain: USGS · Hydrology: LA County');
+  map.attributionControl.addAttribution('Traffic © TomTom · Street context © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Terrain: USGS · Hydrology: LA County');
   load(planningMode);
 })();
