@@ -3,7 +3,7 @@
   map.createPane('discovery'); map.getPane('discovery').style.zIndex=420;
   const overlay=L.layerGroup(), contextOverlay=L.layerGroup().addTo(map);
   const cache=new Map(), choices=new Map(), visited=new Set(), views=new Map();
-  let mode=planningMode, data=null, token=0, controller, expiryTimer;
+  let mode=planningMode, data=null, token=0, controller, expiryTimer, viewIntent=0;
   const picker=$('discovery-layer'), featurePicker=$('discovery-feature');
   function expand(open) {
     $('discovery-body').hidden=!open;
@@ -138,7 +138,7 @@
     map.closePopup();
     const changed=workflow!==mode;
     if(changed && data)views.set(mode,{center:map.getCenter(),zoom:map.getZoom()});
-    mode=workflow;data=null;const request=++token;
+    mode=workflow;data=null;const request=++token, loadViewIntent=viewIntent;
     clearTimeout(expiryTimer);contextOverlay.clearLayers();
     controller?.abort();controller=new AbortController();
     overlay.remove();overlay.clearLayers();
@@ -166,6 +166,8 @@
         $('discovery-freshness').textContent=`Current estimate, valid until ${new Date(data.flow_expires_at).toLocaleTimeString()}. The time shown is retrieval time; the provider supplies no confidence or observation time.`;
         expiryTimer=setTimeout(expireFlow,Math.max(1,data.flow_expires_epoch*1000-Date.now()+50));
       }
+      // A completed background load may not undo an explicit design focus.
+      if(loadViewIntent!==viewIntent)return;
       if(changed && views.has(mode)) {
         const view=views.get(mode);map.setView(view.center,view.zoom,{animate:false});
       } else if(changed || !visited.has(mode)){visited.add(mode);focusPilot();}
@@ -179,6 +181,7 @@
   featurePicker.addEventListener('change',()=>{const feature=currentLayer()?.features.find(f=>f.id===featurePicker.value);if(feature)select(feature,true);});
   $('discovery-focus').addEventListener('click',focusPilot);
   $('discovery-collapse').addEventListener('click',()=>expand($('discovery-body').hidden));
+  map.on('roadconceptfocus',()=>{++viewIntent;visited.add(mode);expand(false);});
   $('discovery-refresh').addEventListener('click',()=>load(mode,true));
   document.addEventListener?.('visibilitychange',expireFlow);
   // Back/forward restoration resumes this script instead of running startup again.

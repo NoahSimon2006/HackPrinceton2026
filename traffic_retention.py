@@ -14,6 +14,11 @@ def without_live_facts(facts):
 
 
 def archive_artifact(path, content):
+    if path == '/project/designs/road-concept.json':
+        # Only the compiler's validated structured design is durable. Plans,
+        # source reports and free-form prose may contain live traffic values.
+        from road_concept import validate_road_concept
+        return json.dumps(validate_road_concept(json.loads(content)), allow_nan=False)
     if path in ("/project/brief.json", "/project/source-brief.json", "/project/constraints.json", "/project/history/previous-traffic-evaluation.json", "/project/evaluations/traffic.json", "/project/comparison.json"):
         return content
     if path.startswith("/project/evidence/") or path == "/project/evidence.json":

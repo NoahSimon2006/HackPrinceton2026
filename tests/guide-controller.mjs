@@ -4,7 +4,7 @@ import vm from 'node:vm';
 const source=readFileSync(new URL('../public/guide.js',import.meta.url),'utf8');
 const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
 const startsHidden=['site-card','cancel-site-analysis','agent-assessment','proposal-review','water-design-review',
-  'traffic-comparison','proposal-result-message','scout-cancel','guide-resume'];
+  'traffic-comparison','proposal-result-message','road-concept-review','scout-cancel','guide-resume'];
 function harness({saved=null}={}) {
   const elements=new Map(),documentEvents={},storage=new Map(saved?[['planning-guide',JSON.stringify(saved)]]:[]);
   let observed=()=>{};
@@ -130,4 +130,34 @@ function harness({saved=null}={}) {
   assert.equal(h.$('guide-method-saved').hidden,true,'no saved-project route without a saved project');
   h.$('saved-projects').children.push({},{});h.changed();assert.equal(h.$('guide-method-saved').hidden,false);
 }
-console.log('PASS: guided steps, site gating, restore versus user selection, analysis progress, evidence routing and page wiring');
+// A new road concept becomes the main result only while following that run.
+for(const userLeaves of [false,true]) {
+  const h=harness();h.gesture();h.site();h.click('guide-next');
+  h.map.fire('plannerinvestigation',{workflow:'street'});
+  h.$('cancel-site-analysis').hidden=false;h.changed();
+  if(userLeaves)h.click('guide-tab-evidence');
+  h.$('road-concept-review').hidden=false;h.$('road-concept-review').setAttribute('data-state','Concept ready');
+  h.map.fire('roadconceptstate',{});h.map.fire('roadconceptready',{available:true,follow:true,restored:false});
+  assert.equal(h.tab(),userLeaves?'evidence':'design','a result respects the user’s chosen result pane');
+  assert.equal(h.$('guide-design-status').textContent,'Concept ready');
+}
+{
+  const h=harness();h.site();h.click('guide-step-results');h.click('guide-tab-project');
+  h.map.fire('roadconceptready',{available:true,follow:true,restored:true});assert.equal(h.tab(),'project','restoration never changes the selected pane');
+}
+console.log('PASS: guided steps, site gating, restore versus user selection, analysis progress, road concept routing, evidence routing and page wiring');
+for(const chooseTab of [false,true]) {
+  const h=harness();h.gesture();h.site();h.click('open-project');h.site('saved-road');
+  if(chooseTab)h.click('guide-tab-project');
+  h.map.fire('roadconceptready',{available:true,restored:true});
+  assert.equal(h.tab(),chooseTab?'project':'design','explicit saved opening prefers the design unless the user chooses another tab');
+  assert.equal(h.step(),'site','choosing the saved result tab does not skip the site step');
+  h.click('guide-skip');assert.equal(h.tab(),chooseTab?'project':'design');
+}
+{
+  const h=harness();h.site();h.click('guide-step-results');
+  let visible=null;h.map.on('plannerevidenceview',event=>{visible=event.visible;});
+  h.click('guide-tab-evidence');assert.equal(visible,true);
+  h.click('guide-tab-design');assert.equal(visible,false);
+}
+console.log('PASS: saved road concepts default to Design without overriding tab choice, and Evidence explicitly controls source visibility');

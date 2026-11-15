@@ -2,6 +2,10 @@
 
 A local planning workspace for Los Angeles, using a Python server, bundled Leaflet, Vexcel aerial imagery and CoStar site evidence. **Traffic & Emissions** opens with current surface-street speeds and connected slow approaches. **Stormwater** opens with terrain screening across the western pilot, with rainfall, drainage, property-use and sampled parcel/building layers.
 
+**Traffic redesigns now return a 2D overlay on the existing map.** Select a road or intersection, describe the improvement, and choose **Generate road concept**. The Deep Agent investigates source evidence, mapped street geometry and reviewed FHWA guidance, then uses a local geometry compiler to publish crossings, curb extensions, pedestrian islands, bike lanes, pedestrian space or lane markings. **Results → Design** shows the overlay, its legend, dimensions, source basis, Existing/Proposed controls and saved revisions. Follow-up briefs revise named components while preserving unspecified choices. Traffic counts are not required to draw a supported spatial concept; emissions, delay and safety benefits remain unassessed unless a separate valid evaluation establishes them. Existing simulation-backed recommendations retain their original validation rules. These road concepts are 2D; extending them to 3D is deferred.
+
+Road placement uses the local OSM-derived street network, a local OSM extract, or one bounded public OSM map request when those sources cannot resolve the selected location. Width assumptions are disclosed. User-marked crossings provide an explicit placement fallback; keep-clear markings and mapped buildings constrain the design. Agent messages receive anonymous road references and scalar dimensions; exact geometry stays local. Each saved concept includes its own source context and identity, so reloading, inspecting history or switching views requires no new model call. Missing geometry produces a placement question rather than an invented layout.
+
 **Current work: [Checkpoint 8 conceptual 3D](docs/CHECKPOINT_8_CONCEPTUAL_3D.md), implemented and desktop-verified.** Checkpoint 7 is pushed to `main` as `ee07eb0`. The new **Explore in 3D** viewer reconstructs the selected 2D footprint in meters, with matching source context when available and one camera for Existing/Proposed. Current and historical stormwater scenes and a rejected traffic layout have been checked in the browser; focused harnesses verify stale-input and late-publication invalidation. Opening a scene makes no new agent or simulation call. Main/1st still has no eligible traffic recommendation or usable CoStar access record. Read the [handoff](docs/CONVERSATION_HANDOFF.md), [demo walkthrough](docs/DEMO_WALKTHROUGH.md) and [approved plan](docs/NEXT_IMPLEMENTATION_PLAN.md).
 
 **Detailed demonstration:** Open `/demo` for the [Hancock Terrace frontage study](docs/DEMO_HANCOCK_FRONTAGE.md): two planted rain gardens, an interactive event-volume scenario, a layered section and a genuine site-matched exterior capture. This curated scene is separate from saved agent evaluations. Prepare the local source snapshot with `scripts/prepare_hancock_demo.py`; sponsor geometry remains ignored.
@@ -96,6 +100,8 @@ node tests/site-view-controller.mjs
 node tests/projects.mjs
 node tests/scouting.mjs
 node tests/guide-controller.mjs
+node tests/road-concept-controller.mjs
+.venv/bin/python -m unittest discover -s tests -p 'test_road_concept*.py' -q
 ```
 
 Install `requirements-discovery.txt` for terrain/builder tests. Most tests use explicit test fixtures and make no provider calls. Two local spot checks use downloaded public source artifacts when available; they report skipped if those files are absent. See the checkpoint reports for live verification and remaining limits.

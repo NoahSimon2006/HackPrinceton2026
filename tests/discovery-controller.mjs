@@ -4,14 +4,14 @@ import vm from 'node:vm';
 const source=await readFile(new URL('../public/discovery.js',import.meta.url),'utf8');
 const flush=()=>new Promise(setImmediate);
 function harness(mobile=false) {
-  const elements=new Map(),requests=[],events=[],rendered=[],timers=[],windowEvents={},clock={now:Date.now()};
+  const elements=new Map(),requests=[],events=[],rendered=[],timers=[],windowEvents={},cameraMoves=[],clock={now:Date.now()};
   class TestDate extends Date {static now(){return clock.now;}}
   const element=()=>({value:'',disabled:false,hidden:false,children:[],events:{},textContent:'',
     classList:{contains:()=>false},setAttribute(){},append(...children){this.children.push(...children);},
     replaceChildren(){this.children=[];},addEventListener(name,fn){this.events[name]=fn;}});
   const $=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
   const overlay={attached:false,clearLayers(){rendered.length=0;},addTo(){this.attached=true;return this;},remove(){this.attached=false;}};
-  const map={handlers:{},createPane(){},getPane:()=>({style:{}}),fitBounds(){},setView(){},closePopup(){},getCenter:()=>({lat:34.05,lng:-118.25}),getZoom:()=>17,
+  const map={handlers:{},createPane(){},getPane:()=>({style:{}}),fitBounds(){cameraMoves.push('fit');},setView(){cameraMoves.push('set');},closePopup(){},getCenter:()=>({lat:34.05,lng:-118.25}),getZoom:()=>17,
     fire(name,event){events.push({name,event});this.handlers[name]?.(event);},on(name,fn){this.handlers[name]=fn;},attributionControl:{addAttribution(){}}};
   const popup={setLatLng(){return this;},setContent(content){this.content=content;return this;},openOn(){return this;}};
   const json=(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject}));
@@ -19,7 +19,7 @@ function harness(mobile=false) {
     document:{createElement:element,getElementById:$},
     L:{latLng:(lat,lng)=>({lat,lng}),layerGroup:()=>overlay,popup:()=>popup,circleMarker:()=>({}),
       geoJSON:(data,options)=>{for(const feature of data.features){const leaf={bindTooltip(){},on(name,fn){this[name]=fn;}};options.onEachFeature(feature,leaf);rendered.push({feature,leaf});}return{addTo(){}};}}});
-  return{$,map,requests,events,rendered,overlay,timers,clock,windowEvents};
+  return{$,map,requests,events,rendered,overlay,timers,clock,windowEvents,cameraMoves};
 }
 function data(workflow='street',id='flow') {
   return{schema:1,workflow,version:`${workflow}-hash`,bbox:[-118.26,34.04,-118.24,34.06],
@@ -77,6 +77,13 @@ console.log('PASS: source-only discovery, selection, off toggle, partial failure
   assert.equal(h.$('discovery-body').hidden,false,'layer controls can always be reopened');
 }
 console.log('PASS: narrow-screen controls collapse after selection and reopen on request');
+for(const mobile of [false,true]) {
+  const h=harness(mobile);h.map.fire('roadconceptfocus',{});
+  assert.equal(h.$('discovery-body').hidden,true,'focusing the road design clears discovery controls from the map');
+  h.requests[0].resolve(data());await flush();assert.equal(h.cameraMoves.length,0,'late discovery loading cannot undo the explicit design view');
+  h.$('discovery-collapse').events.click();assert.equal(h.$('discovery-body').hidden,false,'the user can reopen map layers');
+  h.$('discovery-focus').events.click();assert.equal(h.cameraMoves.length,1,'View data area still explicitly moves the camera');
+}
 
 {
   const h=harness();h.requests[0].resolve(data());await flush();

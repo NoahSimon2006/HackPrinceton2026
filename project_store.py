@@ -80,6 +80,9 @@ class ProjectStore:
                 CREATE TABLE IF NOT EXISTS traffic_designs (
                   project_id TEXT, input_hash TEXT, revision INTEGER, payload TEXT, created TEXT,
                   PRIMARY KEY(project_id, input_hash));
+                CREATE TABLE IF NOT EXISTS road_concepts (
+                  project_id TEXT, input_hash TEXT, revision INTEGER, payload TEXT, created TEXT,
+                  PRIMARY KEY(project_id, input_hash));
             """)
             if "instructions" not in {row[1] for row in db.execute("PRAGMA table_info(projects)")}:
                 db.execute("ALTER TABLE projects ADD COLUMN instructions TEXT NOT NULL DEFAULT '[]'")
@@ -137,6 +140,7 @@ class ProjectStore:
             artifacts = [dict(r) for r in db.execute("SELECT path,updated FROM artifacts WHERE project_id=? ORDER BY path", (project_id,))]
             designs = [{**json.loads(r['payload']), 'savedAt': r['created']} for r in db.execute('SELECT payload,created FROM water_designs WHERE project_id=? ORDER BY revision,created', (project_id,))]
             traffic_designs = [{**json.loads(r['payload']), 'savedAt': r['created']} for r in db.execute('SELECT payload,created FROM traffic_designs WHERE project_id=? ORDER BY revision,created', (project_id,))]
+            concepts = [{**json.loads(r['payload']), 'savedAt': r['created']} for r in db.execute('SELECT payload,created FROM road_concepts WHERE project_id=? ORDER BY revision,created', (project_id,))]
             result = json.loads(row['result']) if row['result'] else None
             if result:
                 # Publication time belongs to the archived design, not the
@@ -149,11 +153,17 @@ class ProjectStore:
                     and published.get('input_hash')), None)
                 if saved:
                     result['savedAt'] = saved['savedAt']
+                result.pop('conceptSavedAt', None)
+                concept = result.get('concept') or {}
+                saved_concept = next((item for item in concepts if item['concept']['input_hash'] == concept.get('input_hash')), None)
+                if saved_concept:
+                    result['conceptSavedAt'] = saved_concept['savedAt']
         return {"id": row["id"], "threadId": row["thread_id"], "version": row["version"],
                 "snapshot": json.loads(row["snapshot"]), "status": row["status"], "updated": row["updated"],
                 "activeRun": row["active_run"], "result": result,
                 "resultVersion": row["result_version"], "events": events, "artifacts": artifacts,
-                "instructions": json.loads(row["instructions"]), 'designHistory': designs[-30:], 'trafficDesignHistory': traffic_designs[-30:]}
+                "instructions": json.loads(row["instructions"]), 'designHistory': designs[-30:], 'trafficDesignHistory': traffic_designs[-30:],
+                'conceptHistory': concepts[-30:]}
 
     def list(self):
         with self.connect() as db:
@@ -210,7 +220,10 @@ class ProjectStore:
                 content=archive_artifact(path, content)
                 if content is None:
                     return
-            if len(content) > 200_000:
+            # This validated application artifact includes its immutable source
+            # geometry. It is never injected into the agent's virtual files.
+            limit = 2_000_000 if path == '/project/designs/road-concept.json' else 200_000
+            if len(content.encode('utf-8')) > limit:
                 raise ValueError("Artifact exceeds the local workspace budget.")
             db.execute("INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?,?)", (project_id, path, content, run_id, now()))
 
@@ -220,6 +233,29 @@ class ProjectStore:
             row = db.execute("SELECT active_run,version,snapshot FROM projects WHERE id=?", (project_id,)).fetchone()
             if not row or row[0] != run_id:
                 return False
+            snapshot = json.loads(row['snapshot'])
+            if result and result.get('concept') is not None:
+                result = {**result}
+                if status != 'ready' or result.get('analysisError'):
+                    result['concept'] = None
+                else:
+                    from road_concept import validate_road_concept
+                    if snapshot['workflow'] != 'street':
+                        raise ValueError('Road concepts belong to the traffic workflow.')
+                    concept = validate_road_concept(result['concept'], identity={
+                        'site_id': snapshot['siteId'], 'revision': snapshot['proposalRevision'],
+                        'input_revision': snapshot['inputRevision']})
+                    origin = concept['context']['origin']
+                    if abs(origin['lon'] - snapshot['lon']) > 1e-8 or abs(origin['lat'] - snapshot['lat']) > 1e-8:
+                        raise ValueError('The road concept belongs to a different selected location.')
+                    digest = concept['input_hash']
+                    result['concept'] = concept
+                    previous = [{**json.loads(r['payload']), 'savedAt': r['created']} for r in db.execute(
+                        'SELECT payload,created FROM road_concepts WHERE project_id=? AND input_hash!=? ORDER BY revision,created',
+                        (project_id, digest))]
+                    result['conceptHistory'] = previous[-30:]
+                    db.execute('INSERT OR IGNORE INTO road_concepts VALUES(?,?,?,?,?)',
+                        (project_id, digest, concept['revision'], json.dumps({'concept': concept}, allow_nan=False), now()))
             if json.loads(row["snapshot"])["workflow"] == "street":
                 from traffic_retention import archive_result
                 result=archive_result(result)

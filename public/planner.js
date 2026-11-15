@@ -14,7 +14,7 @@
       instruction: "Click around the space you want to use for the rain garden." },
   };
   const workflows = {
-    street: { kinds: ["crossing", "access"], brief: "Find the crossings and driveway entrances near this site. What could shorten a crossing while preserving access?" },
+    street: { kinds: ["crossing", "access"], brief: "Research this road and draw a redesign on the map that shortens crossings and improves space for people walking or cycling. Use mapped road evidence, preserve driveway access, and explain the placement assumptions. Keep traffic and emissions evaluation separate from the visual concept." },
     water: { kinds: ["access", "drainage", "treatment"], brief: "Draft a rain garden for this site. Show where it could fit and what surfaces could feed it." },
   };
   const siteLayer = L.layerGroup();
@@ -36,6 +36,7 @@
   let siteRequest;
   let activeAnalysis = null;
   let workspaceVisible = false;
+  let roadConceptPresent = false, evidenceView = false;
   let coordinateInputs = [];
 
   let projectLoadGeneration = 0;
@@ -95,7 +96,7 @@
     // Internal revision and state are project details, not the everyday save status.
     $("project-detail").textContent = value ? `Project revision ${value.version} · ${value.status.replaceAll('_',' ')}` : "";
     $("project-files").hidden = !value?.artifacts?.length;
-    $("run-site-analysis").textContent = value?.result ? "Continue project" : "Analyze site";
+    $("run-site-analysis").textContent = workflow==='street' ? (value?.result ? 'Revise road concept' : 'Generate road concept') : (value?.result ? "Continue project" : "Analyze site");
     const list = $("project-file-list"); list.replaceChildren();
     $("project-file-count").textContent = value?.artifacts?.length ? `· ${value.artifacts.length}` : "";
     for (const artifact of value?.artifacts ?? []) {
@@ -157,6 +158,21 @@
     clearTimeout(record.saveTimer);
     record.saveTimer=setTimeout(() => saveProject(selected,mode).catch(()=>{}),500);
     if (site?.[workflow] === record) $("project-status").textContent="Saving project…";
+  }
+
+  function restoreRoadConcept(selected, mode, value) {
+    if(mode!=='street' || !value)return;
+    const record=selected[mode], result=value.result;
+    const stopped=Boolean(result?.analysisError) || ['canceled','interrupted','failed'].includes(value.status);
+    const history=value.conceptHistory ?? result?.conceptHistory ?? [];
+    const saved=(!stopped && result?.concept)?{concept:result.concept,savedAt:result.conceptSavedAt || result.savedAt}:
+      history.filter(entry=>entry.concept?.site_id===selected.key && entry.concept.workflow==='street' &&
+        entry.concept.revision<=(record.proposalRevision ?? 0) && entry.concept.input_revision<=(record.revision ?? 0))
+        .sort((a,b)=>b.concept.revision-a.concept.revision)[0];
+    if(saved || result?.conceptGap)map.fire('roadconceptresult',{
+      projectId:value.id,siteId:selected.key,workflow:mode,inputRevision:record.revision ?? 0,revision:record.proposalRevision ?? 1,
+      concept:saved?.concept ?? null,conceptGap:result?.conceptGap,conceptHistory:history,conceptSavedAt:saved?.savedAt,
+      restored:true,stale:stopped || value.resultVersion!==value.version,historicalReference:stopped});
   }
 
   function restoreResult(selected, mode, value) {
@@ -238,6 +254,7 @@
       }
       restorePrevious();
     }
+    restoreRoadConcept(selected,mode,value);
     showEvidence(); showRainfall(); showProject(record);
   }
 
@@ -447,8 +464,21 @@
     scheduleProjectSave(record);
   }
 
+  function syncEvidenceVisibility() {
+    const visible=workflow!=='street' || !roadConceptPresent || evidenceView;
+    if(visible && workspaceVisible)evidenceLayer.addTo(map);else evidenceLayer.remove();
+    const evidence=site?.[workflow]?.evidence;
+    if(evidence) {
+      const count=evidence.outlines.length+evidence.detections.length+evidence.frontages.length;
+      $('site-evidence-status').textContent=count?`${count} mapped ${count===1?'feature':'features'}${visible?' on the map':' · open Evidence to inspect'}`:'No mapped features found at this site.';
+    }
+  }
+  map.on('roadconceptdisplay',event=>{roadConceptPresent=Boolean(event.concept);syncEvidenceVisibility();});
+  map.on('plannerevidenceview',event=>{evidenceView=Boolean(event.visible);syncEvidenceVisibility();});
+
   function showEvidence() {
     evidenceLayer.clearLayers();
+    syncEvidenceVisibility();
     const record = site[workflow];
     const evidence = record.evidence;
     const list = $("site-evidence-list");
@@ -503,6 +533,7 @@
     if (unavailable.includes("hydrology")) notes.push("County rainfall or watershed data could not be loaded.");
     if (unavailable.includes("property")) notes.push("CoStar context unavailable.");
     $("site-evidence-note").textContent = notes.filter(Boolean).join(" ");
+    syncEvidenceVisibility();
   }
 
   function showActivity(record) {
@@ -538,7 +569,8 @@
       if(savedRun) cancelSiteAnalysis(savedRun);
       return;
     }
-    const {record, controller} = activeAnalysis;
+    const {record, controller, siteId, workflow:mode, inputRevision, revision} = activeAnalysis;
+    map.fire('planneranalysisend',{siteId,workflow:mode,inputRevision,revision,status:'canceled'});
     cancelSiteAnalysis(activeAnalysis.serverRunId);
     activeAnalysis = null; controller.abort();
     record.evidencePending = false;
@@ -589,7 +621,7 @@
     record.activitySummary = "Starting site investigation…";
     record.stale = Boolean(record.facts?.length);
     const controller = new AbortController();
-    const run = {record, controller}; activeAnalysis = run;
+    const run = {record, controller,siteId:selected.key,workflow:mode,inputRevision:revision,revision:proposalRevision}; activeAnalysis = run;
     try {
       map.fire('plannerinvestigation',{siteId:selected.key,workflow:mode,inputRevision:revision,revision:proposalRevision});
       renderSafely(record, showEvidence);
@@ -644,6 +676,12 @@
           waterPlan:result.waterPlan,designHistory:result.designHistory ?? [],trafficPlan:result.trafficPlan,
           trafficDesignHistory:result.trafficDesignHistory ?? []});
       }
+      if(site===selected && workflow===mode && mode==='street' && (record.revision ?? 0)===revision &&
+        !result.analysisError && (result.concept || result.conceptGap)) {
+        map.fire('roadconceptresult',{projectId:saved.id,siteId:selected.key,workflow:mode,inputRevision:revision,revision:proposalRevision,
+          concept:result.concept ?? null,conceptGap:result.conceptGap,conceptHistory:result.conceptHistory ?? [],
+          conceptSavedAt:result.conceptSavedAt,savedAt:result.savedAt,follow:true});
+      }
     } catch (error) {
       if (activeAnalysis !== run) return;
       record.evidenceError = error.name === "AbortError" ? "Analysis canceled. Retrieved evidence is preserved." : error.message;
@@ -652,6 +690,8 @@
       activeAnalysis = null;
       record.evidencePending = false;
       record.stale = (record.revision ?? 0) !== revision || Boolean(record.evidenceError);
+      map.fire('planneranalysisend',{siteId:selected.key,workflow:mode,inputRevision:revision,revision:proposalRevision,
+        status:record.evidenceError?'failed':'completed'});
       if (site?.[workflow] === record) {
         $("run-site-analysis").disabled = Boolean(site.identityPending);
         $("cancel-site-analysis").hidden = true;
@@ -936,6 +976,9 @@
 
   function showWorkflow() {
     showProject();
+    $('planning-brief-help').textContent=workflow==='street'
+      ? 'Describe the road changes you want. The agent researches the site and draws a concept on this map; you can revise its features in the next brief.'
+      : 'Say what you want explored at this site. The agent gathers the evidence, then drafts a concept you can revise.';
     showWaterSettings();
     $("project-file-preview").hidden=true;
     $("water-tools").hidden = workflow !== "water";
@@ -994,6 +1037,7 @@
       fillOpacity: 1, interactive: false }).addTo(siteLayer);
     showWorkflow();
     map.fire("plannersite", { siteId: key, center, workflow, property, inputRevision: site[workflow].revision ?? 0 });
+    if(!restored)restoreRoadConcept(site,workflow,site[workflow].project?.value);
     setStatus("");
     $("site-card").scrollIntoView({ block: "start" });
 
@@ -1150,7 +1194,7 @@
     site[workflow].discovery = selected;
     site[workflow].brief = workflow === "water"
       ? "Use the selected discovery evidence to screen a rain garden. Map a draft where the site evidence supports it and explain what still needs verification."
-      : "Investigate this current surface-street slowdown and nearby source evidence. Explain estimated speed versus free flow and identify physical opportunities to investigate. Keep historical turning demand, recurring congestion and modeled emissions separate from this snapshot.";
+      : "Draw a researched road redesign on this map. Investigate this current surface-street slowdown and nearby source evidence, then place appropriate crossing, walking or cycling improvements while preserving access. Explain placement assumptions and estimated speed versus free flow. Keep historical turning demand, recurring congestion and modeled emissions separate from this snapshot.";
     inputsChanged(site[workflow]);
     $("planning-brief").value = site[workflow].brief;
     renderDiscoveryContext(selected);
@@ -1182,6 +1226,7 @@
       showWorkflow();
       refreshProjects();
       map.fire("plannersite", site ? { siteId: site.key, center: site.center, workflow, property:site.property, inputRevision: site[workflow].revision ?? 0 } : { workflow });
+      if(site)restoreRoadConcept(site,workflow,site[workflow].project?.value);
       setStatus(site ? "" : "Search for a property or select a location on the map.");
       if (site) $("site-card").scrollIntoView({ block: "start" });
     } else {

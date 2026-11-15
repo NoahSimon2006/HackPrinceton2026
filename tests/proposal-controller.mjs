@@ -292,6 +292,11 @@ assert.equal($('comparison-table').hidden,true);
 assert.match($('comparison-readiness').textContent,/Turning demand is required/);
 assert.equal($('proposal-review').hidden,true);
 console.log('PASS: traffic environmental/readiness separation, whole-evaluation history, stale restoration and actionable unavailable state');
+map.fire('roadconceptdisplay',{visible:true,concept:{revision:9}});
+assert.equal($('traffic-comparison').hidden,true,'a primary road concept carries its own performance-unavailable label');
+assert.equal($('proposal-result-message').hidden,true,'do not repeat an unrequested unavailable comparison beneath a valid concept');
+map.fire('plannerresult',{...firstUnavailable,revision:10,comparison:{...firstUnavailable.comparison,revision:10}});
+assert.equal($('proposal-result-message').hidden,true,'a later unavailable comparison does not override the preserved concept display');
 
 // A live continuation can replace facts before publishing any geometry. Detach
 // the retained design's links immediately, including retries with unchanged inputs.

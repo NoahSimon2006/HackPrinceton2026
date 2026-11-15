@@ -7,7 +7,7 @@ from decimal import Decimal
 from threading import RLock
 
 from agent_activity import Activity, RunCancelled, TransientSourceError
-from agent_context import fact_index, compact_evaluation
+from agent_context import fact_index, compact_evaluation, ROAD_GUIDANCE, road_guidance_facts
 from xai_runtime import invoke_model, classify_error
 from deepagents.backends.utils import create_file_data
 from langchain.tools import ToolRuntime
@@ -126,7 +126,8 @@ def review_schema(facts, attempted, required, recommendation_check=None, *, wate
 def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, fetch_property, fetch_hydrology,
                  *, lon, lat, scenario=None, activity=None, discovery=None, traffic_context=None,
                  analysis_identity=None, allow_generated_timing=False, ranking_policy=None, fetch_discovery=None,
-                 project=None, checkpointer=None, persist_artifact=None, stormwater_settings=None):
+                 project=None, checkpointer=None, persist_artifact=None, stormwater_settings=None,
+                 fetch_street_context=None):
     activity = activity or Activity()
     evidence = {"outlines": [], "detections": [], "search": [], "frontages": [], "unavailable": []}
     facts = {item["id"]: item for item in measure_markings(markings, scenario)}
@@ -151,6 +152,13 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     previous_proposal = previous_record.get('proposal') if previous_record else None
     previous_water_plan = (previous_record or {}).get('waterPlan') or {}
     previous_traffic = latest_evaluation(project) if workflow == 'street' else None
+    concept_requested = workflow == 'street' and fetch_street_context is not None and analysis_identity is not None
+    road_context, road_concept, concept_gap = None, None, None
+    concept_publication_error = None
+    concept_attempts = 0
+    previous_concept = previous_result.get('concept')
+    if not previous_concept and (project or {}).get('conceptHistory'):
+        previous_concept = project['conceptHistory'][-1].get('concept')
     traffic_plan = None
     nearby_properties = []
     draft_requested = workflow == "water" and analysis_identity is not None
@@ -162,9 +170,10 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     else:
         instructions += " Stormwater capture means temporary event storage. Do not infer infiltration, peak-flow reduction, flood protection or construction feasibility."
     lock = RLock()
-    source_locks = {name: RLock() for name in ("outlines", "detections", "search", "property", "hydrology", "traffic", "discovery")}
+    source_locks = {name: RLock() for name in ("outlines", "detections", "search", "property", "hydrology", "traffic", "discovery", "street_context", "design_guidance")}
     providers = {"outlines": "Vexcel parcel extraction", "detections": "Vexcel detection", "search": "Vexcel imagery search",
-                 "property": "CoStar local property kit", "hydrology": "LA County hydrology", "traffic": "Traffic input inventory", "discovery": "Source-backed neighborhood discovery"}
+                 "property": "CoStar local property kit", "hydrology": "LA County hydrology", "traffic": "Traffic input inventory", "discovery": "Source-backed neighborhood discovery",
+                 "street_context": "Mapped road geometry", "design_guidance": "FHWA design guidance"}
 
     def availability(name, message):
         return fact(f"{name}-status", f"{providers[name]} availability", message, "", source(providers[name]),
@@ -177,7 +186,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             activity.check()
             if name in cached:
                 return cached[name]
-            specialist = "domain-analysis" if name in ("hydrology", "traffic", "discovery") else "site-evidence"
+            specialist = "domain-analysis" if name in ("hydrology", "traffic", "discovery", "street_context", "design_guidance") else "site-evidence"
             activity.event(specialist, name, "started", f"Reading {providers[name]}.")
             try:
                 for attempt in range(2):
@@ -264,9 +273,78 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     def read_traffic_inputs() -> dict:
         """Read this selected site's verified historical turning counts and mapped approach dimensions; missing inputs stay unavailable."""
         result = collect("traffic", lambda: traffic.prepare(), lambda data: data, lambda _: None)
-        if traffic.ready:
+        if traffic.ready and not concept_requested:
             required.add("comparison")
         return result
+
+    def read_street_design_context() -> dict:
+        """Research this site's mapped road anchors independently of traffic counts. Returns anonymous geometry references and dimensions, never coordinates."""
+        nonlocal road_context, concept_gap
+        def measure(data):
+            model = data.get('model_context', {})
+            if model.get('status') != 'ready':
+                return [], [model.get('question') or model.get('reason') or data.get('message') or
+                            'Select a mapped road or mark the intended crossing so the overlay can be positioned.']
+            source_records = {item['source_hash']: item for item in data.get('sources', [])
+                              if isinstance(item, dict) and item.get('source_hash')}
+            local_anchors = {item['id']: item for item in data.get('anchors', [])
+                             if isinstance(item, dict) and item.get('id')}
+            # A context may combine user markings and independently sourced
+            # roads. Resolve provenance per anchor; the first source is not
+            # necessarily the source of a road dimension.
+            def anchor_source(identifier):
+                record = source_records.get(local_anchors.get(identifier, {}).get('source_hash'), {})
+                result = source(record.get('provider') or 'Mapped road geometry', record.get('url'),
+                                date=record.get('observed_at'), collection=record.get('source_hash'))
+                if record.get('retrieved_at'):
+                    result['retrieved_at'] = record['retrieved_at']
+                return result
+            items = [fact('road-context-status', 'Road design placement', 'Mapped anchors are available for a conceptual overlay.', '',
+                          source('Local road geometry inventory'), basis='reported', method='Local geometry-only site lookup; turning counts are not required.',
+                          note='Mapped dimensions and inferred road widths are screening inputs, not a field survey.')]
+            for anchor in model.get('anchors', []):
+                identifier = anchor['id']
+                width_basis = str(anchor.get('width_basis') or 'Mapped anchor; verify alignment and widths on site.')
+                marked = anchor.get('kind') == 'marked_crossing' or width_basis.lower().startswith('user-marked')
+                anchor_origin = source('Planner map marking') if marked else anchor_source(identifier)
+                for field, label in (('length_m', 'mapped length'), ('width_m', 'road width'), ('selection_offset_m', 'selection offset')):
+                    if isinstance(anchor.get(field), (int, float)):
+                        basis = 'user_provided' if marked else 'reported'
+                        item_origin, method = anchor_origin, 'Local dimension from the selected road anchor.'
+                        if field == 'width_m' and ('illustrative' in width_basis.lower() or 'assumed' in width_basis.lower()):
+                            basis = 'estimated'
+                        if field == 'width_m' and anchor.get('kind') == 'marked_crossing':
+                            label, basis = 'default proposed crossing-band thickness', 'estimated'
+                            item_origin = source('Local concept placement default')
+                            method = 'Conceptual default thickness; the planner marking specifies the crossing alignment, not its width.'
+                        items.append(fact(f'road-anchor-{identifier}-{field}', f'Anchor {identifier} {label}', anchor[field], 'm', item_origin,
+                            basis=basis, method=method, note=width_basis))
+            return items, list(model.get('limitations', []))
+        def store(data):
+            nonlocal road_context
+            road_context = data
+        result = collect('street_context', fetch_street_context, measure, store)
+        model = (road_context or {}).get('model_context', {})
+        if model.get('status') == 'ready':
+            required.add('concept')
+        else:
+            concept_gap = (model.get('question') or model.get('reason') or
+                next(iter(result.get('warnings', [])), None) or
+                'Select a mapped road or mark the intended crossing so the redesign can be positioned.')
+        # This curated inventory is the only spatial context exposed to the model.
+        safe = {key: model[key] for key in ('status', 'context_hash', 'anchors', 'placement', 'limitations', 'question', 'reason') if key in model}
+        result = {**result, 'design_context': safe}
+        cached['street_context'] = result
+        backend.put('/project/evidence/street-design-context.json', result['facts'])
+        return result
+
+    def read_street_design_guidance() -> dict:
+        """Research reviewed FHWA guidance for crossing, curb, refuge and road-space treatments. General guidance does not establish site suitability or numerical benefit."""
+        result = collect('design_guidance', road_guidance_facts, lambda items: (items, []),
+                         lambda _: evidence.update(designGuidance=[
+                             {'id': item['id'], 'provider': 'FHWA', 'url': item['url'], 'title': item['label']}
+                             for item in ROAD_GUIDANCE]))
+        return {**result, 'treatment_index': [{'fact_id': item['id'], 'kinds': item['kinds']} for item in ROAD_GUIDANCE]}
 
     def query_neighborhood_discovery() -> dict:
         """Inspect sourced signals within this site's bounded neighborhood. Current flow never supplies turning demand or emissions; terrain never verifies drains or flooding."""
@@ -275,6 +353,9 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     site_tools = [find_parcel_and_buildings, detect_site_features, read_costar_property, search_aerial_imagery]
     domain_tools = [read_rainfall_and_watershed] if workflow == "water" else [read_traffic_inputs]
     required = {"outlines", "detections", "property", "hydrology" if workflow == "water" else "traffic"}
+    if concept_requested:
+        domain_tools.extend([read_street_design_context, read_street_design_guidance])
+        required.update({'street_context', 'design_guidance'})
     if fetch_discovery is not None:
         domain_tools.append(query_neighborhood_discovery)
         required.add('discovery')
@@ -295,6 +376,12 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             context['previous_traffic_evaluation'] = {**prior, 'facts': fact_index([item for item in prior['facts'] if item['id'] != 'previous-traffic-model-assumptions'], include_source=False),
                 'full_evidence_artifact': '/project/history/previous-traffic-evaluation.json'}
             facts.update((item['id'], item) for item in prior['facts'])
+        if concept_requested:
+            context['deliverable'] = 'A proposed road/intersection layout over the existing map. Geometric placement is independent of traffic performance.'
+            if previous_concept:
+                from road_concept import concept_model_summary
+                context['previous_road_concept'] = concept_model_summary(previous_concept)
+                context['previous_road_concept']['usage'] = 'Use explicit component-ID changes to preserve unspecified design choices. Recompile against current geometry and constraints.'
     user_instructions = (project or {}).get("instructions", [])
     context["user_instructions"] = user_instructions if len(user_instructions) <= 5 else user_instructions[:1] + user_instructions[-4:]
     context["full_constraints_reference"] = "/project/constraints.json"
@@ -331,7 +418,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
              "/project/plan.md": create_file_data("Awaiting the lead's investigation plan.")}
     # Specialists investigate current inputs; prior design history belongs to the lead.
     source_context = {key: value for key, value in context.items()
-                      if key not in ('previous_traffic_evaluation', 'previous_stormwater_concept')}
+                      if key not in ('previous_traffic_evaluation', 'previous_stormwater_concept', 'previous_road_concept')}
     files['/project/source-brief.json'] = create_file_data(json.dumps(source_context))
     if workflow == 'street' and previous_traffic:
         files['/project/history/previous-traffic-evaluation.json'] = create_file_data(json.dumps(prior))
@@ -360,6 +447,14 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             raise ValueError("Read the proposal-publication skill before publishing.")
         if "/project/plan.md" not in backend.saved:
             raise ValueError("Write a short investigation plan to /project/plan.md before publishing.")
+        if concept_requested:
+            if '/skills/traffic-concept/SKILL.md' not in skill_reads['lead']:
+                raise ValueError('Read the traffic-concept skill before publishing the map redesign.')
+            if road_concept:
+                conceptual = [item for item in recommendations if any(identifier.startswith('road-concept-') for identifier in item.fact_ids)]
+                recommendations = [item for item in recommendations if item not in conceptual]
+            elif recommendations and not (traffic.comparison and traffic.comparison.get('ranking', {}).get('recommended')):
+                raise ValueError('No road concept was placed. Leave recommendations empty and explain the placement gap in questions.')
         if draft_gap and recommendations:
             raise ValueError("No rain garden was placed. Leave recommendations empty and use the one tool question.")
         if not traffic or not traffic.comparison:
@@ -372,10 +467,12 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
 
     def save_report(name, report, *, partial=False):
         with lock:
-            needed = {"outlines", "detections", "property", "search"} if name == "site-evidence" else {"hydrology", "traffic", "discovery"}
+            needed = {"outlines", "detections", "property", "search"} if name == "site-evidence" else {"hydrology", "traffic", "discovery", "street_context", "design_guidance"}
             scoped_facts = [f for key, value in cached.items() if key in needed for f in value["facts"]]
             payload = {"run_id": activity.id, "status": "partial" if partial else "complete", "summary": report,
                        "facts": fact_index(scoped_facts), "full_evidence_artifact": f"/project/evidence/{name}.json", "unresolved_sources": [key for key in needed if statuses.get(key) == "unavailable"]}
+            if name == 'domain-analysis' and concept_requested:
+                payload['design_context'] = cached.get('street_context', {}).get('design_context', {})
             summaries[name] = payload
         backend.put(f"/project/reports/{name}.json", payload)
         backend.put(f"/project/evidence/{name}.json", scoped_facts)
@@ -474,13 +571,17 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             phase_tools = set() if review_repair_pending else set(allowed)
             if name == "lead":
                 if not {"site-evidence", "domain-analysis"} <= summaries.keys():
-                    phase_tools -= {"evaluate_designs", "draft_rain_garden"}
+                    phase_tools -= {"evaluate_designs", "draft_rain_garden", "create_or_revise_road_concept"}
                 else:
                     phase_tools.discard("task")
                     if not (traffic and traffic.ready and not traffic.evaluated):
                         phase_tools.discard("evaluate_designs")
+                    if concept_requested and not road_concept and (road_context or {}).get('model_context', {}).get('status') == 'ready':
+                        phase_tools.discard('evaluate_designs')
                     if "draft" in attempted:
                         phase_tools.discard("draft_rain_garden")
+                    if road_concept or concept_attempts >= 3 or (road_context or {}).get('model_context', {}).get('status') != 'ready':
+                        phase_tools.discard('create_or_revise_road_concept')
             model_calls += 1
             activity.event(name, "model-request", "started", f"Requesting the scoped agent response, call {model_calls} of 12.")
             try:
@@ -528,6 +629,8 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         activity.check()
         if not {"site-evidence", "domain-analysis"} <= summaries.keys() or not {"outlines", "detections", "property", "traffic"} <= attempted:
             payload = {"status": "investigation_required", "message": "Read both saved specialist reports before evaluating designs."}
+        elif concept_requested and not road_concept and (road_context or {}).get('model_context', {}).get('status') == 'ready':
+            payload = {'status': 'concept_required', 'message': 'Create the primary map concept before an optional separate traffic comparison.'}
         else:
             try:
                 if (layouts is None) == (changes is None):
@@ -603,16 +706,134 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             backend.put(f"/project/designs/history/stormwater-{analysis_identity['revision']}.json", payload)
         return payload
 
+    def create_or_revise_road_concept(components: list[dict] | None = None, changes: list[dict] | None = None,
+                                     evidence_fact_ids: list[str] | None = None) -> dict:
+        """Create the proposed 2D road layout after site and guidance research; traffic counts are not required.
+
+        First design: components with stable id, kind, anchor_id and optional side
+        left/right/center, offset_m, length_m, width_m. Kinds: curb_extension,
+        crossing, pedestrian_island, bike_lane, pedestrian_space, lane_marking.
+        Use only returned anonymous anchor IDs and their supported kinds/placement
+        descriptions. Lengths run along road anchors; widths run across them.
+        A road-anchor crossing's length is its band thickness; its width spans the
+        road. A marked-crossing anchor already spans the road. Defaults are returned
+        by the context tool; dimensions are proposed choices, never measurements.
+        Revisions: changes [{id,op: update/remove/add,...changed fields}] against the
+        previous_road_concept; omitted components/fields are preserved. Supply
+        components OR changes. Cite returned site facts and guidance using
+        evidence_fact_ids. If mapped alignment changed and realignment is requested,
+        explicitly include anchor_id in the affected component's update, even when
+        retaining the same ID. Geometry, constraints and source records stay local.
+        """
+        nonlocal road_concept, concept_gap, concept_attempts, concept_publication_error
+        from road_concept import build_road_concept, concept_model_summary, ConceptPlacementError
+        activity.check()
+        if not concept_requested or not {'site-evidence', 'domain-analysis'} <= summaries.keys():
+            return {'status': 'investigation_required', 'message': 'Finish both specialist investigations before designing the overlay.'}
+        if not {f'/project/reports/{name}.json' for name in ('site-evidence', 'domain-analysis')} <= artifact_reads['lead']:
+            return {'status': 'investigation_required', 'message': 'Read both current saved specialist reports before creating the layout.'}
+        if '/skills/traffic-concept/SKILL.md' not in skill_reads['lead']:
+            return {'status': 'investigation_required', 'message': 'Read /skills/traffic-concept/SKILL.md before drafting.'}
+        if road_concept:
+            return {'status': 'already_created', 'concept': concept_model_summary(road_concept)}
+        if concept_attempts >= 3:
+            return {'status': 'needs_placement', 'question': concept_gap}
+        concept_attempts += 1
+        try:
+            if (road_context or {}).get('model_context', {}).get('status') != 'ready':
+                raise ConceptPlacementError('Select a mapped road or mark the intended crossing before placing the design.')
+            refs = set(evidence_fact_ids or [])
+            if refs - facts.keys():
+                raise ConceptPlacementError('Use only fact IDs returned by the current source tools.')
+            if not any(key.startswith('road-guidance-') for key in refs) or not any(
+                    key.startswith('road-anchor-') or key == 'road-context-status' for key in refs):
+                raise ConceptPlacementError('Cite at least one mapped road fact and one relevant road-guidance fact in evidence_fact_ids.')
+            if previous_concept and components is not None:
+                raise ConceptPlacementError('Revise the saved concept using explicit component-ID changes so unspecified choices are preserved.')
+            compiler_evidence = {**evidence,
+                'outlines': evidence['outlines'] if statuses.get('outlines') in ('ready', 'empty') else None,
+                'designGuidance': [item for item in evidence.get('designGuidance', []) if item['id'] in refs]}
+            compiled = build_road_concept(road_context, components, changes=changes, previous=previous_concept,
+                identity=analysis_identity, markings=markings, evidence=compiler_evidence)
+            guidance_kinds = {kind for item in ROAD_GUIDANCE if item['id'] in refs for kind in item['kinds']}
+            chosen_kinds = {item['kind'] for item in compiled['components']}
+            missing_guidance = chosen_kinds - guidance_kinds
+            if missing_guidance:
+                raise ConceptPlacementError('Cite relevant reviewed guidance for these treatments: ' + ', '.join(sorted(missing_guidance)) + '.')
+            relevant_refs = {item['id'] for item in ROAD_GUIDANCE if chosen_kinds.intersection(item['kinds'])}
+            relevant_guidance = [item for item in compiler_evidence['designGuidance'] if item['id'] in relevant_refs]
+            if relevant_guidance != compiler_evidence['designGuidance']:
+                # Research may consider treatments that were not selected. Keep
+                # the saved design's source list specific to its actual parts.
+                compiler_evidence['designGuidance'] = relevant_guidance
+                compiled = build_road_concept(road_context, components, changes=changes, previous=previous_concept,
+                    identity=analysis_identity, markings=markings, evidence=compiler_evidence)
+            activity.check()
+        except (ConceptPlacementError, ValueError, TypeError) as failure:
+            concept_gap = str(failure)[:600]
+            if concept_attempts >= 3:
+                attempted.add('concept')
+            activity.event('lead', 'road-concept', 'retry' if concept_attempts < 3 else 'empty',
+                           'Checking proposed road geometry against the available anchors and keep-clear constraints.')
+            return {'status': 'invalid_design' if concept_attempts < 3 else 'needs_placement',
+                    'message': concept_gap, 'attempts_remaining': 3 - concept_attempts}
+        summary = concept_model_summary(compiled)
+        origin = source('Local proposed road geometry')
+        items = [fact('road-concept-status', 'Proposed map layout',
+                      'A conceptual road redesign has been placed on the selected map. Performance remains unassessed.', '', origin,
+                      basis='modeled', method='Validated local road geometry compiled from researched design choices.',
+                      note='This is a proposed physical layout, not an evaluated traffic recommendation.')]
+        for component in compiled.get('components', []):
+            identifier = component['id']
+            description = component['kind'].replace('_', ' ')
+            items.append(fact(f'road-concept-{identifier}', f'Proposed {description}',
+                f"{description.capitalize()} on anchor {component['anchor_id']}.", '', origin,
+                basis='modeled', method='Agent-selected treatment compiled against the mapped anchor and current constraints.',
+                note='Proposed design choice; no site-specific performance improvement has been calculated.'))
+            for key, label in (('length_m', 'length'), ('width_m', 'width'), ('offset_m', 'offset')):
+                if isinstance(component.get(key), (int, float)):
+                    items.append(fact(f'road-concept-{identifier}-{key}', f'Proposed {description} {label}', component[key], 'm',
+                                      origin, basis='modeled', method='Authored design parameter used by the local geometry compiler.'))
+        payload = {'status': 'concept_ready', 'concept': summary, 'facts': items,
+                   'research_fact_ids': sorted(refs), 'performance': 'Unassessed; the overlay does not establish emissions, delay or safety benefits.'}
+        # The agent can read the scalar summary. Raw canonical geometry goes only
+        # to the application archive and response, never into its virtual files.
+        try:
+            if persist_artifact:
+                persist_artifact('/project/designs/road-concept.json', json.dumps(compiled))
+            backend.put('/project/designs/road-concept-summary.json', payload)
+            activity.check()
+        except RunCancelled:
+            raise
+        except Exception as failure:
+            logging.getLogger(__name__).warning('Road concept publication failed (%s)', type(failure).__name__)
+            concept_gap = concept_publication_error = 'The proposed road layout could not be saved. Retry analysis; earlier saved designs remain unchanged.'
+            concept_attempts = 3
+            attempted.add('concept')
+            statuses['concept'] = 'publication_failed'
+            activity.event('lead', 'road-concept', 'failed', concept_publication_error)
+            return {'status': 'publication_failed', 'message': concept_publication_error}
+        # Publish successful tool state only after archive and summary writes.
+        # A write failure must not return geometry while telling the model it failed.
+        road_concept, concept_gap = compiled, None
+        attempted.add('concept')
+        statuses['concept'] = 'ready'
+        facts.update((item['id'], item) for item in items)
+        activity.event('lead', 'road-concept', 'completed', 'Placed the proposed road layout on the selected map.', facts=items)
+        return payload
+
     shared = "Tool results contain" + instructions.split("Tool results contain", 1)[1]
     subagents = []
     for name, tools, needed in [
         ("site-evidence", site_tools, {"outlines", "detections", "property"}),
-        ("domain-analysis", domain_tools, required - {"outlines", "detections", "property", "draft", "comparison"})]:
+        ("domain-analysis", domain_tools, required - {"outlines", "detections", "property", "draft", "comparison", "concept"})]:
         prompt = shared + f"\nYou are {name}. Read /project/source-brief.json and the relevant skill first. Prior design history is for the lead; focus on current source inputs. Use your scoped source tools to collect the mandatory evidence. Return at most three concise cited findings and one necessary question within your scope; avoid restating every available measurement; the application saves /project/reports/{name}.json. Other specialists handle other sources. Never claim their tool results. Save optional notes only in /project/notes/{name}/."
         prompt += " Finish with the SiteReview structured-output tool on EVERY run, including continuations. A prior saved report does not complete this run; plain prose or an empty final response does not save your current findings."
         prompt += " Mandatory source tools: " + ", ".join(tool.__name__ for tool in (tools[:3] if name == "site-evidence" else tools)) + "."
         if name == "domain-analysis" and traffic:
-            prompt += " Inventory traffic INPUTS only. Return no recommendations or design dimensions; the lead evaluates layouts."
+            prompt += " Inventory traffic inputs and geometry readiness. Return no proposed dimensions or benefits; the lead creates the layout."
+            if concept_requested:
+                prompt += " Read road design context and FHWA design guidance even if turning counts are unavailable. Explain which returned site conditions make a treatment worth investigating. Missing traffic counts do not mean missing design geometry."
         def own_artifacts(state, specialist=name):
             # Native compiled subagents otherwise return their entire inherited
             # file map. On continuation, a parallel sibling's old report could
@@ -630,7 +851,10 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         subagents.append({"name": name, "description": "Read Vexcel and CoStar site context and save a cited report." if name == "site-evidence" else "Investigate domain inputs and neighborhood signals; save a cited report.",
                           "runnable": build_agent(name, tools, prompt, needed) | RunnableLambda(own_artifacts)})
     instruction = shared + "\nYou are the lead. Read the proposal-publication skill and canonical brief/constraints. Write a short /project/plan.md. Delegate site-evidence and domain-analysis using TWO native task calls in the SAME response so their investigations overlap. Each assignment specifies its question, /project/source-brief.json, evidence references, allowed tools/scope, and report path. Keep prior design history in the lead context, not specialist task prompts. Read BOTH saved specialist reports before the final review. Reports include exact fact indexes. Read a full evidence artifact only for a specific unresolved source detail; do not reread whole evidence inventories by default. Do not attempt specialist source tools yourself. Preserve the selected site and user constraints. Environmental impact has priority, then feasibility and disruption; data readiness is separate. Use supported source alternatives on gaps and preserve partial work. Do not repeat failed calls unchanged. Never use general-purpose delegation, shell or external filesystem access."
-    if traffic:
+    if traffic and concept_requested:
+        instruction += " Your PRIMARY deliverable is a proposed road/intersection layout over the existing map. Read the traffic-concept skill and both saved specialist reports. Use the reports' design_context anonymous anchors and the reviewed FHWA guidance to choose concrete treatments matching the user's goal. When anchors are ready you MUST call create_or_revise_road_concept before the final review. Missing traffic counts do not block this tool. Create one coherent layout using complementary changes where supported; do not draw a generic box or change sites. Proposed dimensions are choices you may pass to the compiler, and the returned facts are the only dimensions you may state in prose. Cite current mapped road and guidance facts in evidence_fact_ids. For continuation use explicit changes against previous_road_concept object IDs; preserve unspecified choices and all current markings. If geometry validation fails, correct the specific constraint in at most two retries; if no spatial basis exists ask the returned placement question. Explain the visible physical changes and their cited rationale. A conceptual treatment is not a validated safety, emissions or delay benefit."
+        instruction += " Traffic simulation is optional and separate from the map concept. Only call evaluate_designs if the user explicitly asks for a quantitative traffic comparison and the inputs are ready; create the map concept first. That tool supports only its bounded lane_reallocation layouts. Never attach results from a different evaluated layout to this concept. Do not claim bicycle or pedestrian performance is simulated. If no evaluation is requested, finish with the useful overlay and mark performance unassessed."
+    elif traffic:
         instruction += " When traffic inputs are ready, you MUST call evaluate_designs before the final review. Supply two or three distinct layouts in one call: use generic names, kind lane_reallocation, a mapped approach nb/sb/eb/wb, lanes_removed 1 or 2 while leaving at least one traffic lane, length_m between 20 and 200 within mapped approach length, and new_use curb_extension, bike_lane or pedestrian_space. Distinct alternatives must change different approaches, lane counts, or lengths by at least 20 m; changing use labels alone is not a different traffic test. Use sponsor facts and planner constraints to choose plausible options. Design dimensions are proposed choices, not observed measurements. For a saved revision, read previous_traffic_evaluation in the brief and prefer the changes argument to evaluate_designs: name the prior alternative and supply only revised parameters. Preserve omitted parameters and alternatives; use prior rejection reasons and the new user request to choose a bounded change. Current keep-clear and crossing markings are hard constraints. Only one evaluation is permitted per request; never rerun to seek a favorable random outcome. After evaluation recommend only the selected eligible alternative, citing its verdict and relevant metric facts. If no alternative is recommended, return no recommendations and explain why in findings; place missing-data next steps in questions. If traffic inputs are unavailable, report that gap and do not invent a design or impacts. Do not imply bicycle or pedestrian performance is simulated."
     elif draft_requested:
         instruction += " You MUST call draft_rain_garden after investigation. Use the previous concept metrics/settings to interpret revisions: propose a changed target_area_m2 or layout when asked for a smaller/larger/longer concept; use placement away_from_previous when asked for a different location. Explicit planner controls take priority. The tool internally compares bounded alternatives and returns the selected geometry with matching calculations. If asked to keep a driveway or loading entrance clear, set protect_driveway true. Never infer access locations, ownership or drainage connections. The tool may place a provisional nearby host concept while preserving the selected opportunity identity; explain that host assumption if returned. Cite the sponsor decision facts that changed siting, not just availability. Capture requires the explicit marked-connected what-if and coefficient in planner controls; otherwise capture stays unknown while a useful spatial concept can still be shown. Explain the selected physical change and the practical next check in concise sentences. Do not repeat every limitation. If placement is unavailable, ask the tool's one specific question and give no unsupported placement recommendation."
@@ -639,6 +863,8 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     lead_tools = []
     if traffic:
         lead_tools.append(evaluate_designs)
+        if concept_requested:
+            lead_tools.append(create_or_revise_road_concept)
     elif draft_requested:
         lead_tools.append(draft_rain_garden)
     config = {"recursion_limit":100, "max_concurrency":2}
@@ -667,6 +893,8 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         report = structured
         if draft_gap:
             report["questions"] = [draft_gap]
+        if concept_requested and concept_gap and not road_concept:
+            report['questions'] = [concept_gap]
         # Retain only curated virtual artifacts; never return graph messages or reasoning.
         files.update(result.get("files", {}))
         files["/project/review.json"] = create_file_data(json.dumps(report))
@@ -678,6 +906,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     except RunCancelled:
         activity.cancelled.set()
         draft, water_plan = None, None
+        road_concept = None
         water_plan_local['alternatives'] = {}
         error = "Analysis canceled or time budget reached. Retrieved measurements are preserved."
     except Exception as failure:
@@ -692,7 +921,12 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         }.get(failure_category['category'], 'The agent could not finish a source-validated review. Available measurements are shown below; retry the analysis.')
         try:
             activity.check()
-            if traffic and traffic.comparison and traffic.comparison.get('status') == 'completed':
+            if road_concept:
+                error = None
+                synthesis_warning = 'The narrative review was incomplete. The validated proposed road layout remains available on the map; traffic performance stays separate.'
+                report = {'findings': [], 'recommendations': [], 'questions': []}
+                activity.event('lead', 'review', 'partial', synthesis_warning)
+            elif traffic and traffic.comparison and traffic.comparison.get('status') == 'completed':
                 error = None
                 synthesis_warning = 'The narrative review was incomplete. The validated traffic evaluation, tested footprints and rejection reasons remain available.'
                 report = {'findings': [], 'recommendations': [], 'questions': []}
@@ -707,6 +941,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         except RunCancelled:
             activity.cancelled.set()
             draft, water_plan = None, None
+            road_concept = None
             water_plan_local['alternatives'] = {}
             error = 'Analysis canceled or time budget reached. Retrieved measurements are preserved.'
     files.update(backend.saved)
@@ -726,6 +961,7 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
     if traffic:
         if activity.cancelled.is_set():
             traffic.proposal, traffic.comparison, traffic.alternatives = None, None, {}
+            road_concept = None
         facts.update((item["id"], item) for item in traffic.facts)
         if traffic.comparison is None:
             message = ("The agent did not complete a validated comparison. Historical counts and retrieved site evidence are preserved."
@@ -735,6 +971,8 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
         if not activity.cancelled.is_set():
             traffic_plan = traffic.plan()
             traffic_plan['revisionSummary'] = revision_summary(traffic.comparison, previous_traffic) if traffic.comparison.get('status') == 'completed' else 'No new evaluated design has been published.'
+    if concept_publication_error and not activity.cancelled.is_set():
+        error = concept_publication_error
     return {"runId":activity.id, "modelUsage": getattr(activity, 'model_usage', {}),
             "modelDiagnostics": getattr(activity, 'model_diagnostics', []), "report":report, "analysisError":error, 'synthesisWarning': synthesis_warning, "facts":list(facts.values()),
             "sourceWarnings":list(dict.fromkeys(warnings)), "sourceStatus":statuses,
@@ -744,6 +982,8 @@ def analyze_site(key, model_name, question, workflow, markings, fetch_imagery, f
             "alternatives": traffic.alternatives if traffic else water_plan_local["alternatives"], "draftQuestion": draft_gap,
             "waterPlan": water_plan, "designHistory": (project or {}).get("designHistory", []),
             "trafficPlan": traffic_plan, "trafficDesignHistory": (project or {}).get('trafficDesignHistory', []),
+            "concept": road_concept, "conceptGap": concept_gap if concept_requested and not road_concept else None,
+            "conceptHistory": (project or {}).get('conceptHistory', []),
             "virtualFiles":sorted(path for path in files if path.startswith("/project/")),
             "specialists":{name:bool(value.get("summary")) for name,value in summaries.items()},
             "projectId":project["id"] if project else None,

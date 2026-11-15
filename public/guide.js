@@ -11,12 +11,14 @@
   const tabs = ['assessment', 'design', 'evidence', 'project'];
   let step = 'focus', detail = null, method = 'scout', tab = 'assessment';
   let acted = false, lastSite = null, expectSiteUntil = 0, pending = null;
+  let followingConcept = false;
+  let preferSavedConcept = false, evidenceView = false;
 
   const shown = id => !$(id).hidden;
   const hasSite = () => shown('site-card');
   const running = () => shown('cancel-site-analysis');
   const hasAssessment = () => shown('agent-assessment') || $('activity-list').children.length > 0;
-  const hasDesign = () => ['proposal-review', 'water-design-review', 'traffic-comparison', 'proposal-result-message'].some(shown);
+  const hasDesign = () => ['road-concept-review', 'proposal-review', 'water-design-review', 'traffic-comparison', 'proposal-result-message'].some(shown);
   // The saved-project route is offered only when there is a project to open.
   const hasSaved = () => $('saved-projects').children.length > 1;
   const water = () => $('workspace-water').getAttribute('aria-pressed') === 'true';
@@ -71,6 +73,11 @@
     });
     for (const name of methods) $(`guide-method-${name}`).setAttribute('aria-pressed', String(name === method));
     for (const name of tabs) $(`guide-tab-${name}`).setAttribute('aria-pressed', String(name === tab));
+    const designState=shown('road-concept-review')?$('road-concept-review').getAttribute('data-state'):design?'Results available':'';
+    $('guide-design-status').hidden=!designState;
+    $('guide-design-status').textContent=designState || '';
+    const showingEvidence=view==='results' && tab==='evidence';
+    if(showingEvidence!==evidenceView){evidenceView=showingEvidence;map.fire('plannerevidenceview',{visible:evidenceView});}
     $('guide-map').setAttribute('aria-pressed', String(detail === 'map'));
     $('guide-method-saved').hidden = !hasSaved();
     $('guide-resume').hidden = !site;
@@ -97,6 +104,8 @@
     if (focus) $(heading(detail ?? step)).focus({preventScroll:true});
   }
   function openDetail(name) {
+    followingConcept=false;
+    preferSavedConcept=false;
     show(details[name] ?? step, {focus:true, into:name});
   }
   function closeDetail() {
@@ -125,9 +134,9 @@
     render();
   }
 
-  for (const name of steps) $(`guide-step-${name}`).addEventListener('click', () => show(name, {focus:true}));
+  for (const name of steps) $(`guide-step-${name}`).addEventListener('click', () => { followingConcept=false; preferSavedConcept=false; show(name, {focus:true}); });
   for (const name of methods) $(`guide-method-${name}`).addEventListener('click', () => { method = name; remember(); render(); });
-  for (const name of tabs) $(`guide-tab-${name}`).addEventListener('click', () => { tab = name; remember(); render(); });
+  for (const name of tabs) $(`guide-tab-${name}`).addEventListener('click', () => { followingConcept=false; preferSavedConcept=false; tab = name; remember(); render(); });
   for (const name of ['settings', 'rain', 'markings']) $(`guide-open-${name}`).addEventListener('click', () => openDetail(name));
   $('guide-map').addEventListener('click', () => detail === 'map' ? closeDetail() : openDetail('map'));
   $('guide-back').addEventListener('click', () => show(steps[Math.max(0, steps.indexOf(step) - 1)], {focus:true}));
@@ -143,27 +152,40 @@
   // A new site moves the assistant to the site check. A project restored while
   // the page loads is not the user's move, so it only offers "Resume".
   map.on('plannersite', event => {
+    followingConcept=false;
     const id = event.siteId ?? null, changed = Boolean(id) && id !== lastSite;
     if (id) lastSite = id;
     if (id && acted && (changed || Date.now() < expectSiteUntil)) { expectSiteUntil = 0; show('site'); }
     else sync();
   });
   // Reopening the site already selected publishes no change, yet is still a request to continue.
-  const expectSite = () => { expectSiteUntil = Date.now() + 20000; };
+  const expectSite = event => { expectSiteUntil = Date.now() + 20000; preferSavedConcept=Boolean(event?.project); };
   map.on('scoutselect', expectSite);
-  $('open-project').addEventListener('click', expectSite);
+  $('open-project').addEventListener('click',()=>expectSite({project:true}));
   // Results belong to one focus. After switching, return to the brief unless
   // this focus already has results for the site.
   map.on('plannerworkspace', () => {
+    followingConcept=false;
     if (step === 'results' && !running() && !hasAssessment() && !hasDesign()) { step = 'brief'; detail = null; remember(); }
     sync();
+  });
+  map.on('plannerinvestigation', event => {
+    followingConcept=event.workflow==='street' && !detail && (step==='brief' || step==='results' && tab==='assessment');
+  });
+  map.on('roadconceptstate', sync);
+  map.on('roadconceptready', event => {
+    if(event.restored && event.available && preferSavedConcept || !event.restored && event.follow && followingConcept && step==='results' && !detail) {
+      tab='design';remember();render();
+    }
+    preferSavedConcept=false;
+    followingConcept=false;
   });
 
   // Controllers "open" the evidence section before scrolling to a source. That
   // section is a results tab here, so opening it shows the tab first.
   Object.defineProperty($('site-tools'), 'open', {configurable:true,
     get: () => step === 'results' && tab === 'evidence' && !detail,
-    set(value) { if (value) { tab = 'evidence'; show('results'); } }});
+    set(value) { if (value) { followingConcept=false; preferSavedConcept=false; tab = 'evidence'; show('results'); } }});
 
   document.addEventListener('click', event => {
     // A numbered map marker scrolls to its researched location; show that list first.
@@ -174,7 +196,7 @@
   if (typeof MutationObserver === 'function') {
     const observer = new MutationObserver(sync);
     for (const id of ['site-card', 'site-name', 'cancel-site-analysis', 'run-site-analysis', 'agent-assessment', 'activity-list',
-      'proposal-review', 'water-design-review', 'traffic-comparison', 'proposal-result-message',
+      'road-concept-review', 'proposal-review', 'water-design-review', 'traffic-comparison', 'proposal-result-message',
       'scout-cancel', 'scout-results', 'planner-status', 'shape-list', 'saved-projects'])
       observer.observe($(id), {attributes:true, attributeFilter:['hidden', 'disabled', 'aria-pressed'], childList:true});
   }

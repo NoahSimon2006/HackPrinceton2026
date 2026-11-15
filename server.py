@@ -39,12 +39,30 @@ STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
           "/demo-scene-renderer.js": "demo-scene-renderer.js", "/demo-math.js": "demo-math.js",
           "/discovery.js": "discovery.js", "/analysis-stream.js": "analysis-stream.js", "/planner.js": "planner.js", "/proposal.js": "proposal.js",
           "/site-view.js": "site-view.js", "/projects.js": "projects.js", "/scouting.js": "scouting.js",
+          "/road-concept.js": "road-concept.js",
           "/concept-scene.js": "concept-scene.js", "/concept-scene-renderer.js": "concept-scene-renderer.js",
           "/vendor/three.module.js": "vendor/three.module.js", "/vendor/three.core.js": "vendor/three.core.js",
           "/vendor/OrbitControls.js": "vendor/OrbitControls.js", "/vendor/three.LICENSE": "vendor/three.LICENSE",
           "/vector-zoom.js": "vector-zoom.js", "/guide.js": "guide.js",
           "/styles.css": "styles.css", "/vendor/leaflet.js": "vendor/leaflet.js",
           "/vendor/leaflet.css": "vendor/leaflet.css"}
+
+
+def cancel_site_analysis(run_id):
+    """Accept cancellation only before the run's final publication wins.
+
+    The per-run lock keeps a large concept validation from blocking cancellation
+    of unrelated analyses. Never hold the global registry lock while waiting.
+    """
+    with ANALYSIS_LOCK:
+        active = ACTIVE_ANALYSES.get(run_id)
+    if active is None:
+        return False
+    with getattr(active, 'publication_lock', None) or nullcontext():
+        if getattr(active, 'publication_finished', False):
+            return False
+        active.cancelled.set()
+        return True
 
 
 def load_env():
@@ -399,10 +417,7 @@ class Handler(BaseHTTPRequestHandler):
                 run_id = data.get("runId")
                 if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
                     raise ValueError("Invalid analysis reference.")
-                with ANALYSIS_LOCK:
-                    active = ACTIVE_ANALYSES.get(run_id)
-                    if active: active.cancelled.set()
-                self.send_json(202, {"canceled": bool(active)})
+                self.send_json(202, {"canceled": cancel_site_analysis(run_id)})
                 return
             lon, lat = site_coordinates({"lat": [data["lat"]], "lon": [data["lon"]]})
             workflow = data["workflow"]
@@ -502,6 +517,8 @@ class Handler(BaseHTTPRequestHandler):
         activity = Activity(emit, seconds=420 if traffic else 240,
                             current=(lambda: project_store().is_current(project["id"], activity.id)) if project else None)
         activity.project_id = project["id"] if project else None
+        activity.publication_lock = Lock()
+        activity.publication_finished = False
         with ANALYSIS_LOCK:
             if project:
                 try:
@@ -523,6 +540,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.close_connection = True
             with project_store().checkpointer() if project else nullcontext() as saver:
+                from street_context import prepare_street_context
                 result = analyze_site(
                     key, os.getenv("GROK_MODEL", "grok-4.7"), question, workflow, markings,
                     lambda group: site_outlines(lon, lat, workflow) if group == "outlines" else imagery_evidence(vexcel_request, LAYERS, lon, lat, workflow, group),
@@ -534,15 +552,24 @@ class Handler(BaseHTTPRequestHandler):
                     project=project, checkpointer=saver,
                     persist_artifact=(lambda path, content: project_store().artifact(project["id"], path, content, activity.id)) if project else None,
                     stormwater_settings=water_settings,
+                    fetch_street_context=(lambda: prepare_street_context(lon, lat, markings, activity=activity)) if workflow == 'street' else None,
                 )
-            if activity.cancelled.is_set():
-                result.update(proposal=None, comparison=None, alternatives={}, report=None, waterPlan=None, trafficPlan=None)
-            if project:
-                status = "canceled" if activity.cancelled.is_set() else "failed" if result.get("analysisError") else "needs_input" if result.get("draftQuestion") else "ready"
-                if not project_store().finish(project["id"], activity.id, result, status):
-                    result.update(proposal=None, comparison=None, alternatives={}, report=None, waterPlan=None, trafficPlan=None,
-                                  analysisError="This run belongs to earlier inputs. Continue the latest saved project.")
-                result["projectVersion"] = project["version"]
+            with activity.publication_lock:
+                # A cancel accepted before this lock clears the result. A later
+                # request waits and reports that publication already finished.
+                if activity.cancelled.is_set():
+                    result.update(proposal=None, comparison=None, alternatives={}, report=None, waterPlan=None, trafficPlan=None, concept=None, conceptGap=None)
+                if project:
+                    status = "canceled" if activity.cancelled.is_set() else "failed" if result.get("analysisError") else "needs_input" if result.get("draftQuestion") or result.get('conceptGap') and not result.get('concept') else "ready"
+                    if not project_store().finish(project["id"], activity.id, result, status):
+                        result.update(proposal=None, comparison=None, alternatives={}, report=None, waterPlan=None, trafficPlan=None, concept=None, conceptGap=None,
+                                      analysisError="This run belongs to earlier inputs. Continue the latest saved project.")
+                    elif result.get('concept'):
+                        saved_project = project_store().get(project['id'])
+                        result['conceptSavedAt'] = saved_project['result'].get('conceptSavedAt')
+                        result['conceptHistory'] = saved_project.get('conceptHistory', [])
+                    result["projectVersion"] = project["version"]
+                activity.publication_finished = True
             if streaming:
                 write_event({"type":"result", "run_id":activity.id, "result":result})
             else:
@@ -559,9 +586,11 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_json(503, {"error":"The planning agent could not finish this request."})
         finally:
-            if project and project_store().is_current(project["id"], activity.id):
-                project_store().finish(project["id"], activity.id, None,
-                                       "canceled" if activity.cancelled.is_set() else "failed")
+            with activity.publication_lock:
+                if project and project_store().is_current(project["id"], activity.id):
+                    project_store().finish(project["id"], activity.id, None,
+                                           "canceled" if activity.cancelled.is_set() else "failed")
+                activity.publication_finished = True
             with ANALYSIS_LOCK:
                 ACTIVE_ANALYSES.pop(activity.id, None)
             ANALYSIS_SLOTS.release()

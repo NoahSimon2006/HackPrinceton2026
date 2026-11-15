@@ -251,7 +251,30 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .switch button { padding: 7px 4px; border: 0; border-radius: 7px; background: transparent; font-size: 13px; color: var(--ink-2); }
 .switch button:hover:not(:disabled) { background: #fff7; }
 .switch button[aria-pressed="true"] { background: var(--sheet); color: var(--ink); box-shadow: 0 1px 2px #0003; }
-.assistant[data-design="true"] #guide-tab-design::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--cone); vertical-align: middle; }
+.guide-design-status { display: block; margin-top: 3px; font-size: 9px; line-height: 1.2; font-weight: 600; color: var(--guide); }
+.guide-design-status[hidden] { display: none; }
+
+/* Research-backed road concepts stay on the existing geographic map. */
+.road-concept-review { border-color: #9fb8a6; }
+.road-concept-state { display: inline-block; padding: 3px 7px; margin-bottom: 8px; border-radius: 5px; background: #deecdf; color: #195d42; font-size: 11px; font-weight: 700; }
+.road-concept-review[data-state="Placement needed"] .road-concept-state,
+.road-concept-review[data-state="Concept unavailable"] .road-concept-state { background: #f5e6c9; color: #77511c; }
+.road-concept-performance { margin: 12px 0; padding: 10px; background: var(--paper-2); border-radius: 8px; }
+.road-concept-performance strong { display: block; margin-bottom: 4px; font-size: 12px; }
+.road-concept-performance p { margin: 0; font-size: 12px; }
+.road-concept-modes { margin-bottom: 7px; }
+.road-concept-focus { width: 100%; margin: 3px 0 8px; }
+.road-concept-controls { display: grid; grid-template-columns: 1fr auto; gap: 7px 12px; margin: 12px 0; font-size: 12px; }
+.road-concept-controls label:first-child { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; }
+.road-concept-controls label[for="road-concept-opacity"] { display: flex; justify-content: space-between; gap: 12px; }
+.road-concept-controls input[type="range"] { min-width: 70px; width: 100%; padding: 0; accent-color: #0b7052; }
+.road-concept-legend { display: flex; flex-wrap: wrap; gap: 7px 12px; padding: 0; margin: 10px 0; list-style: none; font-size: 11px; }
+.road-concept-legend li { display: flex; align-items: center; gap: 5px; }
+.road-concept-swatch { display: inline-block; width: 15px; height: 9px; border: 1px solid #7b806d; border-radius: 2px; }
+.road-concept-history { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 8px; }
+.road-concept-popup { max-height: 240px; overflow: auto; font-family: var(--body); }
+.road-concept-popup p { margin: 7px 0; font-size: 12px; }
+.road-concept-popup ul { padding-left: 16px; margin: 8px 0; font-size: 11px; }
 
 /* Cards */
 .card { min-width: 0; margin: 0 0 12px; padding: 14px; border: 1px solid var(--rule); border-radius: 12px; background: var(--sheet); overflow-wrap: anywhere; }

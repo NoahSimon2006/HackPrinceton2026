@@ -5,7 +5,7 @@
   map.getPane("proposal").style.pointerEvents = "none";
   let selected = null, published = null, comparison = null, layer = null, request = 0, controller;
   let realRevision = 0;
-  let currentWater = null, currentTraffic = null;
+  let currentWater = null, currentTraffic = null, hasRoadConcept = false;
   let sourceInspectButtons = [];
   const show = $("show-proposal");
   const statuses = {fixture:"Development fixture", draft:"Draft concept", conditional:"Conditional treatment", recommended:"Recommended",
@@ -50,7 +50,7 @@
     controller?.abort(); ++request;
     selected = event.siteId ? event : null;
     comparison = null; realRevision = 0;
-    currentWater = null; currentTraffic = null;
+    currentWater = null; currentTraffic = null; hasRoadConcept = false;
     sourceInspectButtons = [];
     removeProposal();
     $("traffic-comparison").hidden = true;
@@ -395,6 +395,12 @@
     for (const assumption of c.assumptions ?? []) $("comparison-assumptions").append(element("li", typeof assumption === "string" ? assumption : assumption.text ?? assumption.description ?? JSON.stringify(assumption)));
     if (!c.assumptions?.length) $("comparison-assumptions").append(element("li", "No assumption details were supplied. Review source evidence before relying on this comparison."));
   }
+  function suppressUnavailableComparison() {
+    if (hasRoadConcept && currentTraffic?.comparison?.status === 'unavailable' && comparison?.status !== 'completed') {
+      $('traffic-comparison').hidden = true;
+      $('proposal-result-message').hidden = true;
+    }
+  }
   function receive(event) {
     if (!selected || event.siteId !== selected.siteId || event.workflow !== selected.workflow ||
         event.inputRevision !== selected.inputRevision || !Number.isInteger(event.revision) || event.revision <= realRevision) return;
@@ -436,6 +442,7 @@
         $("proposal-result-message").textContent = `Comparison unavailable: ${c.ranking.reason ?? "Required evidence or simulation results could not be obtained."}${published || comparison ? " The previous result is preserved below; it has not been updated." : ""}`;
         if (published) $("proposal-map-caption").textContent = `${caption(published.input_revision !== selected.inputRevision)} · previous result`;
         if(!comparison){currentTraffic={...event};showTrafficEvaluation(currentTraffic,trafficAlternatives(event));}
+        suppressUnavailableComparison();
         $("load-proposal-fixture").disabled = false;
         $("revise-proposal-fixture").disabled = !published?.development_fixture;
         return;
@@ -493,6 +500,15 @@
     catch(error){$('proposal-result-message').hidden=false;$('proposal-result-message').textContent=`Current evaluation unavailable: ${error.message}`;}
   });
   map.on("plannersite", clear);
+  map.on('roadconceptdisplay', event => {
+    hasRoadConcept = Boolean(event.concept);
+    if (event.visible) {
+      show.checked = false; visible();
+    }
+    // The concept card explains unassessed performance, including when an
+    // existing comparison arrives after a restored or preserved concept.
+    suppressUnavailableComparison();
+  });
   map.on("plannerresult", receive);
   map.on('plannerinvestigation',event=>{
     if(!selected || event.siteId!==selected.siteId || event.workflow!==selected.workflow ||

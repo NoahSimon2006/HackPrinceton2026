@@ -644,3 +644,66 @@ console.log('PASS: failed traffic continuation retains completed history as stal
   assert.equal(restoredCurrent?.designHistory[1].savedAt,prior.savedAt,'restoration prefers timestamped archive entries over legacy result copies');
 }
 console.log('PASS: stopped stormwater continuation retains same-site historical geometry, provenance and original saved time as stale');
+
+// A researched map concept publishes independently of traffic simulation and
+// carries its saved timestamp. Canceled or input-stale runs never publish it.
+for(const change of ['none','cancel','inputs']) {
+  const h=harness('street');h.select(34.05,-118.25);await flush();
+  assert.equal(h.$('run-site-analysis').textContent,'Generate road concept');
+  const pending=h.$('site-analysis').events.submit({preventDefault(){}});await flush();
+  const request=h.requests.find(r=>r.url==='/api/site-analysis'),input=JSON.parse(request.options.body);
+  const concept={site_id:input.siteId,workflow:'street',revision:input.proposalRevision,input_revision:input.inputRevision};
+  if(change==='cancel')h.$('cancel-site-analysis').events.click();
+  if(change==='inputs')h.$('planning-brief').events.input({target:{value:'Make the crossing shorter.'}});
+  request.resolve({facts:[],concept,conceptSavedAt:'2026-11-15T10:00:00Z',conceptHistory:[{concept,savedAt:'2026-11-15T10:00:00Z'}]});
+  await pending;await flush();
+  const published=h.map.events.filter(item=>item.name==='roadconceptresult');
+  assert.equal(published.length,change==='none'?1:0);
+  if(change==='none') {
+    assert.deepEqual(published[0].event.concept,concept);
+    assert.equal(published[0].event.follow,true);assert.equal(published[0].event.conceptSavedAt,'2026-11-15T10:00:00Z');
+    assert.equal(h.map.events.filter(item=>item.name==='plannerresult').length,0,'no fake evaluated proposal is emitted for a visual concept');
+  } else assert.ok(h.map.events.some(item=>item.name==='planneranalysisend' && item.event.status==='canceled'));
+}
+{
+  const concept={site_id:'road-saved',workflow:'street',revision:2,input_revision:1};
+  const prior={concept,savedAt:'2026-11-15T09:00:00Z'};
+  for(const status of ['failed','canceled','interrupted']) {
+    const saved={id:'e'.repeat(32),version:4,resultVersion:4,status,artifacts:[],events:[],conceptHistory:[prior],
+      snapshot:{workflow:'street',siteId:'road-saved',lon:-118.25,lat:34.05,question:'Revise the crossing.',markings:[],inputRevision:3,proposalRevision:3},
+      result:status==='interrupted'?null:{analysisError:'This attempt stopped.',facts:[]}};
+    const h=harness('street',{savedProject:saved});h.map.fire('scoutselect',{project:saved});await flush();await flush();
+    const restored=h.map.events.find(item=>item.name==='roadconceptresult')?.event;
+    assert.deepEqual(restored?.concept,concept);assert.equal(restored?.conceptSavedAt,prior.savedAt);
+    assert.equal(restored?.restored,true);assert.equal(restored?.historicalReference,true);
+    assert.equal(h.requests.filter(r=>r.url==='/api/site-analysis').length,0,'restoration does not rerun the agent');
+  }
+}
+console.log('PASS: traffic concepts publish independently, cancel stale output and restore the exact last saved road concept after stopped attempts');
+{
+  const siteId='34.050000,-118.250000',concept={site_id:siteId,workflow:'street',revision:2,input_revision:1};
+  const saved={id:'f'.repeat(32),version:2,resultVersion:2,status:'ready',artifacts:[],events:[],conceptHistory:[{concept,savedAt:'2026-11-15T09:00:00Z'}],
+    snapshot:{workflow:'street',siteId,lon:-118.25,lat:34.05,question:'A shorter crossing.',markings:[],inputRevision:1,proposalRevision:2},
+    result:{concept,conceptSavedAt:'2026-11-15T09:00:00Z',facts:[]}};
+  const h=harness('street',{savedProject:saved});h.map.fire('scoutselect',{project:saved});await flush();await flush();
+  const roadEvents=()=>h.map.events.filter(item=>item.name==='roadconceptresult');
+  assert.equal(roadEvents().length,1);
+  h.workspace('water');h.workspace('street');assert.equal(roadEvents().length,2,'returning to Traffic restores its saved map concept');
+  assert.deepEqual(roadEvents().at(-1).event.concept,concept);
+  h.select(34.051,-118.251);await flush();h.select(34.05,-118.25);await flush();
+  assert.equal(roadEvents().length,3,'returning to a cached selected site restores its own concept');
+  assert.deepEqual(roadEvents().at(-1).event.concept,concept);
+  assert.equal(h.requests.filter(r=>r.url==='/api/site-analysis').length,0);
+}
+console.log('PASS: road concept survives workflow and cached-site navigation without another agent call');
+{
+  const h=harness('street');h.select(34.05,-118.25);await flush();
+  const evidence=h.layers[4];assert.equal(evidence.attached,true);
+  h.map.fire('roadconceptdisplay',{concept:{},visible:true});assert.equal(evidence.attached,false,'source outlines do not obscure the new road layout');
+  h.$('show-search-matches').events.change();assert.equal(evidence.attached,false,'evidence refresh does not repaint hidden source geometry');
+  h.map.fire('plannerevidenceview',{visible:true});assert.equal(evidence.attached,true,'Evidence inspection restores source features');
+  h.map.fire('plannerevidenceview',{visible:false});assert.equal(evidence.attached,false);
+  h.map.fire('roadconceptdisplay',{concept:{},visible:false});assert.equal(evidence.attached,false,'Existing mode keeps a clean imagery baseline');
+  h.map.fire('roadconceptdisplay',{concept:null,visible:false});assert.equal(evidence.attached,true,'leaving the concept restores ordinary source viewing');
+}
+console.log('PASS: source evidence stays hidden under road concepts and remains available through Evidence');
