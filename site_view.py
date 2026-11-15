@@ -85,8 +85,8 @@ def site_view_descriptor(directory, catalog_items):
         raw_address = " ".join(str(address.get(key) or "") for key in
                                ("streetNumber", "streetDirection", "streetName", "streetType"))
         if (_normalized(raw_address) != _normalized(prop["address"])
-                or not math.isclose(float(address["latitude"]), prop["lat"], abs_tol=1e-8)
-                or not math.isclose(float(address["longitude"]), prop["lon"], abs_tol=1e-8)):
+                or not math.isclose(float(address["latitude"]), prop["lat"], rel_tol=0, abs_tol=1e-8)
+                or not math.isclose(float(address["longitude"]), prop["lon"], rel_tol=0, abs_tol=1e-8)):
             raise SiteViewUnavailable(UNAVAILABLE)
         attachments = record.get("attachments")
         if not isinstance(attachments, list):

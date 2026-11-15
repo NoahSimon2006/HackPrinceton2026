@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import csv
 import math
-import re
 import statistics
 import subprocess
 import time
@@ -29,6 +28,7 @@ from pathlib import Path
 from threading import Event
 
 import sumo_tools
+from street_names import street_key
 
 ROOT = Path(__file__).resolve().parent
 SIM = ROOT / "sim"
@@ -37,8 +37,8 @@ WARMUP_S, MEASURE_S = 600, 3600
 SEEDS = (11, 23, 37)
 RADIUS_M = 200
 CHAIN_M = 150
-CUT_VERSION = "4"
-SIM_VERSION = "6-fixed-boundary-queues"
+CUT_VERSION = "5-verified-restrictions"
+SIM_VERSION = "8-verified-restrictions"
 MAX_WORKERS = 3
 FLEET_SOURCE = SIM / "sources" / "emfac2025-la-2026.csv"
 FLEET_URL = "https://emfac.arb.ca.gov/emissions-inventory/3b6469b056eb7e5a47b65c0c96415b33d5e20812"
@@ -46,7 +46,7 @@ TURNS = {"left": ("l", "L"), "through": ("s",), "right": ("r", "R")}
 ASSUMPTIONS = [
     "Signal control is SUMO-generated actuated timing, not a measured LADOT signal plan. The same generation settings are used for every layout; movement links are rebuilt for each geometry.",
     "Vehicles enter at the counted hourly rate for the sheet's peak hour, after a 10-minute warm-up at the same rate.",
-    "Lane counts and turn permissions come from OpenStreetMap unless an explicit override is listed.",
+    "Lane counts use the OSM-derived network and are not field-verified. Represented static single-node OSM turn restrictions are checked for cars, trucks and buses after conversion and layout changes. Unresolved conditional or via-way restrictions in a study block simulation. OSM completeness and historical applicability are not field-verified.",
     "Other junctions inside the 200 m study area use generated priority rules, not measured signal control, to isolate the counted intersection.",
     "Vehicle-class proportions use the count sheet's full observation period; the sheet does not report a class split for each peak-hour movement.",
     "Demand is held at the historical peak-hour rate during warm-up. Completion includes a 15-minute clearance period; unfinished trips and vehicles still waiting to enter remain in the denominator.",
@@ -110,6 +110,32 @@ def file_hash(path):
     return digest.hexdigest()
 
 
+def verify_restrictions(network_path):
+    """Do not simulate a cutout whose represented source restrictions are unresolved."""
+    from scripts.verify_turn_restrictions import audit
+    osm = SIM / "sources" / "dtla-roads.osm"
+    if not osm.is_file():
+        raise SimulationError("OSM turn-restriction source is missing. Rebuild the road network.")
+    result = audit(osm, network_path)
+    unresolved = [r for r in result["relations"] if r["status"] == "failed" or r["status"].startswith("unverified_")]
+    if unresolved:
+        raise SimulationError("This study contains unresolved OSM turn restrictions (including conditional, complex or invalid rules). Traffic comparison is unavailable until they are resolved; counts are not altered to bypass them.")
+    return {"osm_sha256": result["osm_sha256"], "network_sha256": result["network_sha256"],
+            "counts": result["counts"], "scope": result["scope"]}
+
+
+def validate_network_sources():
+    manifest = SIM / "network-build.json"
+    try:
+        data = json.loads(manifest.read_text())
+        valid = (data["network_sha256"] == file_hash(NETWORK)
+                 and data["osm_sha256"] == file_hash(SIM / "sources" / "dtla-roads.osm"))
+    except (OSError, ValueError, KeyError, TypeError):
+        valid = False
+    if not valid:
+        raise SimulationError("Road network source verification is missing or stale. Run scripts/build_road_network.py and rebuild discovery.")
+
+
 def fleet_rates(path=None):
     """Recompute calibration from the retrieved official CSV, never a silent default factor."""
     path = Path(path or FLEET_SOURCE)
@@ -122,21 +148,20 @@ def fleet_rates(path=None):
     rows = list(csv.DictReader(lines[start:]))
     if not rows or any(r.get("Region") != "Los Angeles (SC)" or r.get("Calendar Year") != "2026" for r in rows):
         raise SimulationError("CARB fleet-rate CSV does not match the disclosed region and year.")
-    distance = sum(float(r["Total VMT"]) for r in rows)
-    if distance <= 0:
+    try:
+        values = [{key: float(r[key]) for key in ("Total VMT", "CO2_RUNEX", "NOx_RUNEX")} for r in rows]
+    except (ValueError, TypeError, KeyError):
+        raise SimulationError("CARB fleet-rate CSV contains missing or invalid numeric values.") from None
+    if any(not math.isfinite(v) or v < 0 for row in values for v in row.values()):
+        raise SimulationError("CARB fleet-rate CSV requires finite, nonnegative VMT and running-exhaust rates.")
+    distance = sum(r["Total VMT"] for r in values)
+    if not math.isfinite(distance) or distance <= 0:
         raise SimulationError("CARB fleet-rate CSV has no positive VMT.")
-    return {key: sum(float(r["Total VMT"]) * float(r[key + "_RUNEX"]) for r in rows) / distance
-            for key in ("CO2", "NOx")}
-
-
-def street_key(name: str) -> str:
-    text = (name or "").upper()
-    text = re.sub(r"\b(\d+)\s*(ST|ND|RD|TH)\b", r"\1", text)
-    for pattern, replacement in [(r"\b(NORTH|SOUTH|EAST|WEST|N|S|E|W)\b", ""), (r"\b(AVENUE|AVE|AV)\b", "AV"),
-                                 (r"\b(STREET|STR|ST)\b", "ST"), (r"\b(BOULEVARD|BLVD|BL)\b", "BL"),
-                                 (r"\b(PLACE|PL)\b", "PL"), (r"\b(DRIVE|DR)\b", "DR"), (r"\b(ROAD|RD)\b", "RD")]:
-        text = re.sub(pattern, replacement, text)
-    return " ".join(re.findall(r"[A-Z0-9]+", text))
+    rates = {key: sum(r["Total VMT"] * r[key + "_RUNEX"] for r in values) / distance
+             for key in ("CO2", "NOx")}
+    if any(not math.isfinite(value) or value <= 0 for value in rates.values()):
+        raise SimulationError("CARB fleet-rate calibration requires finite positive rates.")
+    return rates
 
 
 def heading(edge, end=True):
@@ -146,7 +171,8 @@ def heading(edge, end=True):
 
 
 def _site_folder(node_id: str, sheet: dict) -> Path:
-    digest = sha256(f"{node_id}|{sheet['sha256']}|{file_hash(NETWORK)}|{CUT_VERSION}|{RADIUS_M}|{CHAIN_M}".encode()).hexdigest()[:20]
+    converter = file_hash(sumo_tools.binary("netconvert"))
+    digest = sha256(f"{node_id}|{sheet['sha256']}|{file_hash(NETWORK)}|{converter}|{CUT_VERSION}|{RADIUS_M}|{CHAIN_M}".encode()).hexdigest()[:20]
     return SIM / "scenarios" / digest
 
 
@@ -196,7 +222,8 @@ def approaches(net, node_id: str, sheet: dict) -> dict:
         moves = {}
         for move, letters in TURNS.items():
             targets = [c.getTo() for c in edge.getOutgoing() for c in edge.getConnections(c)
-                       if c.getDirection() in letters and c.getTo().allows("passenger")]
+                       if c.getDirection() in letters and c.allows("passenger")
+                       and c.getFromLane().allows("passenger") and c.getToLane().allows("passenger")]
             if targets:
                 moves[move] = max(targets, key=lambda e: (bool(e.getName()), e.getLaneNumber()))
         result[name] = {"edge": edge, "chain": upstream(edge), "moves": moves}
@@ -208,7 +235,8 @@ def upstream(edge, length=CHAIN_M):
     key = street_key(edge.getName())
     while total < length:
         options = [e for e in current.getIncoming() if street_key(e.getName()) == key and e not in chain
-                   and e.allows("passenger") and abs((heading(e) - heading(current, end=False) + 180) % 360 - 180) < 40]
+                   and e.allows("passenger") and any(c.allows("passenger") for c in e.getConnections(current))
+                   and abs((heading(e) - heading(current, end=False) + 180) % 360 - 180) < 40]
         if not options:
             break
         current = max(options, key=lambda e: e.getLaneNumber())
@@ -222,7 +250,8 @@ def downstream(edge, length=CHAIN_M):
     key = street_key(edge.getName())
     while total < length:
         options = [e for e in current.getOutgoing() if street_key(e.getName()) == key and e not in chain
-                   and e.allows("passenger") and abs((heading(e, end=False) - heading(current) + 180) % 360 - 180) < 40]
+                   and e.allows("passenger") and any(c.allows("passenger") for c in current.getConnections(e))
+                   and abs((heading(e, end=False) - heading(current) + 180) % 360 - 180) < 40]
         if not options:
             break
         current = max(options, key=lambda e: e.getLaneNumber())
@@ -240,8 +269,10 @@ def demand(sheet: dict, period: str, mapping: dict) -> tuple[list[dict], dict]:
         values = sheet["approaches"][name]
         six_hours = sum(sum(values[h].values()) for h in sheet["hours"]) or 1
         heavy = sheet.get("heavy_vehicles", {})
-        truck = heavy.get("dual_wheeled", {}).get(name, 0) / six_hours
-        bus = heavy.get("buses", {}).get(name, 0) / six_hours
+        classes = [heavy.get(kind, {}).get(name) for kind in ("dual_wheeled", "buses")]
+        if any(type(value) is not int or value < 0 for value in classes):
+            raise SimulationError("Counted truck/bus composition is missing or invalid; no all-car fleet is substituted.")
+        truck, bus = [value / six_hours for value in classes]
         if min(truck, bus) < 0 or truck + bus > 1:
             raise SimulationError("Counted vehicle classes exceed the reported approach total.")
         for move, vehicles in values[hour].items():
@@ -254,6 +285,10 @@ def demand(sheet: dict, period: str, mapping: dict) -> tuple[list[dict], dict]:
             for vtype, share in (("car", 1 - truck - bus), ("truck", truck), ("bus", bus)):
                 rate = vehicles * share
                 if rate > 0:
+                    vclass = "passenger" if vtype == "car" else vtype
+                    if not any(c.allows(vclass) and c.getFromLane().allows(vclass) and c.getToLane().allows(vclass)
+                               for c in approach["edge"].getConnections(out)):
+                        raise SimulationError(f"Counted {name.upper()} {move} demand conflicts with the network's {vtype} turn permissions.")
                     flows.append({"id": f"{name}_{move}_{vtype}", "type": vtype, "rate": rate,
                                   "from": approach["chain"][0].getID(), "via": [approach["edge"].getID(), out.getID()],
                                   "to": downstream(out)[-1].getID()})
@@ -303,7 +338,7 @@ def cohort_stats(rows, departures: dict, *, end: float) -> dict:
         delays.append(float(row.get("timeLoss", 0)) + float(row.get("departDelay", 0)))
     return {"offered": len(departures), "completed": completed, "inserted": inserted,
             "not_inserted": len(departures) - inserted, "unfinished": inserted - completed,
-            "mean_delay_s": round(statistics.fmean(delays), 1) if delays else None}
+            "mean_delay_s": statistics.fmean(delays) if delays else None}
 
 
 def _xml_rows(path: Path, tag: str):
@@ -328,21 +363,28 @@ def queue_maxima(path: Path, watched: dict, *, begin: float, end: float) -> dict
     queues = {name: 0.0 for name in watched}
     lane_owner = {f"{edge}_{i}": (name, edge)
                   for name, edges in watched.items() for edge, lanes in edges for i in range(lanes)}
+    samples = 0
     for _, element in ET.iterparse(path):
         if element.tag != "data":
             continue
         if begin <= float(element.get("timestep", 0)) < end:
+            samples += 1
             edge_queues = {}
             for lane in element.iter("lane"):
                 owner = lane_owner.get(lane.get("id"))
                 if owner:
-                    edge_queues[owner] = max(edge_queues.get(owner, 0.0), float(lane.get("queueing_length", 0)))
+                    length = float(lane.get("queueing_length", "nan"))
+                    if not math.isfinite(length) or length < 0:
+                        raise SimulationError("Queue output contains an invalid measured length.")
+                    edge_queues[owner] = max(edge_queues.get(owner, 0.0), length)
             totals = {name: 0.0 for name in watched}
             for (name, _), length in edge_queues.items():
                 totals[name] += length
             for name, length in totals.items():
                 queues[name] = max(queues[name], length)
         element.clear()
+    if not samples:
+        raise SimulationError("Queue output has no samples in the measurement interval.")
     return queues
 
 
@@ -375,8 +417,14 @@ def run_once(net_path: Path, routes: Path, folder: Path, seed: int, watched: dic
     stats = ET.parse(folder / "statistics.xml").getroot()
     vehicles = stats.find("vehicles").attrib
     measured_trips = [row for row in trip_rows if row["id"] in departures and float(row.get("depart", -1)) >= 0]
-    emissions = {key: sum(float(row.get(key, 0)) for row in measured_trips) for key in ("CO2_abs", "NOx_abs")}
-    distance = sum(float(row.get("routeLength", 0)) for row in measured_trips)
+    try:
+        values = [{key: float(row[key]) for key in ("CO2_abs", "NOx_abs", "routeLength")} for row in measured_trips]
+        if any(not math.isfinite(value) or value < 0 for row in values for value in row.values()):
+            raise ValueError("Invalid trip output")
+    except (KeyError, ValueError, TypeError):
+        raise SimulationError("Measured trip emissions or distance are missing or invalid; no zero values were substituted.") from None
+    emissions = {key: sum(row[key] for row in values) for key in ("CO2_abs", "NOx_abs")}
+    distance = sum(row["routeLength"] for row in values)
     queues = queue_maxima(folder / "queue.xml", watched, begin=WARMUP_S, end=end)
     noise = {}
     noise_rows = {e["id"]: float(e.get("noise", 0)) for e in _xml_rows(folder / "noise.xml", "edge")}
@@ -391,7 +439,7 @@ def run_once(net_path: Path, routes: Path, folder: Path, seed: int, watched: dic
             "not_inserted_total": int(vehicles["loaded"]) - int(vehicles["inserted"]),
             "teleports": int(stats.find("teleports").get("total", 0)),
             "co2_sumo_g": emissions["CO2_abs"] / 1000, "nox_sumo_g": emissions["NOx_abs"] / 1000,
-            "vehicle_miles": distance / 1609.344, "max_queue_m": {k: round(v, 1) for k, v in queues.items()},
+            "vehicle_miles": distance / 1609.344, "max_queue_m": queues,
             "max_noise_db": noise}
     _check(activity)
     pending = cache.with_suffix(".pending.json")
@@ -412,13 +460,14 @@ def summarise(runs: list[dict], demand_total: int, carb_factor: dict) -> dict:
         "offered_vehicles": round(expected),
         "unfinished_vehicles": round(mean("unfinished")),
         "unable_to_enter_vehicles": round(mean("not_inserted")),
-        "completion_share": round(completed / expected, 4) if expected else None,
-        "unable_to_enter_share": round(mean("not_inserted") / expected, 4) if expected else None,
-        "mean_delay_s": round(mean("mean_delay_s"), 1),
-        "max_queue_m": {n: round(max(r["max_queue_m"][n] for r in runs), 1) for n in names},
-        "max_noise_db": {n: max((r["max_noise_db"][n] for r in runs if r["max_noise_db"][n] is not None), default=None) for n in names},
-        "co2_kg_per_hour": round(mean("co2_sumo_g") * carb_factor["CO2"] / 1000 * 3600 / MEASURE_S, 1),
-        "nox_g_per_hour": round(mean("nox_sumo_g") * carb_factor["NOx"] * 3600 / MEASURE_S, 1),
+        "completion_share": completed / expected if expected else None,
+        "unable_to_enter_share": mean("not_inserted") / expected if expected else None,
+        "mean_delay_s": mean("mean_delay_s"),
+        "max_queue_m": {n: max(r["max_queue_m"][n] for r in runs) for n in names},
+        "max_noise_db": {n: max(r["max_noise_db"][n] for r in runs)
+                         if all(r["max_noise_db"].get(n) is not None for r in runs) else None for n in names},
+        "co2_kg_per_hour": mean("co2_sumo_g") * carb_factor["CO2"] / 1000 * 3600 / MEASURE_S,
+        "nox_g_per_hour": mean("nox_sumo_g") * carb_factor["NOx"] * 3600 / MEASURE_S,
         "vehicle_miles_per_hour": round(mean("vehicle_miles") * 3600 / MEASURE_S, 1),
         "co2_g_per_completed_vehicle": round(mean("co2_sumo_g") * carb_factor["CO2"] / completed, 1) if completed else None,
         "teleports": max(r["teleports"] for r in runs),
@@ -433,10 +482,12 @@ class Study:
     def __init__(self, node_id: str, lon: float, lat: float, sheet: dict, period: str = "pm", *, activity=None):
         import sumolib
         if not NETWORK.exists():
-            raise SimulationError("Road network missing. Run scripts/fetch_osm.py and netconvert (see README).")
+            raise SimulationError("Road network missing. Run scripts/fetch_osm.py and scripts/build_road_network.py (see README).")
+        validate_network_sources()
         self.node_id, self.sheet, self.period = node_id, sheet, period
         self.folder = _site_folder(node_id, sheet)
         self.net_path = cut_network(node_id, lon, lat, self.folder, activity=activity)
+        self.restriction_checks = {"baseline": verify_restrictions(self.net_path)}
         self.net = sumolib.net.readNet(str(self.net_path))
         self.mapping = approaches(self.net, node_id, sheet)
         self.flows, self.counted = demand(sheet, period, self.mapping)
@@ -444,16 +495,19 @@ class Study:
 
     def layout_network(self, name: str, edge_patch: str | None, *, activity=None) -> Path:
         if not edge_patch:
+            self.restriction_checks[name] = self.restriction_checks["baseline"]
             return self.net_path
         identity = sha256((file_hash(self.net_path) + edge_patch + CUT_VERSION).encode()).hexdigest()[:20]
         folder = self.folder / f"layout-{identity}"
         folder.mkdir(parents=True, exist_ok=True)
         if (folder / "layout.net.xml").exists():
+            self.restriction_checks[name] = verify_restrictions(folder / "layout.net.xml")
             return folder / "layout.net.xml"
         (folder / "patch.edg.xml").write_text(edge_patch, encoding="utf-8")
         _run([sumo_tools.binary("netconvert"), "-s", self.net_path, "--edge-files", "patch.edg.xml",
               "--tls.rebuild", "--tls.default-type", "actuated", "-o", "layout.pending.net.xml"],
              cwd=folder, log="netconvert.log", activity=activity)
+        self.restriction_checks[name] = verify_restrictions(folder / "layout.pending.net.xml")
         (folder / "layout.pending.net.xml").replace(folder / "layout.net.xml")
         return folder / "layout.net.xml"
 
@@ -494,6 +548,8 @@ class Study:
     def compare(self, layouts: dict[str, str | None], *, activity=None) -> dict:
         """Run baseline plus layouts ({name: edge patch xml}); identical demand and seeds for each."""
         _check(activity)
+        if "baseline" in layouts:
+            raise ValueError("The baseline is reserved for the unchanged source network.")
         rates = fleet_rates()
         prepared = {"baseline": (self.net_path, None)}
         prepared.update({name: (self.layout_network(name, patch, activity=activity), patch) for name, patch in layouts.items()})
@@ -536,6 +592,7 @@ class Study:
                                                "Queue length is the sum of the longest lane queue on each edge of the fixed approach chain at a timestamp, then the maximum over the measured hour and seeds. Splitting an edge does not shorten the measured approach.",
                                                "Roadway noise is the maximum approach hourly source level: maximum of SUMO Harmonoise hourly mean edge levels across approach edges and seeds. It is not a temporal noise peak or building exposure."],
                 "study_radius_m": RADIUS_M, "simulation_version": SIM_VERSION,
+                "turn_restriction_checks": self.restriction_checks,
                 "fleet_source": {"url": FLEET_URL, "sha256": file_hash(FLEET_SOURCE), "rates_g_per_mile": rates,
                                  "method": "VMT-weighted EMFAC2025 v2.1.1 LA (SC) 2026 running-exhaust rates, derived from 133-row official CSV; baseline normalization reused for all layouts."},
                 "input_hash": sha256(json.dumps({"network": file_hash(self.net_path), "sheet": self.sheet["sha256"],

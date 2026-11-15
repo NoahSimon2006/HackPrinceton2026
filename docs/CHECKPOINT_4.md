@@ -30,11 +30,15 @@ The before/after table reports each tested layout, outcome, tradeoffs, source da
 
 ## Actual source limitations
 
+**Audit follow-up: legacy network rebuild remains pending.** The local `sim/sources/dtla-roads.osm` contains no turn-restriction relations because the earlier downloader discarded them. Existing `sim/dtla.net.xml` and cached comparisons therefore do not establish complete sourced turn permissions; SUMO-derived connections must not be described as observed permissions. The downloader now preserves restriction relations and resolves their members, but this audit did not refresh public sources or regenerate simulation artifacts. Refresh the OSM extract, rebuild the network and discovery snapshot, check the resulting restrictions and rerun affected comparisons before relying on this topology for a planning recommendation. Lane counts also remain unverified against field measurements. The real-site figures below are historical verification of the earlier model, not verification of corrected turn restrictions.
+
 Live checks at all four counted sites returned Vexcel detection candidates, but the point-based property extraction returned 404 and supplied no parcel/building outlines. The configured CoStar kit has 1,581 LA properties, but only 12 properties with 17 mapped frontages. No mapped frontage is within the 110 m lookup radius of these four intersections; the closest mapped frontage property is over 1.9 km away. Those are coverage gaps, not evidence of zero buildings, no driveways, or free land.
 
 Consequently, no real design can currently satisfy the complete sponsor-evidence requirement. The implementation can calculate and disclose a traffic comparison while honestly withholding a recommendation. **The acceptance case of publishing a real recommended footprint remains unfulfilled until both source coverage and comparison results support one.**
 
 ## Real-site verification
+
+**Historical checkpoint results below.** The November 14 road rebuild and simulation version `8-verified-restrictions` have a newer [verification report](ROAD_NETWORK_VERIFICATION.md). Both layouts remain ineligible; the original table is retained as the checkpoint record.
 
 A reproducible Main/1st PM comparison uses the official 2011-11-08 sheet, its 5–6 PM hour, and all 5,631 counted movements. Baseline and two physical alternatives each run three paired seeds. The alternatives remove one curb-side approach lane for an eastbound 60 m curb extension and a westbound 80 m pedestrian-space reallocation. Every run has zero teleports.
 

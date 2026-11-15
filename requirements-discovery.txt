@@ -1,4 +1,5 @@
-# Offline source-backed terrain/discovery build; not required by the map server.
+# Source-backed discovery build and optional runtime Stormwater terrain screening.
+# The base map server starts without these; terrain recommendations require them.
 rasterio==1.5.2
 numpy==2.5.4
 pyproj==3.8.0

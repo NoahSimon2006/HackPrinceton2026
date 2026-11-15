@@ -6,10 +6,36 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
-from traffic_sim import cohort_stats, write_routes, fleet_rates, _site_folder, _run, queue_maxima, SimulationError
+from traffic_sim import cohort_stats, write_routes, fleet_rates, _site_folder, _run, queue_maxima, summarise, SimulationError
 
 
 class AccountingTest(unittest.TestCase):
+    def test_missing_vehicle_classes_do_not_silently_become_all_cars(self):
+        from traffic_sim import demand
+        from traffic_counts import parse_manual
+        from test_traffic_counts import MANUAL
+        for change in (lambda h:h.pop('buses'),lambda h:h['dual_wheeled'].update(nb=True)):
+            sheet=parse_manual(MANUAL);change(sheet['heavy_vehicles'])
+            with self.assertRaises(SimulationError): demand(sheet,'pm',{'nb':{}})
+
+    def test_missing_queue_samples_are_not_zero_queues(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'queue.xml'
+            for text in ('<queue-export/>', '<queue-export><data timestep="600"><lanes><lane id="a_0" queueing_length="nan"/></lanes></data></queue-export>'):
+                path.write_text(text)
+                with self.assertRaises(SimulationError): queue_maxima(path,{'nb':[('a',1)]},begin=600,end=4200)
+
+    def test_summary_preserves_threshold_precision_and_missing_noise_seed(self):
+        from street_design import rank
+        from test_street_design import checked
+        base=dict(seed=11,completed=900,offered=1000,unfinished=50,not_inserted=50,mean_delay_s=60.,
+                  max_queue_m={'nb':80.},max_noise_db={'nb':72.},co2_sumo_g=400000.,nox_sumo_g=100.,vehicle_miles=10.,teleports=0)
+        candidate={**base,'mean_delay_s':66.001,'co2_sumo_g':350000.}
+        before=summarise([base],1000,{'CO2':1.,'NOx':1.});after=summarise([candidate],1000,{'CO2':1.,'NOx':1.})
+        self.assertEqual(after['mean_delay_s'],66.001)
+        self.assertFalse(rank({'baseline':before,'candidate':after},{'candidate':checked()})['verdicts']['candidate']['eligible'])
+        incomplete={**base,'seed':23,'max_noise_db':{'nb':None}}
+        self.assertIsNone(summarise([base,incomplete],1000,{'CO2':1.,'NOx':1.})['max_noise_db']['nb'])
     def test_queue_length_uses_full_chain_and_is_invariant_to_edge_splits(self):
         with tempfile.TemporaryDirectory() as folder:
             original = Path(folder) / "original.xml"
@@ -69,6 +95,13 @@ class AccountingTest(unittest.TestCase):
             with self.assertRaises(SimulationError):
                 fleet_rates(Path(folder) / "missing.csv")
 
+    def test_fleet_rejects_nonfinite_negative_and_missing_values(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'rates.csv'
+            for values in ('nan,300,1','100,-1,1','100,300,inf','100,,1','100,0,0'):
+                path.write_text('Region,Calendar Year,Total VMT,CO2_RUNEX,NOx_RUNEX\nLos Angeles (SC),2026,'+values+'\n')
+                with self.assertRaises(SimulationError): fleet_rates(path)
+
     def test_class_rounding_preserves_exact_counted_movement(self):
         flows = [{"id": "nb_left_" + kind, "type": kind, "rate": rate, "from": "a", "to": "b", "via": ["a", "b"]}
                  for kind, rate in (("car", 90.34), ("truck", 8.33), ("bus", 2.33))]
@@ -82,7 +115,7 @@ class AccountingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "network.xml"
             path.write_text("aaaa")
-            with patch("traffic_sim.NETWORK", path):
+            with patch("traffic_sim.NETWORK", path), patch("traffic_sim.sumo_tools.binary", return_value=path):
                 before = _site_folder("node", {"sha256": "sheet"})
                 path.write_text("bbbb")
                 after = _site_folder("node", {"sha256": "sheet"})

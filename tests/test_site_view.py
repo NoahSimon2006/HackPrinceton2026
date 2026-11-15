@@ -134,6 +134,11 @@ class SiteViewTest(unittest.TestCase):
         with self.assertRaises(SiteViewUnavailable):
             self.descriptor()
         self.record["primaryAddress"]["latitude"] = PROPERTY["lat"]
+        self.record["primaryAddress"]["longitude"] = PROPERTY["lon"] + 5e-8
+        self.write()
+        with self.assertRaises(SiteViewUnavailable):
+            self.descriptor()
+        self.record["primaryAddress"]["longitude"] = PROPERTY["lon"]
         self.record.pop("attachments")
         self.write()
         self.assertEqual(self.request(), (503, {"error": UNAVAILABLE}))

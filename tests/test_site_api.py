@@ -24,6 +24,25 @@ def request(payload):
 
 
 class SiteApiTest(unittest.TestCase):
+    def test_water_design_is_validated_before_model_and_passed_locally(self):
+        design = {"storage_depth_m": .15, "runoff_coefficient": .9,
+                  "surface_confirmed": True, "connections_confirmed": True,
+                  "access_confirmed": True, "overflow_confirmed": True,
+                  "confirmation_note": "Planner design test only"}
+        with patch.dict("os.environ", {"GROK_API_KEY": "test-only"}), patch("site_agent.analyze_site", return_value={"report": None}) as analyze:
+            status, _ = request({"lat": LAT, "lon": LON, "workflow": "water", "question": "Compare", "waterDesign": design})
+            self.assertEqual(status, 200)
+            self.assertEqual(analyze.call_args.kwargs["water_design"], design)
+        for change in ({"storage_depth_m": True}, {"runoff_coefficient": 2}, {"surface_confirmed": "yes"}, {"unexpected": "field"}):
+            with patch("site_agent.analyze_site") as analyze:
+                status, _ = request({"lat": LAT, "lon": LON, "workflow": "water", "question": "Compare", "waterDesign": {**design, **change}})
+                self.assertEqual(status, 400)
+                analyze.assert_not_called()
+        with patch("site_agent.analyze_site") as analyze:
+            status, _ = request({"lat": LAT, "lon": LON, "workflow": "street", "question": "Compare", "waterDesign": design})
+            self.assertEqual(status, 400)
+            analyze.assert_not_called()
+
     def test_discovery_reference_is_validated_before_model_call(self):
         reference={"version":"source-version","layer":"counts","feature":"count-one"}
         selected={"value":18102,"unit":"vehicles reported"}

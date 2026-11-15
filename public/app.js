@@ -2,7 +2,6 @@ const $ = (id) => document.getElementById(id);
 const HOME = [34.0522, -118.2437];
 const HOME_ZOOM = 13;
 const MIN_ZOOM = 10;
-const ZOOM_STEP = .125;
 const MIN_PROPERTY_ZOOM = 15;
 const map = L.map("map", { minZoom: MIN_ZOOM, maxZoom: 20, zoomSnap: 0, zoomDelta: .5,
   preferCanvas: true,
@@ -48,6 +47,9 @@ let selectedId = null;
 let focusPending = false;
 let searchTimer = null;
 let propertyRequest = null;
+let propertyGeneration = 0;
+let searchRequest = null;
+let searchGeneration = 0;
 let tileFailures = 0;
 
 function setStatus(title, detail, error = false) {
@@ -81,38 +83,6 @@ function insideCoverage(latlng) {
     return point[0] >= west && point[0] <= east && point[1] >= south && point[1] <= north &&
       insidePolygon(point, rings);
   });
-}
-
-function viewportSamples() {
-  const half = map.getSize().divideBy(2);
-  const samples = [];
-  for (const y of [0, -.5, .5, -1, 1]) {
-    for (const x of [0, -.5, .5, -1, 1]) {
-      samples.push(L.point(x * half.x, y * half.y));
-    }
-  }
-  return samples;
-}
-
-function insideImageryView(latlng) {
-  // The Vexcel JPEGs have a no-data wedge northeast of LA inside the
-  // collection footprints. Follow a conservative curve below that wedge.
-  const eastward = Math.max(0, (latlng.lng + 118.38) / .28);
-  const northLimit = 34.29 - .12 * eastward ** 2;
-  return latlng.lat <= northLimit && insideCoverage(latlng);
-}
-
-function coversView(center, zoom, samples) {
-  return samples.every((offset) => insideImageryView(map.unproject(center.add(offset), zoom)));
-}
-
-function updateMinimumZoom() {
-  const samples = viewportSamples();
-  let zoom = MIN_ZOOM;
-  while (zoom < map.getMaxZoom() && !coversView(map.project(HOME, zoom), zoom, samples)) {
-    zoom += ZOOM_STEP;
-  }
-  map.setMinZoom(zoom);
 }
 
 function moveInsideCoverage(center, delta, allowed) {
@@ -166,8 +136,7 @@ function installSmoothWheelZoom() {
     const offset = pointer.subtract(map.getSize().divideBy(2));
     let center = map.project(anchor, zoom).subtract(offset);
     if (coverage) {
-      const samples = viewportSamples();
-      const allowed = (position) => coversView(position, zoom, samples);
+      const allowed = (position) => insideCoverage(map.unproject(position, zoom));
       if (!allowed(center)) {
         const previous = map.project(map.getCenter(), zoom);
         if (!allowed(previous)) {
@@ -229,8 +198,7 @@ mapDrag.on("predrag", () => {
   previousDragPosition = mapDrag._newPos;
   const zoom = map.getZoom();
   const center = map.project(map.getCenter(), zoom);
-  const samples = viewportSamples();
-  const allowed = (position) => coversView(position, zoom, samples);
+  const allowed = (position) => insideCoverage(map.unproject(position, zoom));
   // Short steps let the slide follow changes in the boundary during a fast gesture.
   const steps = Math.max(1, Math.ceil(Math.hypot(delta.x, delta.y) / 12));
   const motion = delta.divideBy(steps);
@@ -298,9 +266,8 @@ async function loadCoverage() {
       setStatus("Coverage unavailable here", "The opening point is outside Vexcel coverage.", true);
       return;
     }
-    updateMinimumZoom();
     const zoom = map.getZoom();
-    if (!coversView(map.project(map.getCenter(), zoom), zoom, viewportSamples())) {
+    if (!insideCoverage(map.getCenter())) {
       map.setView(HOME, zoom, { animate: false });
     }
     lastAllowed = map.getCenter();
@@ -334,6 +301,7 @@ function addMarker(property) {
 }
 
 async function updateProperties() {
+  const generation = ++propertyGeneration;
   const enabled = $("properties").checked;
   $("layer-note").hidden = !enabled || map.getZoom() >= MIN_PROPERTY_ZOOM;
   propertyLayer.clearLayers();
@@ -345,6 +313,7 @@ async function updateProperties() {
   propertyRequest = new AbortController();
   try {
     const data = await json(`/api/properties?bbox=${bbox}`, { signal: propertyRequest.signal });
+    if (generation !== propertyGeneration) return;
     for (const property of data.properties) addMarker(property);
     if (focusPending && markerById.has(selectedId)) {
       markerById.get(selectedId).openPopup();
@@ -352,21 +321,18 @@ async function updateProperties() {
     }
     setStatus("Imagery ready", `${data.total} CoStar properties in view · coverage limited to Vexcel imagery.`);
   } catch (error) {
-    if (error.name !== "AbortError") setStatus("Property layer unavailable", error.message, true);
+    if (generation === propertyGeneration && error.name !== "AbortError") setStatus("Property layer unavailable", error.message, true);
   }
 }
 
 function selectProperty(property) {
   const location = [property.lat, property.lon];
-  let zoom = Math.max(17, map.getMinZoom());
-  const samples = viewportSamples();
-  while (coverage && zoom < map.getMaxZoom() && !coversView(map.project(location, zoom), zoom, samples)) {
-    zoom = Math.min(zoom + 1, map.getMaxZoom());
-  }
-  if (coverage && !coversView(map.project(location, zoom), zoom, samples)) {
-    setStatus("Property outside map bounds", "The aerial view would extend beyond the available imagery.", true);
+  const zoom = Math.max(17, map.getMinZoom());
+  if (coverage && !insideCoverage(L.latLng(location))) {
+    setStatus("Property outside map bounds", "This property's center is outside the available Vexcel coverage.", true);
     return;
   }
+  clearTimeout(searchTimer); ++searchGeneration; searchRequest?.abort();
   selectedId = property.id;
   focusPending = true;
   $("properties").checked = true;
@@ -378,12 +344,14 @@ function selectProperty(property) {
 }
 
 async function search() {
+  const generation = ++searchGeneration;
+  searchRequest?.abort(); searchRequest = new AbortController();
   const q = $("search").value.trim();
   const results = $("results");
   if (q.length < 2) { results.hidden = true; results.replaceChildren(); return; }
   try {
-    const data = await json(`/api/search?q=${encodeURIComponent(q)}`);
-    if ($("search").value.trim() !== q) return;
+    const data = await json(`/api/search?q=${encodeURIComponent(q)}`, {signal:searchRequest.signal});
+    if (generation !== searchGeneration || $("search").value.trim() !== q) return;
     results.replaceChildren();
     if (!data.results.length) {
       const empty = document.createElement("div");
@@ -403,15 +371,14 @@ async function search() {
       results.append(button);
     }
     results.hidden = false;
-  } catch (error) { setStatus("Search unavailable", error.message, true); }
+  } catch (error) { if (generation === searchGeneration && error.name !== "AbortError") setStatus("Search unavailable", error.message, true); }
 }
 
 map.on("moveend", () => {
   if (correcting) return;
   const zoom = map.getZoom();
   if (coverage) {
-    const samples = viewportSamples();
-    const allowed = (center) => coversView(center, zoom, samples);
+    const allowed = (center) => insideCoverage(map.unproject(center, zoom));
     const requested = map.project(map.getCenter(), zoom);
     if (!allowed(requested)) {
       const previous = map.project(lastAllowed, zoom);
@@ -439,7 +406,10 @@ $("emissions-layer").addEventListener("change", () => {
   syncEmissionsVisibility();
 });
 $("retry-emissions").addEventListener("click", loadEmissions);
-$("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(search, 220); });
+$("search").addEventListener("input", () => {
+  ++searchGeneration; searchRequest?.abort(); $("results").hidden = true;
+  clearTimeout(searchTimer); searchTimer = setTimeout(search, 220);
+});
 $("reset").addEventListener("click", () => emissionsActive() ?
   map.fitBounds([[34.034, -118.268], [34.070, -118.219]],
     { padding: [35, 35], maxZoom: 14 }) : map.setView(HOME, HOME_ZOOM));
@@ -620,10 +590,14 @@ for (const mode of ["street", "water"]) {
   });
 }
 window.addEventListener("hashchange", () => selectPlanningWorkspace(window.location.hash === "#stormwater" ? "water" : "street"));
-document.addEventListener("click", (event) => { if (!event.target.closest(".search-block")) $("results").hidden = true; });
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".search-block")) {
+    clearTimeout(searchTimer); ++searchGeneration; searchRequest?.abort();
+    $("results").hidden = true;
+  }
+});
 new ResizeObserver(() => {
   map.invalidateSize({ pan: true });
-  if (coverage && insideCoverage(L.latLng(HOME))) updateMinimumZoom();
 }).observe($("map"));
 updateMapInfo();
 loadCoverage();

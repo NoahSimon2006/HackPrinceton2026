@@ -41,23 +41,38 @@ def feature(geometry, label, **properties):
 
 
 def parcel_features(payload, evidence):
+    if not isinstance(payload, dict) or not isinstance(payload.get("features"), list):
+        raise ValueError("Parcel response has no valid feature collection.")
+    for item in payload["features"]:
+        if not isinstance(item, dict) or not isinstance(item.get("properties"), dict):
+            raise ValueError("Parcel response contains an invalid feature.")
     parcels = [
-        item for item in payload.get("features", [])
-        if item["properties"].get("request-information.inside-parcel") and polygon_geometry(item.get("geometry"))
+        item for item in payload["features"]
+        if item["properties"].get("request-information.inside-parcel") is True
     ]
     if not parcels:
         return
     parcel = max(parcels, key=lambda item: item["properties"].get("metadata.ortho-date-estimate") or "")
     props = parcel["properties"]
+    boundary = polygon_geometry(parcel.get("geometry"))
+    structures = props.get("structures")
+    if boundary is None or not isinstance(structures, list):
+        raise ValueError("Parcel response has incomplete boundary or building coverage.")
     metadata = {
         "collection": props.get("metadata.collection"),
         "date": (props.get("metadata.ortho-date-estimate") or "")[:10],
     }
-    evidence["outlines"].append(feature(polygon_geometry(parcel["geometry"]), "Parcel boundary", **metadata))
-    for structure in props.get("structures", [])[:12]:
+    outlines = [feature(boundary, "Parcel boundary", **metadata)]
+    for structure in structures:
+        if not isinstance(structure, dict):
+            raise ValueError("Parcel response contains an invalid building.")
         geometry = polygon_geometry(structure.get("footprint.wkt"))
-        if geometry:
-            evidence["outlines"].append(feature(geometry, "Building footprint", **metadata))
+        if geometry is None:
+            raise ValueError("Parcel response contains an unusable building footprint.")
+        outlines.append(feature(geometry, "Building footprint", **metadata))
+    # All returned structures participate in conflict checks; a display limit
+    # must never silently turn an incomplete extraction into cleared land.
+    evidence["outlines"].extend(outlines)
 
 
 def detection_features(payload, evidence, labels):
@@ -81,9 +96,12 @@ def detection_features(payload, evidence, labels):
             geometry = polygon_geometry(candidate.get("bbox"))
             if geometry is None:
                 raise ValueError("Detection response contains an unusable candidate box.")
-            evidence["detections"].append(feature(geometry, label.capitalize(), score=candidate.get("confidence")))
+            score = candidate.get("confidence")
+            if score is not None and (isinstance(score, bool) or not isinstance(score, (int, float))
+                                      or not math.isfinite(score) or not 0 <= score <= 1):
+                raise ValueError("Detection response contains an invalid confidence score.")
+            evidence["detections"].append(feature(geometry, label.capitalize(), score=score))
     evidence["detections"].sort(key=lambda item: item["properties"]["score"] or 0, reverse=True)
-    del evidence["detections"][12:]
 
 
 def imagery_evidence(request, layers, lon, lat, workflow, group):

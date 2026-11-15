@@ -31,7 +31,7 @@ def d8(elevation, resolution=1.0):
     edge = np.zeros(z.shape, dtype=bool)
     edge[0,:] = edge[-1,:] = edge[:,0] = edge[:,-1] = True
     # Also flag contributions next to a NoData boundary as incomplete.
-    for dy, dx in [(-1,0),(0,1),(1,0),(0,-1)]:
+    for dy, dx in [(-1,0),(0,1),(1,0),(0,-1),(-1,1),(1,1),(1,-1),(-1,-1)]:
         edge |= np.roll(~valid, (dy,dx), axis=(0,1))
     edge = edge.ravel()
     for i in np.argsort(np.where(valid,z,-np.inf), axis=None)[::-1]:

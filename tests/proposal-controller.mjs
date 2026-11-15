@@ -7,7 +7,7 @@ const element=()=>({events:{},children:[],hidden:false,checked:false,disabled:fa
   append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;}});
 const $=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
 const map={setView(){},getZoom(){return 17;},handlers:{},createPane(){},getPane(){return{style:{}};},on(n,f){this.handlers[n]=f;},fire(n,e){this.handlers[n]?.(e);}};
-const L={geoJSON(data,options){const l={data,options,attached:false,addTo(){this.attached=true;},remove(){this.attached=false;}};layers.push(l);return l;}};
+const L={geoJSON(data,options){if(data.features.some(f=>f.geometry?.type==='Bad'))throw new Error('Invalid GeoJSON object.');const l={data,options,attached:false,addTo(){this.attached=true;},remove(){this.attached=false;}};layers.push(l);return l;}};
 vm.runInNewContext(await readFile(new URL('../public/proposal.js',import.meta.url),'utf8'),{$,map,L,document:{createElement:element},URLSearchParams,AbortController,json:(url,opts)=>new Promise((resolve,reject)=>requests.push({url,opts,resolve,reject}))});
 const select=(siteId='a',workflow='street',inputRevision=0)=>map.fire('plannersite',{siteId,workflow,center:{lat:34.03758,lng:-118.25313},inputRevision});
 const response=(revision=1,site_id='a',workflow='street')=>({schema_version:1,site_id,workflow,revision,input_revision:0,input_hash:'hash'+revision,development_fixture:true,geometry:[{properties:{revision}}],metrics:[{id:'footprint_area',proposed:revision*24,unit:'m²',revision,input_hash:'hash'+revision}],recommendation:'UI test only'});
@@ -99,3 +99,46 @@ assert.match(text($('comparison-alternatives')),/Crossing\/driveway detection: U
 assert.match($('comparison-revision').textContent,/Revision 5 · inputs 0 · hash5/);
 assert.match($('proposal-revision').textContent,/Revision 5 · inputs 0 · hash5/);
 console.log('PASS: published metric/geometry parity and unavailable detection display');
+
+const beforeBadLayer=layers.at(-1), beforeBadTable=text($('comparison-table'));
+const badGeometry=result(6,0);badGeometry.proposal.geometry[0].geometry={type:'Bad'};
+map.fire('plannerresult',badGeometry);
+assert.equal(beforeBadLayer.attached,true);assert.equal(text($('comparison-table')),beforeBadTable,'geometry errors cannot publish new metrics beside old geometry');
+assert.match($('comparison-revision').textContent,/Revision 5/);
+const incomplete=result(6,0);incomplete.comparison.results.baseline.max_queue_m={nb:200,eb:null};incomplete.comparison.results.baseline.max_noise_db={nb:70,eb:null};
+map.fire('plannerresult',incomplete);
+const incompleteValues=$('comparison-table').children[0].children[1].children.map(row=>row.children[1].textContent);
+assert.equal(incompleteValues[6],'Not assessed');assert.equal(incompleteValues[7],'Not assessed');
+assert.match($('comparison-revision').textContent,/Revision 6/,'rejected geometry did not consume its revision');
+
+// Water comparisons use storage units and reference boundary, not traffic labels.
+{
+  select('water-site','water');
+  const proposal={...response(1,'water-site','water'),development_fixture:false,recommendation:'Conditional storage option',
+    geometry:[{geometry:{type:'Polygon',coordinates:[]},properties:{revision:1,layout:'treatment-1',role:'proposed'}},
+      {geometry:{type:'Polygon',coordinates:[]},properties:{revision:1,layout:'treatment-1',role:'contributing'}}],
+    access:{text:'Planner-confirmed access'},overlap:{text:'Mapped structures checked'}};
+  const values={runoff_m3:10,captured_m3:4,excess_m3:6,capacity_m3:5,direct_rain_m3:1,direct_excess_m3:0,footprint_m2:25};
+  const comparison={site_id:'water-site',workflow:'water',revision:1,input_revision:0,input_hash:proposal.input_hash,status:'ready',
+    rainfall:{label:'County event',inches:1.01,basis:'estimated'},results:{baseline:{...values,captured_m3:0,excess_m3:10,capacity_m3:0,footprint_m2:0},'treatment-1':values,'treatment-2':{...values,captured_m3:2,excess_m3:8}},
+    ranking:{recommended:'treatment-1',reason:'Conditional comparison only',verdicts:{'treatment-1':{eligible:true},'treatment-2':{eligible:true}}},
+    checks:{'treatment-1':{building_overlap_m2:0,access_overlap_m2:null,terrain:{status:'ready',median_slope_percent:2,max_slope_percent:5,relief_m:.4,source:{provider:'USGS terrain',publication_date:'2025-08-11'},limitations:['Bare-earth screening only.']}}},confirmations:{confirmation_note:'Planner reviewed connections.'},sources:[{label:'County rainfall',url:'https://example.org/rainfall'}],assumptions:['Storage-only event'],method:'Local volume balance'};
+  const event={siteId:'water-site',workflow:'water',inputRevision:0,revision:1,proposal,comparison};
+  map.fire('plannerresult',event);
+  assert.equal($('water-comparison').hidden,false);assert.equal($('traffic-comparison').hidden,true);
+  assert.match($('proposal-kind').textContent,/CONDITIONAL TREATMENT/);
+  assert.match(text($('water-comparison-table')),/No added treatment/);
+  assert.doesNotMatch(text($('water-comparison-table')),/CO₂|delay|vehicle/i);
+  assert.deepEqual(JSON.parse(JSON.stringify(layers.at(-1).data.features)),proposal.geometry);
+  assert.equal(layers.at(-1).options.style(proposal.geometry[1]).color,'#78dbee');
+  assert.equal($('water-comparison-chart').children.length,2);
+  assert.match(text($('water-comparison-alternatives')),/Median slope 2 %/);
+  assert.match(text($('water-comparison-sources')),/Planner reviewed connections/);
+  assert.match($('water-comparison-chart').children[0].children[1].attributes['aria-label'],/Stored 4 m³ · excess 6 m³/);
+  const waterLayer=layers.at(-1);map.fire('plannerinputs',{inputRevision:1});assert.equal($('water-comparison-stale').hidden,false);
+  map.fire('plannerresult',{...event,revision:2});assert.equal(layers.at(-1),waterLayer,'stale water publication cannot replace geometry');
+  const bad={...event,revision:2,inputRevision:1,comparison:{...comparison,revision:2,input_revision:1,input_hash:'changed'},proposal:{...proposal,revision:2,input_revision:1}};
+  map.fire('plannerresult',bad);assert.equal(layers.at(-1),waterLayer);
+  select();assert.equal($('water-comparison').hidden,true);assert.equal(waterLayer.attached,false);
+}
+console.log('PASS: water storage rendering, conditional labels, chart values, exact geometry roles and stale identity isolation');

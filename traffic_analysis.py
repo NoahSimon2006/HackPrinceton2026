@@ -274,8 +274,9 @@ def comparison_facts(comparison):
                 facts.append(fact(f"traffic-{name}-{suffix}", f"{name}: {label}", value * multiplier, unit,
                                   origin, basis="modeled", method=method, note=caveat))
         for key, suffix, unit in (("max_queue_m", "maximum-queue", "m"), ("max_noise_db", "maximum-noise", "dB(A)")):
-            numbers = [v for v in values.get(key, {}).values() if isinstance(v, (float, int)) and not isinstance(v, bool) and math.isfinite(v)]
-            if numbers:
+            raw = list(values.get(key, {}).values())
+            numbers = [v for v in raw if isinstance(v, (float, int)) and not isinstance(v, bool) and math.isfinite(v)]
+            if numbers and len(numbers) == len(raw):
                 facts.append(fact(f"traffic-{name}-{suffix}", f"{name}: {suffix.replace('-', ' ')}", max(numbers), unit,
                     origin, basis="modeled", method=method, note="Queue is a simultaneous fixed-chain total maximized over time/seeds. Noise is the spatial maximum of hourly mean edge source levels across seeds, not a temporal peak or building exposure. " + caveat))
     for name, params in comparison.get("layouts", {}).items():

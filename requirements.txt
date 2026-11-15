@@ -1,5 +1,10 @@
 deepagents==0.7.38
 langchain-xai==1.3.0
+pydantic==2.14.3
+langchain==1.5.0
+langchain-core==1.8.0
+langgraph==1.2.22
+langsmith==0.14.17
 pyproj==3.8.0
 shapely==2.2.0
 pypdf==6.3.0

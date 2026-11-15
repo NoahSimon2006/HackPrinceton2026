@@ -54,6 +54,18 @@ class SheetParsingTest(unittest.TestCase):
             with self.assertRaises(SheetError):
                 parse_manual(broken)
 
+    def test_every_total_column_and_duplicate_hours_are_checked(self):
+        for broken in (MANUAL.replace("312 4063 TOTAL", "312 4064 TOTAL"),
+                       MANUAL.replace("4063 621 0 304 0", "4063 621 1 304 0"),
+                       MANUAL.replace("8-9 87 852 80 1019 8-9 0 0 0 0 1019 325 0 151 0", "8-9 87 852 80 1019 8-9 0 0 0 0 1019 325 0 151 0\n" * 2)):
+            with self.assertRaises(SheetError): parse_manual(broken)
+        with self.assertRaises(SheetError): peak_hour(parse_manual(MANUAL), "midday")
+
+    def test_automatic_totals_cannot_hide_duplicate_or_reordered_hours(self):
+        for broken in (AUTO.replace("1 AM", "2 AM", 1), AUTO.replace("12 AM", "13 AM", 1),
+                       AUTO.replace("12 AM", "12 PM", 1)):
+            with self.assertRaises(SheetError): parse_auto(broken)
+
     def test_automatic_sheet_checks_hours_and_day(self):
         sheet = parse_auto(AUTO)
         self.assertEqual(sheet["daily"], {"nb": 96, "sb": 192, "total": 288})

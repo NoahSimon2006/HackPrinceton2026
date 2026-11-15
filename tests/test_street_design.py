@@ -26,6 +26,28 @@ def checked():
 
 
 class RankingTest(unittest.TestCase):
+    def test_invalid_partial_sponsor_geometry_and_counts_stay_unassessed(self):
+        design=box(X,Y,X+10,Y+4)
+        parcel={'geometry':geo(design),'properties':{'label':'Parcel boundary'}}
+        good={'geometry':geo(box(X+20,Y,X+30,Y+10)),'properties':{'label':'Building footprint'}}
+        bad={'geometry':{'type':'Polygon','coordinates':[]},'properties':{'label':'Building footprint'}}
+        self.assertIsNone(sponsor_checks(design,[parcel,good,bad],[])['building_overlap_m2'])
+        for cuts in (True, -1, 1.5, '1', None):
+            frontage={'geometry':{'type':'LineString','coordinates':[list(TO_GEO.transform(X,Y)),list(TO_GEO.transform(X+10,Y))]},'curbCuts':cuts}
+            self.assertIsNone(sponsor_checks(design,[parcel,good],[frontage])['access_conflicts'])
+
+    def test_tiny_positive_score_is_not_rounded_into_no_recommendation(self):
+        result=rank({'baseline':metrics(),'candidate':metrics(co2=399.99)},{'candidate':checked()})
+        self.assertEqual(result['recommended'],'candidate')
+        self.assertGreater(result['verdicts']['candidate']['score'],0)
+
+    def test_invalid_shares_and_overlap_numbers_cannot_be_eligible(self):
+        for value in (float('nan'),-1,True):
+            result=rank({'baseline':metrics(),'candidate':metrics(co2=350)}, {'candidate':{**checked(),'parcel_overlap_m2':value}})
+            self.assertFalse(result['verdicts']['candidate']['eligible'])
+        for value in (-.1,1.1):
+            result=rank({'baseline':metrics(),'candidate':metrics(co2=350,completion=value)},{'candidate':checked()})
+            self.assertFalse(result['verdicts']['candidate']['eligible'])
     def test_layout_that_strands_demand_cannot_win_even_with_lowest_co2(self):
         results = {"baseline": metrics(), "strander": metrics(completion=0.6, unable=0.3, co2_trip=150, co2=200),
                    "fair": metrics(co2_trip=280, co2=380)}
@@ -64,6 +86,9 @@ class RankingTest(unittest.TestCase):
             Layout(name="x", kind="lane_reallocation", approach="nb", lanes_removed=3, length_m=50, new_use="bike_lane")
         with self.assertRaises(ValueError):
             Layout(name="ok-name", kind="lane_reallocation", approach="nb", lanes_removed=1, length_m=500, new_use="bike_lane")
+        for value in (True, "1", 1.5):
+            with self.assertRaises(ValueError):
+                Layout(name="ok-name", kind="lane_reallocation", approach="nb", lanes_removed=value, length_m=50, new_use="bike_lane")
 
     def test_strict_policy_rejects_total_co2_increase_despite_per_trip_improvement(self):
         outcome = rank({"baseline": metrics(), "candidate": metrics(co2_trip=250, co2=410)}, {"candidate": checked()})

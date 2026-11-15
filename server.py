@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 from hydrology import RAINFALL, WATERSHEDS, rainfall_at, rainfall_contours, watershed_at
 from site_evidence import imagery_evidence
 from site_measurements import validate_inputs
+from stormwater import validate_water_design
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
@@ -91,8 +92,20 @@ def coverage():
     }, "application/json", 5_000_000)
     data = json.loads(raw)
     features = data.get("features", [])
-    if not features:
+    if not isinstance(features, list) or not features:
         raise ValueError("Vexcel returned no coverage for Los Angeles.")
+    from shapely.geometry import shape
+    from shapely.errors import ShapelyError
+    for feature in features:
+        geometry = feature.get("geometry") if isinstance(feature, dict) else None
+        if not isinstance(geometry, dict) or geometry.get("type") not in ("Polygon", "MultiPolygon"):
+            raise ValueError("Vexcel returned incomplete imagery coverage.")
+        try:
+            polygon = shape(geometry)
+        except (ShapelyError, TypeError, ValueError) as error:
+            raise ValueError("Vexcel returned invalid imagery coverage.") from error
+        if polygon.is_empty or not polygon.is_valid or not all(math.isfinite(value) for value in polygon.bounds):
+            raise ValueError("Vexcel returned invalid imagery coverage.")
     # Only geometry is needed to enforce the chosen pan boundary.
     _coverage = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "geometry": feature["geometry"], "properties": {}}
@@ -113,6 +126,20 @@ def tile(z, x, y):
     return data
 
 
+def reported_number(value, *, count=False):
+    """A missing/invalid source value is unknown, never a coerced count."""
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value < 0 or (count and value != int(value))):
+        return None
+    return int(value) if count else value
+
+
+def reported_total(values):
+    """Report a total only when every supplied category has a valid count."""
+    counts = [reported_number(value, count=True) for value in values]
+    return sum(counts) if counts and all(value is not None for value in counts) else None
+
+
 @lru_cache(maxsize=1)
 def property_catalog():
     directory = os.getenv("COSTAR_KIT_DIR", "").strip()
@@ -125,6 +152,8 @@ def property_catalog():
     with (root / "data/commercial-property.jsonl").open(encoding="utf-8") as file:
         for line in file:
             record = json.loads(line)
+            if not isinstance(record, dict):
+                raise ValueError("CoStar property data is malformed.")
             address = record.get("primaryAddress") or {}
             try:
                 lat, lon = float(address["latitude"]), float(address["longitude"])
@@ -133,37 +162,40 @@ def property_catalog():
             if not (LA_BOUNDS[0] <= lon <= LA_BOUNDS[2]
                     and LA_BOUNDS[1] <= lat <= LA_BOUNDS[3]):
                 continue
+            raw_id = record.get("id")
+            if not ((type(raw_id) is int and raw_id > 0) or (isinstance(raw_id, str) and raw_id.strip())):
+                raise ValueError("CoStar property identity is missing or invalid.")
             address_text = " ".join(" ".join(str(address.get(key) or "") for key in
                                     ("streetNumber", "streetDirection", "streetName", "streetType")).split())
             item = {
-                "id": str(record.get("id", "")), "lat": lat, "lon": lon,
+                "id": str(raw_id).strip(), "lat": lat, "lon": lon,
                 "name": str(record.get("buildingName") or address_text or "Unnamed property").strip(),
                 "address": address_text,
                 "type": types.get(str(record.get("propertyType")), "Unknown"),
             }
+            if not item["id"] or item["id"] in details:
+                raise ValueError("CoStar property identities are missing or duplicated.")
             items.append(item)
             apartment = record.get("propertyApartment") or {}
-            vacancy = apartment.get("vacancyPercent")
-            parking = [entry["totalSpaces"] for entry in (record.get("parking") or [])
-                       if entry.get("totalSpaces") is not None]
+            parking = [entry.get("totalSpaces") if isinstance(entry, dict) else None
+                       for entry in (record.get("parking") or [])]
             subtype = record.get("propertyIndustrial") or record.get("propertyRetail") or record.get("propertyFlex") or {}
-            docks = [subtype[key] for key in ("numExternalLoadingDocks", "numInternalLoadingDocks")
-                     if subtype.get(key) is not None]
+            docks = [subtype.get(key) for key in ("numExternalLoadingDocks", "numInternalLoadingDocks")]
             details[item["id"]] = {
                 "propertyType": item["type"],
-                "units": apartment.get("totalNumUnits"),
-                "vacancyPercent": vacancy if isinstance(vacancy, (int, float)) and 0 <= vacancy <= 100 else None,
-                "reportedParkingSpaces": sum(parking) if parking else None,
-                "buildingAreaSqFt": record.get("grossBuildingAreaSquareFeet"),
-                "reportedLoadingDocks": sum(docks) if docks else None,
+                "units": reported_number(apartment.get("totalNumUnits"), count=True),
+                "reportedParkingSpaces": reported_total(parking),
+                "buildingAreaSqFt": reported_number(record.get("grossBuildingAreaSquareFeet")),
+                "reportedLoadingDocks": reported_total(docks),
             }
             lines = []
             for block in (record.get("propertyRetail"), record.get("land")):
                 for entry in (block or {}).get("frontage") or []:
                     shape = (entry.get("footprint") or {}).get("shape")
-                    if shape and shape.get("type") == "LineString":
-                        lines.append({"geometry": shape, "street": entry.get("streetName"),
-                                      "curbCuts": entry.get("numCurbCuts")})
+                    # Preserve missing/malformed geometry so measurement cannot
+                    # mistake an incomplete frontage source for no constraints.
+                    lines.append({"geometry": shape, "street": entry.get("streetName"),
+                                  "curbCuts": entry.get("numCurbCuts")})
             if lines:
                 frontages[item["id"]] = lines
     return items, details, frontages
@@ -177,7 +209,7 @@ def nearby_frontages(lon, lat, property_id=None):
         if math.hypot((prop["lon"] - lon) * scale, prop["lat"] - lat) * 111_320 <= 110:
             matches.extend({**line, "selectedProperty": prop["id"] == property_id}
                            for line in frontages.get(prop["id"], ()))
-    return matches[:12]
+    return matches
 
 
 def site_coordinates(query):
@@ -239,13 +271,17 @@ class Handler(BaseHTTPRequestHandler):
             if workflow not in ("street", "water") or not 0 < len(question) <= 1500:
                 raise ValueError("Choose a workflow and enter a question up to 1,500 characters.")
             markings, scenario = validate_inputs(data.get("markings", []), data.get("rainfallScenario"), workflow, lon, lat)
+            water_design = validate_water_design(data.get("waterDesign"), workflow)
             selected_discovery = discovery_context(workflow, data.get("discoveryReference"), lon, lat)
             traffic = traffic_context(data.get("discoveryReference"), lon, lat) if workflow == "street" else None
             identity = analysis_identity(data)
             property_id = data.get("propertyId")
             if property_id is not None and (not isinstance(property_id, str) or len(property_id) > 80):
                 raise ValueError("Invalid property reference.")
-        except (ValueError, FileNotFoundError) as error:
+        except OSError:
+            self.send_json(503, {"error": "The local analysis source is unavailable. Check the source configuration and retry."})
+            return
+        except ValueError as error:
             self.send_json(400, {"error": str(error)})
             return
         except (AttributeError, KeyError, TypeError):
@@ -305,7 +341,7 @@ class Handler(BaseHTTPRequestHandler):
                 property_context, hydrology_context,
                 lon=lon, lat=lat, scenario=scenario, activity=activity, discovery=selected_discovery,
                 traffic_context=traffic, analysis_identity=identity, allow_generated_timing=True,
-                ranking_policy="strict-v1",
+                ranking_policy="strict-v1", water_design=water_design,
             )
             if streaming:
                 write_event({"type":"result", "run_id":activity.id, "result":result})
@@ -414,8 +450,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, tile(z, x, y), "image/jpeg")
             else:
                 self.send_json(404, {"error": "Not found."})
-        except (ValueError, OSError, KeyError, json.JSONDecodeError) as error:
-            self.send_json(503, {"error": str(error)})
+        except (BrokenPipeError, ConnectionResetError):
+            # Do not attempt a second HTTP response after a disconnected tile
+            # request has already received its headers.
+            return
+        except (ValueError, OSError, KeyError, TypeError, AttributeError, OverflowError):
+            self.send_json(503, {"error": "The requested local data or provider response is unavailable. Check the source configuration and retry."})
 
 
 if __name__ == "__main__":

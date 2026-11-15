@@ -15,7 +15,7 @@
   };
   const workflows = {
     street: { kinds: ["crossing", "access"], brief: "Find the crossings and driveway entrances near this site. What could shorten a crossing while preserving access?" },
-    water: { kinds: ["drainage", "treatment"], brief: "Find possible sources of runoff and check the local rainfall. What could we evaluate for a rain garden or cistern?" },
+    water: { kinds: ["drainage", "treatment", "access"], brief: "Review the mapped site and county rainfall. Compare the marked treatment alternatives only when their contributing surfaces and design inputs support a conditional storage estimate." },
   };
   const siteLayer = L.layerGroup();
   map.createPane("watershed");
@@ -154,7 +154,12 @@
     }
   }
 
-  function inputsChanged(record) {
+  function inputsChanged(record, resetWaterConfirmations = []) {
+    if (activeAnalysis?.record === record) cancelAnalysis();
+    if (record === site?.water && record.waterDesign) {
+      for (const key of resetWaterConfirmations) record.waterDesign[key] = false;
+      if (resetWaterConfirmations.length) showWaterDesign();
+    }
     record.revision = (record.revision ?? 0) + 1;
     if (record.report || record.evidencePending || record.facts?.length) record.stale = true;
     showReview(record);
@@ -168,6 +173,7 @@
     const list = $("site-evidence-list");
     list.replaceChildren();
     $("run-site-analysis").disabled = Boolean(record.evidencePending);
+    $("update-water-comparison").disabled = !site || workflow !== "water" || Boolean(record.evidencePending);
     showReview(record);
     $("site-search-toggle").hidden = !evidence?.search?.length;
     $("site-evidence-note").hidden = !evidence;
@@ -284,6 +290,23 @@
       }
       rainfallScenario = { inches, source: record.source.trim() };
     }
+    let waterDesign = null;
+    if (mode === "water" && record.waterDesign) {
+      const values = record.waterDesign;
+      const entered = Object.values(values).some(value => value !== "" && value !== false);
+      if (entered) {
+        const storage = Number(values.storage_depth_m), coefficient = Number(values.runoff_coefficient);
+        if (!String(values.storage_depth_m ?? "").trim() || !Number.isFinite(storage) || storage <= 0 || storage > 1 ||
+            !String(values.runoff_coefficient ?? "").trim() || !Number.isFinite(coefficient) || coefficient <= 0 || coefficient > 1 ||
+            !String(values.confirmation_note ?? "").trim()) {
+          record.evidenceError = "For a comparison, enter storage depth and runoff coefficient above zero and at most 1, plus the basis for those design inputs. Leave all fields blank to request evidence only.";
+          showReview(record); return;
+        }
+        waterDesign = {storage_depth_m:storage,runoff_coefficient:coefficient,
+          confirmation_note:values.confirmation_note.trim(),
+          ...Object.fromEntries(waterConfirmations.map(([id,key]) => [key, values[key] === true]))};
+      }
+    }
     record.evidencePending = true;
     record.proposalRevision = proposalRevision;
     record.evidenceError = "";
@@ -297,7 +320,7 @@
     showEvidence();
     try {
       const result = await streamSiteAnalysis({ lat:selected.center.lat, lon:selected.center.lng,
-        propertyId:selected.propertyId, workflow:mode, question, markings, rainfallScenario,
+        propertyId:selected.propertyId, workflow:mode, question, markings, rainfallScenario, waterDesign,
         siteId:selected.key, inputRevision:revision, proposalRevision,
         discoveryReference:record.discovery?.reference ?? null }, {
         signal:controller.signal,
@@ -392,7 +415,7 @@
       remove.disabled = Boolean(draft);
       remove.addEventListener("click", () => {
         site[workflow].features = site[workflow].features.filter((entry) => entry !== feature);
-        inputsChanged(site[workflow]);
+        inputsChanged(site[workflow], waterConfirmations.map(([,key]) => key));
         showFeatures();
         setStatus(`${label.textContent} removed.`);
       });
@@ -541,7 +564,16 @@
     $("watershed-map-name").textContent = record.watershedName || "County subbasin";
   }
 
-  function applyHydrology(record, { estimate, watershed }) {
+  function applyHydrology(record, { estimate, watershed, unavailable = [] }, fromRequest = false) {
+    for (const [field, value, failure] of [["rain", estimate, "rainfall"], ["watershed", watershed, "watershed"]]) {
+      if (!fromRequest && (value !== undefined || unavailable.includes(failure))) {
+        record[`${field}Generation`] = (record[`${field}Generation`] ?? 0) + 1;
+      }
+      if (unavailable.includes(failure)) {
+        record[`${field}State`] = "error";
+        record[`${field}Error`] = `${field === "rain" ? "Rainfall" : "Watershed"} unavailable in the latest analysis. Any previous value shown is cached; retry county data.`;
+      }
+    }
     // Each source can succeed independently. A missing estimate (null) is a
     // valid result; an omitted estimate must not erase previously loaded data.
     if (estimate !== undefined) {
@@ -583,22 +615,37 @@
       if (record[`${field}State`] === "error" && !retry) continue;
       record[`${field}State`] = "loading";
       record[`${field}Error`] = "";
+      const generation = record[`${field}Generation`] = (record[`${field}Generation`] ?? 0) + 1;
       json(`/api/${endpoint}?${query}`).then((result) => {
-        applyHydrology(record, field === "rain" ? { estimate: result.estimate } : { watershed: result });
+        if (generation !== record[`${field}Generation`]) return;
+        applyHydrology(record, field === "rain" ? { estimate: result.estimate } : { watershed: result }, true);
       }).catch((error) => {
+        if (generation !== record[`${field}Generation`]) return;
         record[`${field}State`] = "error";
         record[`${field}Error`] = `${field === "rain" ? "Rainfall" : "Watershed"} unavailable. ${error.message}`;
       }).finally(() => {
         // Keep results cached for their site without painting over a newer selection.
-        if (site === selected) showRainfall();
+        if (site === selected && generation === record[`${field}Generation`]) showRainfall();
       });
     }
     if (site === selected) showRainfall();
   }
 
+  const waterNumbers = [["water-storage-depth","storage_depth_m"],["water-runoff-coefficient","runoff_coefficient"],["water-confirmation-note","confirmation_note"]];
+  const waterConfirmations = [["water-confirm-surface","surface_confirmed"],["water-confirm-connections","connections_confirmed"],
+    ["water-confirm-access","access_confirmed"],["water-confirm-overflow","overflow_confirmed"]];
+  function showWaterDesign() {
+    $("water-design").hidden = workflow !== "water";
+    $("water-design-fields").disabled = !site;
+    $("update-water-comparison").disabled = !site || Boolean(site?.water.evidencePending);
+    const values = site?.water.waterDesign ?? {};
+    for (const [id,key] of waterNumbers) $(id).value = values[key] ?? "";
+    for (const [id,key] of waterConfirmations) $(id).checked = values[key] === true;
+  }
   function showWorkflow() {
     $("traffic-design-guide").hidden = workflow !== "street";
     $("water-tools").hidden = workflow !== "water";
+    showWaterDesign();
     renderDiscoveryContext(site?.[workflow]?.discovery);
     $("run-site-analysis").disabled = !site || Boolean(site[workflow].evidencePending);
     $("planning-brief").disabled = !site;
@@ -731,14 +778,16 @@
       : selected.reference?.layer === "turning"
         ? "Compare at least two physical lane-reallocation layouts using this sourced historical turning count and measured site evidence. Preserve access, disclose missing inputs and simulation assumptions, and recommend a layout only if the comparison supports it. Do not present historical demand as current traffic."
         : "Investigate the selected historical count with current site evidence. Identify the measurements needed before evaluating a physical redesign. Do not extrapolate current demand or claim emissions benefits.";
-    inputsChanged(site[workflow]);
+    inputsChanged(site[workflow], waterConfirmations.map(([,key]) => key));
     $("planning-brief").value = site[workflow].brief;
     renderDiscoveryContext(selected);
     setStatus("Discovery evidence added to this site's brief. Analyze when ready.");
   });
   map.on("plannerproperty", ({ property, searched }) => {
     if (!$("planner").hidden && (searched || (!picking && !draft))) {
-      selectSite(L.latLng(property.lat, property.lon), property);
+      const center = L.latLng(property.lat, property.lon), error = pointError(center);
+      if (error) { setStatus(error); return; }
+      selectSite(center, property);
     }
   });
   function showWorkspace({ mode, visible }) {
@@ -802,7 +851,7 @@
     }
     if (draft.feature) draft.feature.points = draft.points;
     else site[workflow].features.push({ kind: draft.kind, points: draft.points });
-    inputsChanged(site[workflow]);
+    inputsChanged(site[workflow], waterConfirmations.map(([,key]) => key));
     const label = featureTypes[draft.kind].label;
     finishDrawing();
     setStatus(`${label} saved.`);
@@ -814,5 +863,20 @@
       inputsChanged(site.water);
     });
   }
+  for (const [id,key] of [...waterNumbers,...waterConfirmations]) {
+    $(id).addEventListener(waterConfirmations.some(([name]) => name === id) ? "change" : "input", ({target}) => {
+      if (!site || workflow !== "water") return;
+      const values = site.water.waterDesign ??= {};
+      values[key] = waterConfirmations.some(([name]) => name === id) ? target.checked : target.value;
+      const reset = key === "runoff_coefficient" ? ["surface_confirmed", "overflow_confirmed"]
+        : key === "storage_depth_m" ? ["overflow_confirmed"]
+        : key === "confirmation_note" ? waterConfirmations.map(([,field]) => field) : [];
+      inputsChanged(site.water, reset);
+    });
+  }
+  for (const [id,kind] of [["water-mark-drainage","drainage"],["water-mark-treatment","treatment"],["water-mark-access","access"]]) {
+    $(id).addEventListener("click", () => { if (site && workflow === "water") { $("site-tools").open = true; $("manual-markings").open = true; startDrawing(kind); } });
+  }
+  $("update-water-comparison").addEventListener("click", loadEvidence);
   $("planning-brief").addEventListener("input", ({ target }) => { site[workflow].brief = target.value; inputsChanged(site[workflow]); });
 })();

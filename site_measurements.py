@@ -1,6 +1,7 @@
 """Deterministic, local measurements. No geometry is passed to the model."""
 
 import math
+from decimal import Decimal
 from datetime import datetime, timezone
 
 from pyproj import Transformer
@@ -68,7 +69,7 @@ def validate_inputs(markings, scenario, workflow, lon, lat):
     if not isinstance(markings, list) or len(markings) > 20:
         raise ValueError("Use at most 20 map markings.")
     point = Point(*PROJECT.transform(lon, lat))
-    allowed = {"crossing", "access"} if workflow == "street" else {"drainage", "treatment"}
+    allowed = {"crossing", "access"} if workflow == "street" else {"drainage", "treatment", "access"}
     clean = []
     for marking in markings:
         if not isinstance(marking, dict) or marking.get("kind") not in allowed:
@@ -91,15 +92,19 @@ def validate_inputs(markings, scenario, workflow, lon, lat):
     return clean, clean_scenario
 
 
-def fact(identifier, label, value, unit, origin, *, basis="measured", method=METHOD, note="", feature_ids=()):
-    value = round(value, 2) if isinstance(value, (float, int)) else value
-    display = f"{value:,.2f} {unit}" if isinstance(value, (float, int)) else str(value)
+def fact(identifier, label, value, unit, origin, *, basis="measured", method=METHOD, note="", feature_ids=(), precision=2):
+    numeric = isinstance(value, (float, int))
+    value = round(value, precision) if numeric and precision is not None else value
+    # Explicit design inputs must retain their entered value: rounding a small
+    # positive depth/coefficient to zero contradicts the calculation it drives.
+    display = ((f"{value:,.{precision}f}" if precision is not None else format(Decimal(str(value)), "f"))
+               + (f" {unit}" if unit else "")) if numeric else str(value)
     if unit in ("units", "spaces", "docks") and value == int(value):
         display = f"{int(value):,} {unit}"
     # Conversions are computed here, not guessed by the language model.
     if unit == "m²":
         display += f" / {value / .09290304:,.0f} sq ft"
-    elif unit == "m":
+    elif unit == "m" and precision is not None:
         display += f" / {value / .3048:,.1f} ft"
     return {"id": identifier, "label": label, "value": value, "unit": unit,
             "display": display, "basis": basis, "source": origin,

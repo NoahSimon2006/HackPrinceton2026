@@ -9,6 +9,7 @@ async function streamSiteAnalysis(payload, {signal, onEvent}) {
   function consume(line) {
     if (!line.trim()) return;
     const event=JSON.parse(line);
+    if (result !== null) throw new Error('Analysis event arrived after its terminal result.');
     if (typeof event.run_id !== 'string' || !event.run_id) throw new Error('Missing analysis identity.');
     runId ??= event.run_id;
     if (event.run_id !== runId) throw new Error('Analysis identity mismatch.');
@@ -16,7 +17,7 @@ async function streamSiteAnalysis(payload, {signal, onEvent}) {
       if (!Number.isInteger(event.sequence) || event.sequence <= sequence) throw new Error('Activity sequence mismatch.');
       sequence=event.sequence; onEvent(event);
     } else if (event.type === 'result') {
-      if (event.result.runId !== runId) throw new Error('Result identity mismatch.');
+      if (!event.result || event.result.runId !== runId) throw new Error('Result identity mismatch.');
       result=event.result;
     } else if (event.type === 'error') throw new Error(event.error);
     else throw new Error('Unknown analysis event.');
