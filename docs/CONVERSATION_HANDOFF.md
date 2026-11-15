@@ -1,5 +1,7 @@
 # Sustainability Map conversation handoff
 
+**Latest:** Checkpoint 8 plus the five-step interface are pushed as `4c29229`. The detailed [Hancock Terrace demo](DEMO_HANCOCK_FRONTAGE.md) is subsequent review work on `codex/detailed-demo-scene`. Preview `/demo` on port 8010.
+
 **November 15, 2026 — Checkpoint 7 is pushed; Checkpoint 8 is implemented and desktop-verified.** `origin/main` contains Checkpoint 7 as `ee07eb01cc82f364d0d9a10c231d0ccdcbffcd2d`. The active isolated branch is `codex/checkpoint-8-conceptual-3d`. Read the [Checkpoint 8 report](CHECKPOINT_8_CONCEPTUAL_3D.md), [demo walkthrough](DEMO_WALKTHROUGH.md) and [implementation plan](NEXT_IMPLEMENTATION_PLAN.md). Earlier numbered reports retain their own historical results.
 
 ## Resume here
@@ -40,7 +42,7 @@ The release was assembled in an isolated checkout to preserve concurrent work. T
 
 The committed Checkpoint 6 follow-up contains the cross-road scouting-group fix, incomplete-frontage coverage preservation and a one-turn specialist structured-report repair. Fifty focused tests passed in that follow-up. Main/1st project `a7e30e1ea73441b0a1953f1b4a18c90d` retains revisions 2–4; the final unchanged-design verification completed in 95.1 seconds with both specialist reports and a cited lead review. No provider retries were needed. These follow-up edits are pushed in `abb548a` on top of `main` through `53ed99e`.
 
-**Next:** Publish Checkpoint 8, preserving the concurrent guided interface, then develop the user-requested detailed single-site demo scene. Check for usable site-matched exterior assets before choosing the demo location. Preserve the traffic eligibility/CoStar gaps and the limited narrow-screen acceptance; do not force a winner, weaken gates or substitute demand.
+**Current follow-up:** Checkpoint 8 and the guided interface are pushed to `main` as `4c29229`. The user-requested [Hancock Terrace detailed demo](DEMO_HANCOCK_FRONTAGE.md) is implemented locally on `codex/detailed-demo-scene`, at `/demo` on port 8010. It uses real Vexcel outlines, CoStar context, two authored public-frontage gardens and a separate genuine Matterport exterior capture. No raw splat/mesh export or scan registration is available. Sponsor snapshots stay private and require the preparation script on a fresh checkout. The user authorized a pull request for this demo against `main`; keep it on the review branch until merge is authorized. Preserve the traffic eligibility/CoStar gaps and the limited narrow-screen acceptance; do not force a winner, weaken gates or substitute demand.
 
 ## Purpose and audience
 
@@ -133,4 +135,4 @@ Use focused checks for changed behavior, as requested by the user. The Checkpoin
 ## Prompt to resume in a fresh chat
 
 
-> Read `docs/CONVERSATION_HANDOFF.md`, `docs/NEXT_IMPLEMENTATION_PLAN.md` and `docs/CHECKPOINT_8_CONCEPTUAL_3D.md` in the review checkout listed above. Checkpoint 7 is pushed as `ee07eb0`; Checkpoint 8 is implemented on `codex/checkpoint-8-conceptual-3d`. Its desktop walkthrough and focused checks pass. The user authorized publishing it before work on a detailed single-site demo scene; confirm remote status when resuming. Preserve concurrent Desktop work. Keep traffic eligibility/CoStar gaps, illustrative heights and unregistered Matterport boundaries explicit. Use the independent port-8010 database for prepared studies and keep tests focused.
+> Read `docs/CONVERSATION_HANDOFF.md`, `docs/NEXT_IMPLEMENTATION_PLAN.md` and `docs/CHECKPOINT_8_CONCEPTUAL_3D.md` in the review checkout listed above. Checkpoint 7 is pushed as `ee07eb0`; Checkpoint 8 is implemented on `codex/checkpoint-8-conceptual-3d`. Its desktop walkthrough and focused checks pass. The merged Checkpoint 8 is pushed as `4c29229`. Read `docs/DEMO_HANCOCK_FRONTAGE.md` for the subsequent local detailed-demo work on `codex/detailed-demo-scene`; the user authorized a pull request for that new work, but not merging it. Preserve concurrent Desktop work. Keep traffic eligibility/CoStar gaps, illustrative heights and unregistered Matterport boundaries explicit. Use the independent port-8010 database for prepared studies and keep tests focused.
